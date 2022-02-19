@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "lib": ["dom", "es2020"],
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "outDir": "target",
+    "rootDirs": ["src"],
+    "sourceMap": true,
+    "strict": true,
+    "suppressImplicitAnyIndexErrors": false,
+    "target": "es2017"
+  }
+}
