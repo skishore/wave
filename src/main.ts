@@ -113,6 +113,8 @@ class Renderer {
 
 const main = () => {
   const container = new Container('container');
+  const renderer = new Renderer(container);
+  console.log(renderer);
 };
 
 window.onload = main;
