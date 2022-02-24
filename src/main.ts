@@ -1,3 +1,5 @@
+type int = number;
+
 const assert = (x: boolean, message?: () => string) => {
   if (x) return;
   throw new Error(message ? message() : 'Assertion failed!');
@@ -16,7 +18,7 @@ const nonnull = <T>(x: T | null, message?: () => string): T => {
 //////////////////////////////////////////////////////////////////////////////
 
 const Constants = {
-  CHUNK_SIZE: 32,
+  CHUNK_SIZE: 16,
   CHUNK_KEY_BITS: 8,
 };
 
@@ -38,25 +40,40 @@ type Octree = BABYLON.Octree<BABYLON.Mesh>;
 type OctreeBlock = BABYLON.OctreeBlock<BABYLON.Mesh>;
 
 class Renderer {
+  camera: BABYLON.Camera;
   engine: BABYLON.Engine;
+  light: BABYLON.Light;
   scene: BABYLON.Scene;
   octree: Octree;
-  blocks: Map<number, OctreeBlock>;
+  blocks: Map<int, OctreeBlock>;
 
   constructor(container: Container) {
     const antialias = true;
     const options = {preserveDrawingBuffer: true};
     this.engine = new BABYLON.Engine(container.canvas, antialias, options);
     this.scene = new BABYLON.Scene(this.engine);
+    this.scene.detachControl();
+
+    const source = new BABYLON.Vector3(0.1, 1.0, 0.3);
+    this.light = new BABYLON.HemisphericLight('light', source, this.scene);
+    this.scene.clearColor = new BABYLON.Color4(0.8, 0.9, 1.0);
+    this.scene.ambientColor = new BABYLON.Color3(1, 1, 1);
+    this.light.diffuse = new BABYLON.Color3(1, 1, 1);
+    this.light.specular = new BABYLON.Color3(1, 1, 1);
+
+    const origin = new BABYLON.Vector3(8, 2, 1.5);
+    this.camera = new BABYLON.FreeCamera('camera', origin, this.scene);
+    this.camera.minZ = 0.01;
 
     const scene = this.scene;
     scene._addComponent(new BABYLON.OctreeSceneComponent(scene));
     this.octree = new BABYLON.Octree(() => {});
+    this.octree.blocks = [];
     scene._selectionOctree = this.octree;
     this.blocks = new Map();
   }
 
-  addMesh(mesh: BABYLON.Mesh, dynamic?: boolean) {
+  addMesh(mesh: BABYLON.Mesh, dynamic: boolean) {
     if (dynamic) {
       const meshes = this.octree.dynamicContent;
       mesh.onDisposeObservable.add(() => drop(meshes, mesh));
@@ -79,7 +96,7 @@ class Renderer {
     mesh.freezeNormals();
   }
 
-  getMeshKey(mesh: BABYLON.Mesh): number {
+  getMeshKey(mesh: BABYLON.Mesh): int {
     assert(!mesh.parent);
     const pos = mesh.position;
     const mod = Constants.CHUNK_SIZE;
@@ -94,7 +111,7 @@ class Renderer {
            (((pos.z / mod) & mask) << (2 * bits));
   }
 
-  getMeshBlock(mesh: BABYLON.Mesh, key: number): OctreeBlock {
+  getMeshBlock(mesh: BABYLON.Mesh, key: int): OctreeBlock {
     const cached = this.blocks.get(key);
     if (cached) return cached;
 
@@ -109,12 +126,226 @@ class Renderer {
     this.blocks.set(key, block);
     return block;
   }
+
+  render() {
+    this.engine.beginFrame();
+    this.scene.render();
+    this.engine.endFrame();
+  }
 };
+
+//////////////////////////////////////////////////////////////////////////////
+
+type BlockId = int & {__type__: 'BlockId'};
+type MaterialId = int & {__type__: 'MaterialId'};
+
+type Color = [number, number, number];
+
+interface Material {
+  alpha: number,
+  color: Color,
+  texture: string | null,
+  textureAlpha: boolean,
+};
+
+const kBlack: Color = [0, 0, 0];
+const kWhite: Color = [1, 1, 1];
+
+class Registry {
+  _opaque: boolean[];
+  _solid: boolean[];
+  _faces: MaterialId[];
+  _materials: Material[];
+  _ids: Map<string, MaterialId>;
+
+  constructor() {
+    this._opaque = [false];
+    this._solid = [false];
+    const none = 0 as MaterialId;
+    this._faces = [none, none, none, none, none, none];
+    this._materials = [];
+    this._ids = new Map();
+  }
+
+  addBlock(xs: string[]): BlockId {
+    type Materials = [string, string, string, string, string, string];
+    const materials = ((): Materials => {
+      switch (xs.length) {
+        // All faces for this block use same material.
+        case 1: return [xs[0], xs[0], xs[0], xs[0], xs[0], xs[0]];
+        // xs specifies [top/bottom, sides]
+        case 2: return [xs[1], xs[1], xs[0], xs[0], xs[1], xs[1]];
+        // xs specifies [top, bottom, sides]
+        case 3: return [xs[2], xs[2], xs[0], xs[1], xs[2], xs[2]];
+        // xs specifies [+x, -x, +y, -y, +z, -z]
+        case 6: return xs as Materials;
+        // Uninterpretable case.
+        default: throw new Error(`Unexpected materials: ${JSON.stringify(xs)}`);
+      }
+    })();
+
+    const result = this._opaque.length as BlockId;
+    this._opaque.push(true);
+    this._solid.push(true);
+    materials.forEach(x => {
+      const material = this._ids.get(x);
+      if (material === undefined) throw new Error(`Unknown material: ${x}`);
+      this._faces.push(material + 1 as MaterialId);
+    });
+
+    return result;
+  }
+
+  addMaterialOfColor(name: string, color: Color, alpha: number = 1.0) {
+    this.makeMaterial(name, alpha, color, null, false);
+  }
+
+  addMaterialOfTexture(name: string, texture: string,
+                       textureAlpha: boolean = false) {
+    this.makeMaterial(name, 1, kWhite, texture, textureAlpha);
+  }
+
+  // faces has 6 elements for each block type: [+x, -x, +y, -y, +z, -z]
+  getBlockFaceMaterial(id: BlockId, face: int): MaterialId {
+    return this._faces[id * 6 + face];
+  }
+
+  getMaterial(id: MaterialId): Material {
+    assert(0 < id && id <= this._materials.length);
+    return this._materials[id - 1];
+  }
+
+  makeMaterial(name: string, alpha: number, color: Color,
+               texture: string | null, textureAlpha: boolean) {
+    assert(name.length > 0, () => 'Empty material name!');
+    assert(!this._ids.has(name), () => `Duplicate material: ${name}`);
+    this._ids.set(name, this._materials.length as MaterialId);
+    this._materials.push({alpha, color, texture, textureAlpha});
+  }
+};
+
+//////////////////////////////////////////////////////////////////////////////
+
+class Tensor3 {
+  data: Uint8Array;
+  shape: [int, int, int];
+  stride: [int, int, int];
+
+  constructor(x: int, y: int, z: int) {
+    this.data = new Uint8Array(x * y * z);
+    this.shape = [x, y, z];
+    this.stride = [1, x, x * y];
+  }
+
+  get(x: int, y: int, z: int): int {
+    return this.data[this.index(x, y, z)];
+  }
+
+  set(x: int, y: int, z: int, value: int) {
+    this.data[this.index(x, y, z)] = value;
+  }
+
+  index(x: int, y: int, z: int): int {
+    return x * this.stride[0] + y * this.stride[1] + z * this.stride[2];
+  }
+};
+
+//////////////////////////////////////////////////////////////////////////////
+
+declare const NoaTerrainMesher: any;
+
+class TerrainMesherShim {
+  mesher: any;
+  scene: BABYLON.Scene;
+  flatMaterial: BABYLON.Material;
+  registry: Registry;
+  requests: int;
+
+  constructor(scene: BABYLON.Scene, registry: Registry) {
+    this.scene = scene;
+    this.flatMaterial = this.makeStandardMaterial('flat-material');
+    this.registry = registry;
+    this.requests = 0;
+
+    const shim = {
+      registry: {
+        _solidityLookup: registry._solid,
+        _opacityLookup: registry._opaque,
+        getBlockFaceMaterial: registry.getBlockFaceMaterial.bind(registry),
+        getMaterialData: (x: MaterialId) => registry.getMaterial(x),
+        getMaterialTexture: (x: MaterialId) => registry.getMaterial(x).texture,
+        _getMaterialVertexColor: (x: MaterialId) => registry.getMaterial(x).color,
+      },
+      rendering: {
+        useAO: true,
+        aoVals: [0.93, 0.8, 0.5],
+        revAoVal: 1.0,
+        flatMaterial: this.flatMaterial,
+        addMeshToScene: () => {},
+        makeStandardMaterial: this.makeStandardMaterial.bind(this),
+        getScene: () => scene,
+      },
+    };
+    this.mesher = new NoaTerrainMesher(shim);
+  }
+
+  makeStandardMaterial(name: string): BABYLON.Material {
+    const result = new BABYLON.StandardMaterial(name, this.scene);
+    result.specularColor.copyFromFloats(0, 0, 0);
+    result.ambientColor.copyFromFloats(1, 1, 1);
+    result.diffuseColor.copyFromFloats(1, 1, 1);
+    return result;
+  }
+
+  mesh(voxels: Tensor3): BABYLON.Mesh | null {
+    const requestID = this.requests++;
+    const meshes: BABYLON.Mesh[] = [];
+    const chunk = {
+      voxels,
+      requestID,
+      pos: null,
+      _isFull: false,
+      _isEmpty: false,
+      _terrainMeshes: meshes,
+      _neighbors: {get: (x: int, y: int, z: int) => {
+        const self = x === 0 && y === 0 && z === 0;
+        return self ? {voxels} : null;
+      }},
+    };
+
+    this.mesher.meshChunk(chunk);
+    assert(meshes.length <= 1, () => `Unexpected: ${meshes.length} meshes`);
+    return meshes.length === 1 ? meshes[0] : null;
+  }
+};
+
+//////////////////////////////////////////////////////////////////////////////
 
 const main = () => {
   const container = new Container('container');
   const renderer = new Renderer(container);
-  console.log(renderer);
+  const registry = new Registry();
+
+  registry.addMaterialOfColor('grass', [0.1, 0.8, 0.2]);
+  const grass = registry.addBlock(['grass']);
+
+  const size = Constants.CHUNK_SIZE;
+  const voxels = new Tensor3(size, size, size);
+  for (let x = 0; x < size; x++) {
+    for (let z = 0; z < size; z++) {
+      const wall = x === 0 || x === size - 1 || z === 0 || z === size - 1;
+      const height = Math.min(wall ? 5 : 1, size);
+      for (let y = 0; y < height; y++) {
+        assert(voxels.get(x, y, z) === 0);
+        voxels.set(x, y, z, grass);
+      }
+    }
+  }
+
+  const mesher = new TerrainMesherShim(renderer.scene, registry);
+  const mesh = mesher.mesh(voxels);
+  if (mesh) renderer.addMesh(mesh, false);
+  renderer.render();
 };
 
 window.onload = main;
