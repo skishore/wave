@@ -24,13 +24,56 @@ const Constants = {
 
 //////////////////////////////////////////////////////////////////////////////
 
+type Input = 'up' | 'left' | 'down' | 'right' | 'pointer';
+
 class Container {
   element: Element;
   canvas: HTMLCanvasElement;
+  bindings: Map<int, Input>;
+  inputs: Record<Input, boolean>;
+  deltas: {x: int, y: int};
 
   constructor(id: string) {
     this.element = nonnull(document.getElementById(id), () => id);
     this.canvas = nonnull(this.element.querySelector('canvas'));
+    this.inputs = {up: false, left: false, down: false, right: false, pointer: false};
+    this.deltas = {x: 0, y: 0};
+
+    this.bindings = new Map();
+    this.bindings.set('W'.charCodeAt(0), 'up');
+    this.bindings.set('A'.charCodeAt(0), 'left');
+    this.bindings.set('S'.charCodeAt(0), 'down');
+    this.bindings.set('D'.charCodeAt(0), 'right');
+
+    const element = this.element;
+    element.addEventListener('keydown', e => this.onKeyInput(e, true));
+    element.addEventListener('keyup', e => this.onKeyInput(e, false));
+
+    element.addEventListener('click', () => element.requestPointerLock());
+    document.addEventListener('pointerlockchange', e => this.onPointerInput(e));
+    document.addEventListener('mousemove', e => this.onMouseMove(e));
+  }
+
+  onKeyInput(e: Event, down: boolean) {
+    const input = this.bindings.get((e as any).keyCode);
+    if (input) this.onInput(e, input, down);
+  }
+
+  onMouseMove(e: Event) {
+    if (!this.inputs.pointer) return;
+    this.deltas.x += (e as any).movementX;
+    this.deltas.y += (e as any).movementY;
+  }
+
+  onPointerInput(e: Event) {
+    const locked = document.pointerLockElement === this.element;
+    this.onInput(e, 'pointer', locked);
+  }
+
+  onInput(e: Event, input: Input, state: boolean) {
+    this.inputs[input] = state;
+    e.stopPropagation();
+    e.preventDefault();
   }
 };
 
