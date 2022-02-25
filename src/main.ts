@@ -57,6 +57,7 @@ const Constants = {
   TICK_RESOLUTION: 4,
   TICKS_PER_FRAME: 4,
   TICKS_PER_SECOND: 30,
+  CAMERA_SENSITIVITY: 10,
 };
 
 //////////////////////////////////////////////////////////////////////////////
@@ -206,11 +207,65 @@ class Registry {
 
 //////////////////////////////////////////////////////////////////////////////
 
+class Camera {
+  camera: BABYLON.FreeCamera;
+  holder: BABYLON.TransformNode;
+  direction: BABYLON.Vector3;
+  heading: number; // In radians: [0, 2π)
+  pitch: number;   // In radians: (-π/2, π/2)
+
+  constructor(scene: BABYLON.Scene) {
+    const origin = new BABYLON.Vector3(0, 0, 0);
+    this.holder = new BABYLON.TransformNode('holder', scene);
+    this.camera = new BABYLON.FreeCamera('camera', origin, scene);
+    this.camera.parent = this.holder;
+    this.camera.minZ = 0.01;
+
+    this.pitch = 0;
+    this.heading = 0;
+    this.direction = new BABYLON.Vector3(0, 0, 1);
+  }
+
+  applyInputs(dx: number, dy: number) {
+    let pitch = this.holder.rotation.x;
+    let heading = this.holder.rotation.y;
+
+    // Overwatch uses the same constant values to do this conversion.
+    const conversion = 0.0066 * Math.PI / 180;
+    dx = dx * Constants.CAMERA_SENSITIVITY * conversion;
+    dy = dy * Constants.CAMERA_SENSITIVITY * conversion;
+
+    this.heading += dx;
+    const T = 2 * Math.PI;
+    while (this.heading < 0) this.heading += T;
+    while (this.heading > T) this.heading -= T;
+
+    const U = Math.PI / 2 - 0.01;
+    this.pitch = Math.max(-U, Math.min(U, this.pitch + dy));
+
+    this.holder.rotation.x = this.pitch;
+    this.holder.rotation.y = this.heading;
+
+    // Compute the direction: rotate around the X-axis, then the Y-axis.
+    const cp = Math.cos(this.pitch);
+    const sp = Math.sin(this.pitch);
+    const ch = Math.cos(this.heading);
+    const sh = Math.sin(this.heading);
+    this.direction.copyFromFloats(sh * cp, -sp, ch * cp);
+  }
+
+  setPosition(x: number, y: number, z: number) {
+    this.holder.position.copyFromFloats(x, y, z);
+  }
+};
+
+//////////////////////////////////////////////////////////////////////////////
+
 type Octree = BABYLON.Octree<BABYLON.Mesh>;
 type OctreeBlock = BABYLON.OctreeBlock<BABYLON.Mesh>;
 
 class Renderer {
-  camera: BABYLON.Camera;
+  camera: Camera;
   engine: BABYLON.Engine;
   light: BABYLON.Light;
   scene: BABYLON.Scene;
@@ -222,7 +277,6 @@ class Renderer {
     const options = {preserveDrawingBuffer: true};
     this.engine = new BABYLON.Engine(container.canvas, antialias, options);
     this.scene = new BABYLON.Scene(this.engine);
-    this.scene.detachControl();
 
     const source = new BABYLON.Vector3(0.1, 1.0, 0.3);
     this.light = new BABYLON.HemisphericLight('light', source, this.scene);
@@ -231,12 +285,10 @@ class Renderer {
     this.light.diffuse = new BABYLON.Color3(1, 1, 1);
     this.light.specular = new BABYLON.Color3(1, 1, 1);
 
-    const origin = new BABYLON.Vector3(8, 4, 1.5);
-    this.camera = new BABYLON.FreeCamera('camera', origin, this.scene);
-    this.camera.minZ = 0.01;
-
     const scene = this.scene;
+    scene.detachControl();
     scene._addComponent(new BABYLON.OctreeSceneComponent(scene));
+    this.camera = new Camera(scene);
     this.octree = new BABYLON.Octree(() => {});
     this.octree.blocks = [];
     scene._selectionOctree = this.octree;
@@ -467,10 +519,27 @@ class Engine {
   }
 
   render() {
+    if (!this.container.inputs.pointer) return;
+
+    const deltas = this.container.deltas;
+    this.renderer.camera.applyInputs(deltas.x, deltas.y);
+    deltas.x = deltas.y = 0;
     this.renderer.render();
   }
 
   update() {
+    if (!this.container.inputs.pointer) return;
+
+    const inputs = this.container.inputs;
+    const ud = (inputs.up ? 1 : 0) - (inputs.down ? 1 : 0);
+    const speed = 0.5 * ud;
+
+    const camera = this.renderer.camera;
+    const position = camera.holder.position;
+    const direction = camera.direction;
+    position.x += speed * direction.x;
+    position.y += speed * direction.y;
+    position.z += speed * direction.z;
   }
 };
 
@@ -506,6 +575,8 @@ const main = () => {
   const renderer = engine.renderer;
   const mesh = engine.mesher.mesh(voxels);
   if (mesh) renderer.addMesh(mesh, false);
+  renderer.camera.setPosition(8, 4, 1.5);
+  renderer.render();
 };
 
 window.onload = main;
