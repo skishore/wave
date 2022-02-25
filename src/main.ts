@@ -61,7 +61,7 @@ class Renderer {
     this.light.diffuse = new BABYLON.Color3(1, 1, 1);
     this.light.specular = new BABYLON.Color3(1, 1, 1);
 
-    const origin = new BABYLON.Vector3(8, 2, 1.5);
+    const origin = new BABYLON.Vector3(8, 4, 1.5);
     this.camera = new BABYLON.FreeCamera('camera', origin, this.scene);
     this.camera.minZ = 0.01;
 
@@ -167,7 +167,7 @@ class Registry {
     this._ids = new Map();
   }
 
-  addBlock(xs: string[]): BlockId {
+  addBlock(xs: string[], solid: boolean): BlockId {
     type Materials = [string, string, string, string, string, string];
     const materials = ((): Materials => {
       switch (xs.length) {
@@ -185,8 +185,8 @@ class Registry {
     })();
 
     const result = this._opaque.length as BlockId;
-    this._opaque.push(true);
-    this._solid.push(true);
+    this._opaque.push(solid);
+    this._solid.push(solid);
     materials.forEach(x => {
       const material = this._ids.get(x);
       if (material === undefined) throw new Error(`Unknown material: ${x}`);
@@ -197,12 +197,12 @@ class Registry {
   }
 
   addMaterialOfColor(name: string, color: Color, alpha: number = 1.0) {
-    this.makeMaterial(name, alpha, color, null, false);
+    this.addMaterialHelper(name, alpha, color, null, false);
   }
 
   addMaterialOfTexture(name: string, texture: string,
                        textureAlpha: boolean = false) {
-    this.makeMaterial(name, 1, kWhite, texture, textureAlpha);
+    this.addMaterialHelper(name, 1, kWhite, texture, textureAlpha);
   }
 
   // faces has 6 elements for each block type: [+x, -x, +y, -y, +z, -z]
@@ -215,8 +215,8 @@ class Registry {
     return this._materials[id - 1];
   }
 
-  makeMaterial(name: string, alpha: number, color: Color,
-               texture: string | null, textureAlpha: boolean) {
+  addMaterialHelper(name: string, alpha: number, color: Color,
+                    texture: string | null, textureAlpha: boolean) {
     assert(name.length > 0, () => 'Empty material name!');
     assert(!this._ids.has(name), () => `Duplicate material: ${name}`);
     this._ids.set(name, this._materials.length as MaterialId);
@@ -326,18 +326,24 @@ const main = () => {
   const renderer = new Renderer(container);
   const registry = new Registry();
 
-  registry.addMaterialOfColor('grass', [0.1, 0.8, 0.2]);
-  const grass = registry.addBlock(['grass']);
+  registry.addMaterialOfColor('grass', [0.2, 0.8, 0.2]);
+  registry.addMaterialOfColor('water', [0.4, 0.4, 0.8], 0.6);
+  const grass = registry.addBlock(['grass'], true);
+  const water = registry.addBlock(['water'], false);
 
   const size = Constants.CHUNK_SIZE;
+  const pl = size / 4;
+  const pr = 3 * size / 4;
   const voxels = new Tensor3(size, size, size);
   for (let x = 0; x < size; x++) {
     for (let z = 0; z < size; z++) {
       const wall = x === 0 || x === size - 1 || z === 0 || z === size - 1;
-      const height = Math.min(wall ? 5 : 1, size);
+      const pool = (pl <= x && x < pr && 4 && pl <= z && z < pr);
+      const height = Math.min(wall ? 7 : 3, size);
       for (let y = 0; y < height; y++) {
         assert(voxels.get(x, y, z) === 0);
-        voxels.set(x, y, z, grass);
+        const tile = y > 0 && pool ? water : grass;
+        voxels.set(x, y, z, tile);
       }
     }
   }
