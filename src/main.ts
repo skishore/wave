@@ -254,7 +254,7 @@ class Tensor3 {
 
 declare const NoaTerrainMesher: any;
 
-class TerrainMesherShim {
+class TerrainMesher {
   mesher: any;
   scene: BABYLON.Scene;
   flatMaterial: BABYLON.Material;
@@ -342,7 +342,7 @@ const main = () => {
     }
   }
 
-  const mesher = new TerrainMesherShim(renderer.scene, registry);
+  const mesher = new TerrainMesher(renderer.scene, registry);
   const mesh = mesher.mesh(voxels);
   if (mesh) renderer.addMesh(mesh, false);
   renderer.render();
