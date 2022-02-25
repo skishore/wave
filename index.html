@@ -1,23 +1,24 @@
 <!DOCTYPE html>
+<title>voxels</title>
+<meta charset="UTF-8">
 <html>
   <head>
-    <script src="lib/babylon.js"></script>
+    <script type="text/javascript" src="lib/babylon.js"></script>
 
-    <script src="lib/iota.js"></script>
-    <script src="lib/is-buffer.js"></script>
-    <script src="lib/ndarray.js"></script>
-    <script src="lib/noa-terrain-mesher.js"></script>
+    <script type="text/javascript" src="lib/iota.js"></script>
+    <script type="text/javascript" src="lib/is-buffer.js"></script>
+    <script type="text/javascript" src="lib/ndarray.js"></script>
+    <script type="text/javascript" src="lib/noa-terrain-mesher.js"></script>
 
-    <script src="target/main.js"></script>
+    <script type="text/javascript" src="target/main.js"></script>
 
-    <style>
+    <style type="text/css">
       body {
         margin: none;
         overflow: hidden;
       }
 
       #container, #container>canvas {
-        background-color: #ccc;
         overflow: hidden;
         position: absolute;
         bottom: 0;
@@ -31,6 +32,8 @@
   </head>
 
   <body>
-    <div id="container"><canvas></canvas</div>
+    <div id="container">
+      <canvas></canvas>
+    </div>
   </body>
 </html>
