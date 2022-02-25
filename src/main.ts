@@ -1,3 +1,6 @@
+//////////////////////////////////////////////////////////////////////////////
+// Utilities and math:
+
 type int = number;
 
 const assert = (x: boolean, message?: () => string) => {
@@ -7,6 +10,10 @@ const assert = (x: boolean, message?: () => string) => {
 
 const drop = <T>(xs: T[], x: T): void => {
   for (let i = 0; i < xs.length; i++) {
+    if (xs[i] !== x) continue;
+    xs[i] = xs[xs.length - 1];
+    xs.pop();
+    return;
   }
 };
 
@@ -16,6 +23,33 @@ const nonnull = <T>(x: T | null, message?: () => string): T => {
 };
 
 //////////////////////////////////////////////////////////////////////////////
+
+class Tensor3 {
+  data: Uint8Array;
+  shape: [int, int, int];
+  stride: [int, int, int];
+
+  constructor(x: int, y: int, z: int) {
+    this.data = new Uint8Array(x * y * z);
+    this.shape = [x, y, z];
+    this.stride = [1, x, x * y];
+  }
+
+  get(x: int, y: int, z: int): int {
+    return this.data[this.index(x, y, z)];
+  }
+
+  set(x: int, y: int, z: int, value: int) {
+    this.data[this.index(x, y, z)] = value;
+  }
+
+  index(x: int, y: int, z: int): int {
+    return x * this.stride[0] + y * this.stride[1] + z * this.stride[2];
+  }
+};
+
+//////////////////////////////////////////////////////////////////////////////
+// The game engine:
 
 const Constants = {
   CHUNK_SIZE: 16,
@@ -74,106 +108,6 @@ class Container {
     this.inputs[input] = state;
     e.stopPropagation();
     e.preventDefault();
-  }
-};
-
-//////////////////////////////////////////////////////////////////////////////
-
-type Octree = BABYLON.Octree<BABYLON.Mesh>;
-type OctreeBlock = BABYLON.OctreeBlock<BABYLON.Mesh>;
-
-class Renderer {
-  camera: BABYLON.Camera;
-  engine: BABYLON.Engine;
-  light: BABYLON.Light;
-  scene: BABYLON.Scene;
-  octree: Octree;
-  blocks: Map<int, OctreeBlock>;
-
-  constructor(container: Container) {
-    const antialias = true;
-    const options = {preserveDrawingBuffer: true};
-    this.engine = new BABYLON.Engine(container.canvas, antialias, options);
-    this.scene = new BABYLON.Scene(this.engine);
-    this.scene.detachControl();
-
-    const source = new BABYLON.Vector3(0.1, 1.0, 0.3);
-    this.light = new BABYLON.HemisphericLight('light', source, this.scene);
-    this.scene.clearColor = new BABYLON.Color4(0.8, 0.9, 1.0);
-    this.scene.ambientColor = new BABYLON.Color3(1, 1, 1);
-    this.light.diffuse = new BABYLON.Color3(1, 1, 1);
-    this.light.specular = new BABYLON.Color3(1, 1, 1);
-
-    const origin = new BABYLON.Vector3(8, 4, 1.5);
-    this.camera = new BABYLON.FreeCamera('camera', origin, this.scene);
-    this.camera.minZ = 0.01;
-
-    const scene = this.scene;
-    scene._addComponent(new BABYLON.OctreeSceneComponent(scene));
-    this.octree = new BABYLON.Octree(() => {});
-    this.octree.blocks = [];
-    scene._selectionOctree = this.octree;
-    this.blocks = new Map();
-  }
-
-  addMesh(mesh: BABYLON.Mesh, dynamic: boolean) {
-    if (dynamic) {
-      const meshes = this.octree.dynamicContent;
-      mesh.onDisposeObservable.add(() => drop(meshes, mesh));
-      meshes.push(mesh);
-      return;
-    }
-
-    const key = this.getMeshKey(mesh);
-    const block = this.getMeshBlock(mesh, key);
-    mesh.onDisposeObservable.add(() => {
-      drop(block.entries, mesh);
-      if (block.entries.length) return;
-      drop(this.octree.blocks, block);
-      this.blocks.delete(key);
-    });
-    block.entries.push(mesh);
-
-    mesh.alwaysSelectAsActiveMesh = true;
-    mesh.freezeWorldMatrix();
-    mesh.freezeNormals();
-  }
-
-  getMeshKey(mesh: BABYLON.Mesh): int {
-    assert(!mesh.parent);
-    const pos = mesh.position;
-    const mod = Constants.CHUNK_SIZE;
-    assert(pos.x % mod === 0);
-    assert(pos.y % mod === 0);
-    assert(pos.z % mod === 0);
-
-    const bits = Constants.CHUNK_KEY_BITS;
-    const mask = (1 << bits) - 1;
-    return (((pos.x / mod) & mask) << (0 * bits)) |
-           (((pos.y / mod) & mask) << (1 * bits)) |
-           (((pos.z / mod) & mask) << (2 * bits));
-  }
-
-  getMeshBlock(mesh: BABYLON.Mesh, key: int): OctreeBlock {
-    const cached = this.blocks.get(key);
-    if (cached) return cached;
-
-    const pos = mesh.position;
-    const mod = Constants.CHUNK_SIZE;
-    const min = new BABYLON.Vector3(pos.x, pos.y, pos.z);
-    const max = new BABYLON.Vector3(pos.x + mod, pos.y + mod, pos.z + mod);
-
-    const block: OctreeBlock =
-      new BABYLON.OctreeBlock(min, max, 0, 0, 0, () => {});
-    this.octree.blocks.push(block);
-    this.blocks.set(key, block);
-    return block;
-  }
-
-  render() {
-    this.engine.beginFrame();
-    this.scene.render();
-    this.engine.endFrame();
   }
 };
 
@@ -258,8 +192,8 @@ class Registry {
     return this._materials[id - 1];
   }
 
-  addMaterialHelper(name: string, alpha: number, color: Color,
-                    texture: string | null, textureAlpha: boolean) {
+  private addMaterialHelper(name: string, alpha: number, color: Color,
+                            texture: string | null, textureAlpha: boolean) {
     assert(name.length > 0, () => 'Empty material name!');
     assert(!this._ids.has(name), () => `Duplicate material: ${name}`);
     this._ids.set(name, this._materials.length as MaterialId);
@@ -269,27 +203,101 @@ class Registry {
 
 //////////////////////////////////////////////////////////////////////////////
 
-class Tensor3 {
-  data: Uint8Array;
-  shape: [int, int, int];
-  stride: [int, int, int];
+type Octree = BABYLON.Octree<BABYLON.Mesh>;
+type OctreeBlock = BABYLON.OctreeBlock<BABYLON.Mesh>;
 
-  constructor(x: int, y: int, z: int) {
-    this.data = new Uint8Array(x * y * z);
-    this.shape = [x, y, z];
-    this.stride = [1, x, x * y];
+class Renderer {
+  camera: BABYLON.Camera;
+  engine: BABYLON.Engine;
+  light: BABYLON.Light;
+  scene: BABYLON.Scene;
+  octree: Octree;
+  blocks: Map<int, OctreeBlock>;
+
+  constructor(container: Container) {
+    const antialias = true;
+    const options = {preserveDrawingBuffer: true};
+    this.engine = new BABYLON.Engine(container.canvas, antialias, options);
+    this.scene = new BABYLON.Scene(this.engine);
+    this.scene.detachControl();
+
+    const source = new BABYLON.Vector3(0.1, 1.0, 0.3);
+    this.light = new BABYLON.HemisphericLight('light', source, this.scene);
+    this.scene.clearColor = new BABYLON.Color4(0.8, 0.9, 1.0);
+    this.scene.ambientColor = new BABYLON.Color3(1, 1, 1);
+    this.light.diffuse = new BABYLON.Color3(1, 1, 1);
+    this.light.specular = new BABYLON.Color3(1, 1, 1);
+
+    const origin = new BABYLON.Vector3(8, 4, 1.5);
+    this.camera = new BABYLON.FreeCamera('camera', origin, this.scene);
+    this.camera.minZ = 0.01;
+
+    const scene = this.scene;
+    scene._addComponent(new BABYLON.OctreeSceneComponent(scene));
+    this.octree = new BABYLON.Octree(() => {});
+    this.octree.blocks = [];
+    scene._selectionOctree = this.octree;
+    this.blocks = new Map();
   }
 
-  get(x: int, y: int, z: int): int {
-    return this.data[this.index(x, y, z)];
+  addMesh(mesh: BABYLON.Mesh, dynamic: boolean) {
+    if (dynamic) {
+      const meshes = this.octree.dynamicContent;
+      mesh.onDisposeObservable.add(() => drop(meshes, mesh));
+      meshes.push(mesh);
+      return;
+    }
+
+    const key = this.getMeshKey(mesh);
+    const block = this.getMeshBlock(mesh, key);
+    mesh.onDisposeObservable.add(() => {
+      drop(block.entries, mesh);
+      if (block.entries.length) return;
+      drop(this.octree.blocks, block);
+      this.blocks.delete(key);
+    });
+    block.entries.push(mesh);
+
+    mesh.alwaysSelectAsActiveMesh = true;
+    mesh.freezeWorldMatrix();
+    mesh.freezeNormals();
   }
 
-  set(x: int, y: int, z: int, value: int) {
-    this.data[this.index(x, y, z)] = value;
+  render() {
+    this.engine.beginFrame();
+    this.scene.render();
+    this.engine.endFrame();
   }
 
-  index(x: int, y: int, z: int): int {
-    return x * this.stride[0] + y * this.stride[1] + z * this.stride[2];
+  private getMeshKey(mesh: BABYLON.Mesh): int {
+    assert(!mesh.parent);
+    const pos = mesh.position;
+    const mod = Constants.CHUNK_SIZE;
+    assert(pos.x % mod === 0);
+    assert(pos.y % mod === 0);
+    assert(pos.z % mod === 0);
+
+    const bits = Constants.CHUNK_KEY_BITS;
+    const mask = (1 << bits) - 1;
+    return (((pos.x / mod) & mask) << (0 * bits)) |
+           (((pos.y / mod) & mask) << (1 * bits)) |
+           (((pos.z / mod) & mask) << (2 * bits));
+  }
+
+  private getMeshBlock(mesh: BABYLON.Mesh, key: int): OctreeBlock {
+    const cached = this.blocks.get(key);
+    if (cached) return cached;
+
+    const pos = mesh.position;
+    const mod = Constants.CHUNK_SIZE;
+    const min = new BABYLON.Vector3(pos.x, pos.y, pos.z);
+    const max = new BABYLON.Vector3(pos.x + mod, pos.y + mod, pos.z + mod);
+
+    const block: OctreeBlock =
+      new BABYLON.OctreeBlock(min, max, 0, 0, 0, () => {});
+    this.octree.blocks.push(block);
+    this.blocks.set(key, block);
+    return block;
   }
 };
 
@@ -364,10 +372,26 @@ class TerrainMesher {
 
 //////////////////////////////////////////////////////////////////////////////
 
+class Engine {
+  container: Container;
+  registry: Registry;
+  renderer: Renderer;
+  mesher: TerrainMesher;
+
+  constructor(id: string) {
+    this.container = new Container(id);
+    this.registry = new Registry();
+    this.renderer = new Renderer(this.container);
+    this.mesher = new TerrainMesher(this.renderer.scene, this.registry);
+  }
+};
+
+//////////////////////////////////////////////////////////////////////////////
+// The game code:
+
 const main = () => {
-  const container = new Container('container');
-  const renderer = new Renderer(container);
-  const registry = new Registry();
+  const engine = new Engine('container');
+  const registry = engine.registry;
 
   registry.addMaterialOfColor('grass', [0.2, 0.8, 0.2]);
   registry.addMaterialOfColor('water', [0.4, 0.4, 0.8], 0.6);
@@ -391,8 +415,8 @@ const main = () => {
     }
   }
 
-  const mesher = new TerrainMesher(renderer.scene, registry);
-  const mesh = mesher.mesh(voxels);
+  const renderer = engine.renderer;
+  const mesh = engine.mesher.mesh(voxels);
   if (mesh) renderer.addMesh(mesh, false);
   renderer.render();
 };
