@@ -54,6 +54,9 @@ class Tensor3 {
 const Constants = {
   CHUNK_SIZE: 16,
   CHUNK_KEY_BITS: 8,
+  TICK_RESOLUTION: 4,
+  TICKS_PER_FRAME: 4,
+  TICKS_PER_SECOND: 30,
 };
 
 //////////////////////////////////////////////////////////////////////////////
@@ -372,17 +375,102 @@ class TerrainMesher {
 
 //////////////////////////////////////////////////////////////////////////////
 
+const frame = (timing: Timing) => {
+  requestAnimationFrame(frame.bind(null, timing));
+  timing.renderHandler();
+};
+
+class Timing {
+  now: any;
+  render: (dt: int, fraction: number) => void;
+  update: (dt: int) => void;
+  renderBinding: () => void;
+  updateDelay: number;
+  updateLimit: number;
+  lastRender: int;
+  lastUpdate: int;
+
+  constructor(render: (dt: int, fraction: number) => void,
+              update: (dt: int) => void) {
+    this.now = performance || Date;
+    this.render = render;
+    this.update = update;
+
+    const now = this.now.now();
+    this.lastRender = now;
+    this.lastUpdate = now;
+
+    this.renderBinding = this.renderHandler.bind(this);
+    requestAnimationFrame(this.renderBinding);
+
+    this.updateDelay = 1000 / Constants.TICKS_PER_SECOND;
+    this.updateLimit = this.updateDelay * Constants.TICKS_PER_FRAME;
+    const updateInterval = this.updateDelay / Constants.TICK_RESOLUTION;
+    setInterval(this.updateHandler.bind(this), updateInterval);
+  }
+
+  renderHandler() {
+    requestAnimationFrame(this.renderBinding);
+    this.updateHandler();
+
+    const now = this.now.now();
+    const dt = now - this.lastRender;
+    this.lastRender = now;
+
+    const fraction = (now - this.lastUpdate) / this.updateDelay;
+    try {
+      this.render(dt, fraction);
+    } catch (e) {
+      this.render = () => {};
+      console.error(e);
+    }
+  }
+
+  private updateHandler() {
+    let now = this.now.now();
+    const delay = this.updateDelay;
+    const limit = now + this.updateLimit;
+
+    while (this.lastUpdate + delay < now) {
+      try {
+        this.update(delay);
+      } catch (e) {
+        this.update = () => {};
+        console.error(e);
+      }
+      this.lastUpdate += delay;
+      now = this.now.now();
+
+      if (now > limit) {
+        this.lastUpdate = now;
+        break;
+      }
+    }
+  }
+};
+
+//////////////////////////////////////////////////////////////////////////////
+
 class Engine {
   container: Container;
   registry: Registry;
   renderer: Renderer;
   mesher: TerrainMesher;
+  timing: Timing;
 
   constructor(id: string) {
     this.container = new Container(id);
     this.registry = new Registry();
     this.renderer = new Renderer(this.container);
     this.mesher = new TerrainMesher(this.renderer.scene, this.registry);
+    this.timing = new Timing(this.render.bind(this), this.update.bind(this));
+  }
+
+  render() {
+    this.renderer.render();
+  }
+
+  update() {
   }
 };
 
@@ -418,7 +506,6 @@ const main = () => {
   const renderer = engine.renderer;
   const mesh = engine.mesher.mesh(voxels);
   if (mesh) renderer.addMesh(mesh, false);
-  renderer.render();
 };
 
 window.onload = main;
