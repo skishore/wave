@@ -504,40 +504,40 @@ interface ComponentState {id: EntityId, index: int};
 
 const kNoEntity: EntityId = 0 as EntityId;
 
-interface Component<T, U extends ComponentState> {
-  init: () => U,
+interface Component<T extends ComponentState = ComponentState> {
+  init: () => T,
   order?: number,
-  onAdd?: (env: T, state: U) => void,
-  onRemove?: (env: T, state: U) => void,
-  onRender?: (dt: number, env: T, states: U[]) => void,
-  onUpdate?: (dt: number, env: T, states: U[]) => void,
+  onAdd?: (state: T) => void,
+  onRemove?: (state: T) => void,
+  onRender?: (dt: number, states: T[]) => void,
+  onUpdate?: (dt: number, states: T[]) => void,
 };
 
-class ComponentStore<T, U extends ComponentState> {
+class ComponentStore<T extends ComponentState = ComponentState> {
   component: string;
-  definition: Component<T, U>;
-  lookup: Map<EntityId, U>;
-  states: U[];
+  definition: Component<T>;
+  lookup: Map<EntityId, T>;
+  states: T[];
 
-  constructor(component: string, definition: Component<T, U>) {
+  constructor(component: string, definition: Component<T>) {
     this.component = component;
     this.definition = definition;
     this.lookup = new Map();
     this.states = [];
   }
 
-  get(entity: EntityId): U | null {
+  get(entity: EntityId): T | null {
     const result = this.lookup.get(entity);
     return result ? result : null;
   }
 
-  getX(entity: EntityId): U {
+  getX(entity: EntityId): T {
     const result = this.lookup.get(entity);
     if (!result) throw new Error(`${entity} missing ${this.component}`);
     return result;
   }
 
-  add(env: T, entity: EntityId) {
+  add(entity: EntityId) {
     if (this.lookup.has(entity)) {
       throw new Error(`Duplicate for ${entity}: ${this.component}`);
     }
@@ -551,15 +551,15 @@ class ComponentStore<T, U extends ComponentState> {
     this.states.push(state);
 
     const callback = this.definition.onAdd;
-    if (callback) callback(env, state);
+    if (callback) callback(state);
   }
 
-  remove(env: T, entity: EntityId) {
+  remove(entity: EntityId) {
     const state = this.lookup.get(entity);
     if (!state) return;
 
     this.lookup.delete(entity);
-    const popped = this.states.pop() as U;
+    const popped = this.states.pop() as T;
     assert(popped.index === this.states.length);
     if (popped.id === entity) return;
 
@@ -569,31 +569,29 @@ class ComponentStore<T, U extends ComponentState> {
     popped.index = index;
 
     const callback = this.definition.onRemove;
-    if (callback) callback(env, state);
+    if (callback) callback(state);
   }
 
-  render(dt: int, env: T) {
+  render(dt: int) {
     const callback = this.definition.onRender;
     if (!callback) throw new Error(`render called: ${this.component}`);
-    callback(dt, env, this.states);
+    callback(dt, this.states);
   }
 
-  update(dt: int, env: T) {
+  update(dt: int) {
     const callback = this.definition.onUpdate;
     if (!callback) throw new Error(`update called: ${this.component}`);
-    callback(dt, env, this.states);
+    callback(dt, this.states);
   }
 };
 
-class ECS<T> {
-  env: T;
+class EntityComponentSystem {
   last: EntityId;
-  components: Map<string, ComponentStore<T, any>>;
-  onRenders: ComponentStore<T, any>[];
-  onUpdates: ComponentStore<T, any>[];
+  components: Map<string, ComponentStore<any>>;
+  onRenders: ComponentStore<any>[];
+  onUpdates: ComponentStore<any>[];
 
-  constructor(env: T) {
-    this.env = env;
+  constructor() {
     this.last = 0 as EntityId;
     this.components = new Map();
     this.onRenders = [];
@@ -610,15 +608,15 @@ class ECS<T> {
   addComponent(entity: EntityId, component: string) {
     const store = this.components.get(component);
     if (!store) throw new Error(`Unknown component: ${component}`);
-    store.add(this.env, entity);
+    store.add(entity);
   }
 
   removeEntity(entity: EntityId) {
-    this.components.forEach(x => x.remove(this.env, entity));
+    this.components.forEach(x => x.remove(entity));
   }
 
-  registerComponent<U extends ComponentState>(
-      component: string, definition: Component<T, U>): ComponentStore<T, U> {
+  registerComponent<T extends ComponentState>(
+      component: string, definition: Component<T>): ComponentStore<T> {
     const exists = this.components.has(component);
     if (exists) throw new Error(`Duplicate component: ${component}`);
     const store = new ComponentStore(component, definition);
@@ -630,11 +628,11 @@ class ECS<T> {
   }
 
   render(dt: int) {
-    for (const store of this.onRenders) store.render(dt, this.env);
+    for (const store of this.onRenders) store.render(dt);
   }
 
   update(dt: int) {
-    for (const store of this.onUpdates) store.update(dt, this.env);
+    for (const store of this.onUpdates) store.update(dt);
   }
 };
 
@@ -642,7 +640,7 @@ class ECS<T> {
 
 class Env {
   container: Container;
-  entities: ECS<Env>;
+  entities: EntityComponentSystem;
   registry: Registry;
   renderer: Renderer;
   mesher: TerrainMesher;
@@ -650,7 +648,7 @@ class Env {
 
   constructor(id: string) {
     this.container = new Container(id);
-    this.entities = new ECS(this as Env);
+    this.entities = new EntityComponentSystem();
     this.registry = new Registry();
     this.renderer = new Renderer(this.container);
     this.mesher = new TerrainMesher(this.renderer.scene, this.registry);
@@ -680,29 +678,29 @@ class Env {
 
 interface PositionState {
   id: EntityId,
-  index: number,
+  index: int,
   x: number,
   y: number,
   z: number,
 };
 
-const Position: Component<Env, PositionState> = {
+const Position: Component<PositionState> = {
   init: () => ({id: kNoEntity, index: 0, x: 0, y: 0, z: 0}),
 };
 
-type PositionStore = ComponentStore<Env, PositionState>;
+type PositionStore = ComponentStore<PositionState>;
 
 // CameraTarget signifies that the camera will follow an entity.
 
-const CameraTarget = (positions: PositionStore): Component<Env, ComponentState> => ({
+const CameraTarget = (env: Env, positions: PositionStore): Component => ({
   init: () => ({id: kNoEntity, index: 0}),
-  onRender: (dt: int, env: Env, states: ComponentState[]) => {
+  onRender: (dt: int, states: ComponentState[]) => {
     for (const state of states) {
       const position = positions.getX(state.id);
       env.renderer.camera.setPosition(position.x, position.y, position.z);
     }
   },
-  onUpdate: (dt: int, env: Env, states: ComponentState[]) => {
+  onUpdate: (dt: int, states: ComponentState[]) => {
     const inputs = env.container.inputs;
     const ud = (inputs.up ? 1 : 0) - (inputs.down ? 1 : 0);
     const speed = 0.5 * ud;
@@ -726,7 +724,7 @@ const main = () => {
 
   const entities = env.entities;
   const positions = entities.registerComponent('position', Position);
-  entities.registerComponent('camera-target', CameraTarget(positions));
+  entities.registerComponent('camera-target', CameraTarget(env, positions));
 
   const player = entities.addEntity(['position', 'camera-target']);
   const position = positions.getX(player);
