@@ -500,7 +500,7 @@ class Timing {
 
 type EntityId = int & {__type__: 'EntityId'};
 
-interface ComponentState {id: EntityId};
+interface ComponentState {id: EntityId, index: int};
 
 const kNoEntity: EntityId = 0 as EntityId;
 
@@ -516,24 +516,38 @@ interface Component<T, U extends ComponentState> {
 class ComponentStore<T, U extends ComponentState> {
   component: string;
   definition: Component<T, U>;
-  indices: Map<EntityId, int>;
+  lookup: Map<EntityId, U>;
   states: U[];
 
   constructor(component: string, definition: Component<T, U>) {
     this.component = component;
     this.definition = definition;
-    this.indices = new Map();
+    this.lookup = new Map();
     this.states = [];
   }
 
+  get(entity: EntityId): U | null {
+    const result = this.lookup.get(entity);
+    return result ? result : null;
+  }
+
+  getX(entity: EntityId): U {
+    const result = this.lookup.get(entity);
+    if (!result) throw new Error(`${entity} missing ${this.component}`);
+    return result;
+  }
+
   add(env: T, entity: EntityId) {
-    if (this.indices.has(entity)) {
+    if (this.lookup.has(entity)) {
       throw new Error(`Duplicate for ${entity}: ${this.component}`);
     }
 
+    const index = this.states.length;
     const state = this.definition.init();
     state.id = entity;
-    this.indices.set(entity, this.states.length);
+    state.index = index;
+
+    this.lookup.set(entity, state);
     this.states.push(state);
 
     const callback = this.definition.onAdd;
@@ -541,18 +555,18 @@ class ComponentStore<T, U extends ComponentState> {
   }
 
   remove(env: T, entity: EntityId) {
-    const index = this.indices.get(entity);
-    if (index === undefined) return;
+    const state = this.lookup.get(entity);
+    if (!state) return;
 
-    this.indices.delete(entity);
-    const state = this.states[index];
-    const popped = this.states.pop();
-    if (popped === undefined) throw new Error(`Empty: ${this.component}`);
+    this.lookup.delete(entity);
+    const popped = this.states.pop() as U;
+    assert(popped.index === this.states.length);
     if (popped.id === entity) return;
 
+    const index = state.index;
     assert(index < this.states.length);
-    this.indices.set(popped.id, index);
     this.states[index] = popped;
+    popped.index = index;
 
     const callback = this.definition.onRemove;
     if (callback) callback(env, state);
@@ -599,27 +613,12 @@ class ECS<T> {
     store.add(this.env, entity);
   }
 
-  getState(entity: EntityId, component: string) {
-    const store = this.components.get(component);
-    if (!store) throw new Error(`Unknown component: ${component}`);
-    const index = store.indices.get(entity);
-    return index === undefined ? null : store.states[index];
-  }
-
-  getStateGetter(component: string) {
-    const store = this.components.get(component);
-    if (!store) throw new Error(`Unknown component: ${component}`);
-    return (entity: EntityId) => {
-      const index = store.indices.get(entity);
-      return index === undefined ? null : store.states[index];
-    };
-  }
-
   removeEntity(entity: EntityId) {
     this.components.forEach(x => x.remove(this.env, entity));
   }
 
-  registerComponent(component: string, definition: Component<T, any>) {
+  registerComponent<U extends ComponentState>(
+      component: string, definition: Component<T, U>): ComponentStore<T, U> {
     const exists = this.components.has(component);
     if (exists) throw new Error(`Duplicate component: ${component}`);
     const store = new ComponentStore(component, definition);
@@ -627,6 +626,7 @@ class ECS<T> {
 
     if (definition.onRender) this.onRenders.push(store);
     if (definition.onUpdate) this.onUpdates.push(store);
+    return store;
   }
 
   render(dt: int) {
@@ -676,23 +676,29 @@ class Env {
 //////////////////////////////////////////////////////////////////////////////
 // The game code:
 
+// Position tracks (x, y, z) coordinates for an entity.
+
 interface PositionState {
   id: EntityId,
+  index: number,
   x: number,
   y: number,
   z: number,
 };
 
 const Position: Component<Env, PositionState> = {
-  init: () => ({id: kNoEntity, x: 0, y: 0, z: 0}),
+  init: () => ({id: kNoEntity, index: 0, x: 0, y: 0, z: 0}),
 };
 
-const CameraTarget: Component<Env, ComponentState> = {
-  init: () => ({id: kNoEntity}),
+type PositionStore = ComponentStore<Env, PositionState>;
+
+// CameraTarget signifies that the camera will follow an entity.
+
+const CameraTarget = (positions: PositionStore): Component<Env, ComponentState> => ({
+  init: () => ({id: kNoEntity, index: 0}),
   onRender: (dt: int, env: Env, states: ComponentState[]) => {
-    const getPosition = env.entities.getStateGetter('position');
     for (const state of states) {
-      const position = nonnull(getPosition(state.id));
+      const position = positions.getX(state.id);
       env.renderer.camera.setPosition(position.x, position.y, position.z);
     }
   },
@@ -704,25 +710,26 @@ const CameraTarget: Component<Env, ComponentState> = {
     const camera = env.renderer.camera;
     const direction = camera.direction;
 
-    const getPosition = env.entities.getStateGetter('position');
     for (const state of states) {
-      const position = nonnull(getPosition(state.id));
+      const position = positions.getX(state.id);
       position.x += speed * direction.x;
       position.y += speed * direction.y;
       position.z += speed * direction.z;
     }
   },
-};
+});
+
+// Putting it all together:
 
 const main = () => {
   const env = new Env('container');
 
   const entities = env.entities;
-  entities.registerComponent('position', Position);
-  entities.registerComponent('camera-target', CameraTarget);
+  const positions = entities.registerComponent('position', Position);
+  entities.registerComponent('camera-target', CameraTarget(positions));
 
   const player = entities.addEntity(['position', 'camera-target']);
-  const position = entities.getState(player, 'position')
+  const position = positions.getX(player);
   position.x = 8;
   position.y = 4;
   position.z = 1.5;
