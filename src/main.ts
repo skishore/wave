@@ -427,11 +427,6 @@ class TerrainMesher {
 
 //////////////////////////////////////////////////////////////////////////////
 
-const frame = (timing: Timing) => {
-  requestAnimationFrame(frame.bind(null, timing));
-  timing.renderHandler();
-};
-
 class Timing {
   now: any;
   render: (dt: int, fraction: number) => void;
@@ -503,8 +498,151 @@ class Timing {
 
 //////////////////////////////////////////////////////////////////////////////
 
-class Engine {
+type EntityId = int & {__type__: 'EntityId'};
+
+interface ComponentState {id: EntityId};
+
+const kNoEntity: EntityId = 0 as EntityId;
+
+interface Component<T, U extends ComponentState> {
+  init: () => U,
+  order?: number,
+  onAdd?: (env: T, state: U) => void,
+  onRemove?: (env: T, state: U) => void,
+  onRender?: (dt: number, env: T, states: U[]) => void,
+  onUpdate?: (dt: number, env: T, states: U[]) => void,
+};
+
+class ComponentStore<T, U extends ComponentState> {
+  component: string;
+  definition: Component<T, U>;
+  indices: Map<EntityId, int>;
+  states: U[];
+
+  constructor(component: string, definition: Component<T, U>) {
+    this.component = component;
+    this.definition = definition;
+    this.indices = new Map();
+    this.states = [];
+  }
+
+  add(env: T, entity: EntityId) {
+    if (this.indices.has(entity)) {
+      throw new Error(`Duplicate for ${entity}: ${this.component}`);
+    }
+
+    const state = this.definition.init();
+    state.id = entity;
+    this.indices.set(entity, this.states.length);
+    this.states.push(state);
+
+    const callback = this.definition.onAdd;
+    if (callback) callback(env, state);
+  }
+
+  remove(env: T, entity: EntityId) {
+    const index = this.indices.get(entity);
+    if (index === undefined) return;
+
+    this.indices.delete(entity);
+    const state = this.states[index];
+    const popped = this.states.pop();
+    if (popped === undefined) throw new Error(`Empty: ${this.component}`);
+    if (popped.id === entity) return;
+
+    assert(index < this.states.length);
+    this.indices.set(popped.id, index);
+    this.states[index] = popped;
+
+    const callback = this.definition.onRemove;
+    if (callback) callback(env, state);
+  }
+
+  render(dt: int, env: T) {
+    const callback = this.definition.onRender;
+    if (!callback) throw new Error(`render called: ${this.component}`);
+    callback(dt, env, this.states);
+  }
+
+  update(dt: int, env: T) {
+    const callback = this.definition.onUpdate;
+    if (!callback) throw new Error(`update called: ${this.component}`);
+    callback(dt, env, this.states);
+  }
+};
+
+class ECS<T> {
+  env: T;
+  last: EntityId;
+  components: Map<string, ComponentStore<T, any>>;
+  onRenders: ComponentStore<T, any>[];
+  onUpdates: ComponentStore<T, any>[];
+
+  constructor(env: T) {
+    this.env = env;
+    this.last = 0 as EntityId;
+    this.components = new Map();
+    this.onRenders = [];
+    this.onUpdates = [];
+  }
+
+  addEntity(components: string[]): EntityId {
+    this.last = (this.last + 1) as EntityId;
+    const result = this.last;
+    components.forEach(x => this.addComponent(result, x));
+    return result;
+  }
+
+  addComponent(entity: EntityId, component: string) {
+    const store = this.components.get(component);
+    if (!store) throw new Error(`Unknown component: ${component}`);
+    store.add(this.env, entity);
+  }
+
+  getState(entity: EntityId, component: string) {
+    const store = this.components.get(component);
+    if (!store) throw new Error(`Unknown component: ${component}`);
+    const index = store.indices.get(entity);
+    return index === undefined ? null : store.states[index];
+  }
+
+  getStateGetter(component: string) {
+    const store = this.components.get(component);
+    if (!store) throw new Error(`Unknown component: ${component}`);
+    return (entity: EntityId) => {
+      const index = store.indices.get(entity);
+      return index === undefined ? null : store.states[index];
+    };
+  }
+
+  removeEntity(entity: EntityId) {
+    this.components.forEach(x => x.remove(this.env, entity));
+  }
+
+  registerComponent(component: string, definition: Component<T, any>) {
+    const exists = this.components.has(component);
+    if (exists) throw new Error(`Duplicate component: ${component}`);
+    const store = new ComponentStore(component, definition);
+    this.components.set(component, store);
+
+    if (definition.onRender) this.onRenders.push(store);
+    if (definition.onUpdate) this.onUpdates.push(store);
+  }
+
+  render(dt: int) {
+    for (const store of this.onRenders) store.render(dt, this.env);
+  }
+
+  update(dt: int) {
+    for (const store of this.onUpdates) store.update(dt, this.env);
+  }
+};
+
+//////////////////////////////////////////////////////////////////////////////
+
+class Env {
   container: Container;
+  entities: ECS<Env>;
   registry: Registry;
   renderer: Renderer;
   mesher: TerrainMesher;
@@ -512,44 +650,84 @@ class Engine {
 
   constructor(id: string) {
     this.container = new Container(id);
+    this.entities = new ECS(this as Env);
     this.registry = new Registry();
     this.renderer = new Renderer(this.container);
     this.mesher = new TerrainMesher(this.renderer.scene, this.registry);
     this.timing = new Timing(this.render.bind(this), this.update.bind(this));
   }
 
-  render() {
+  render(dt: int) {
     if (!this.container.inputs.pointer) return;
 
     const deltas = this.container.deltas;
     this.renderer.camera.applyInputs(deltas.x, deltas.y);
     deltas.x = deltas.y = 0;
+    this.entities.render(dt);
     this.renderer.render();
   }
 
-  update() {
+  update(dt: int) {
     if (!this.container.inputs.pointer) return;
-
-    const inputs = this.container.inputs;
-    const ud = (inputs.up ? 1 : 0) - (inputs.down ? 1 : 0);
-    const speed = 0.5 * ud;
-
-    const camera = this.renderer.camera;
-    const position = camera.holder.position;
-    const direction = camera.direction;
-    position.x += speed * direction.x;
-    position.y += speed * direction.y;
-    position.z += speed * direction.z;
+    this.entities.update(dt);
   }
 };
 
 //////////////////////////////////////////////////////////////////////////////
 // The game code:
 
-const main = () => {
-  const engine = new Engine('container');
-  const registry = engine.registry;
+interface PositionState {
+  id: EntityId,
+  x: number,
+  y: number,
+  z: number,
+};
 
+const Position: Component<Env, PositionState> = {
+  init: () => ({id: kNoEntity, x: 0, y: 0, z: 0}),
+};
+
+const CameraTarget: Component<Env, ComponentState> = {
+  init: () => ({id: kNoEntity}),
+  onRender: (dt: int, env: Env, states: ComponentState[]) => {
+    const getPosition = env.entities.getStateGetter('position');
+    for (const state of states) {
+      const position = nonnull(getPosition(state.id));
+      env.renderer.camera.setPosition(position.x, position.y, position.z);
+    }
+  },
+  onUpdate: (dt: int, env: Env, states: ComponentState[]) => {
+    const inputs = env.container.inputs;
+    const ud = (inputs.up ? 1 : 0) - (inputs.down ? 1 : 0);
+    const speed = 0.5 * ud;
+
+    const camera = env.renderer.camera;
+    const direction = camera.direction;
+
+    const getPosition = env.entities.getStateGetter('position');
+    for (const state of states) {
+      const position = nonnull(getPosition(state.id));
+      position.x += speed * direction.x;
+      position.y += speed * direction.y;
+      position.z += speed * direction.z;
+    }
+  },
+};
+
+const main = () => {
+  const env = new Env('container');
+
+  const entities = env.entities;
+  entities.registerComponent('position', Position);
+  entities.registerComponent('camera-target', CameraTarget);
+
+  const player = entities.addEntity(['position', 'camera-target']);
+  const position = entities.getState(player, 'position')
+  position.x = 8;
+  position.y = 4;
+  position.z = 1.5;
+
+  const registry = env.registry;
   registry.addMaterialOfColor('grass', [0.2, 0.8, 0.2]);
   registry.addMaterialOfColor('water', [0.4, 0.4, 0.8], 0.6);
   const grass = registry.addBlock(['grass'], true);
@@ -572,10 +750,10 @@ const main = () => {
     }
   }
 
-  const renderer = engine.renderer;
-  const mesh = engine.mesher.mesh(voxels);
+  const renderer = env.renderer;
+  const mesh = env.mesher.mesh(voxels);
   if (mesh) renderer.addMesh(mesh, false);
-  renderer.camera.setPosition(8, 4, 1.5);
+  entities.render(0);
   renderer.render();
 };
 
