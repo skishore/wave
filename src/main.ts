@@ -25,12 +25,12 @@ const nonnull = <T>(x: T | null, message?: () => string): T => {
 //////////////////////////////////////////////////////////////////////////////
 
 class Tensor3 {
-  data: Uint8Array;
+  data: Uint32Array;
   shape: [int, int, int];
   stride: [int, int, int];
 
   constructor(x: int, y: int, z: int) {
-    this.data = new Uint8Array(x * y * z);
+    this.data = new Uint32Array(x * y * z);
     this.shape = [x, y, z];
     this.stride = [1, x, x * y];
   }
@@ -645,6 +645,9 @@ class Env {
   renderer: Renderer;
   mesher: TerrainMesher;
   timing: Timing;
+  voxels: Tensor3;
+  _dirty: boolean;
+  _mesh: BABYLON.Mesh | null;
 
   constructor(id: string) {
     this.container = new Container(id);
@@ -653,6 +656,28 @@ class Env {
     this.renderer = new Renderer(this.container);
     this.mesher = new TerrainMesher(this.renderer.scene, this.registry);
     this.timing = new Timing(this.render.bind(this), this.update.bind(this));
+
+    const size = Constants.CHUNK_SIZE;
+    this.voxels = new Tensor3(size, size, size);
+    this._dirty = true;
+    this._mesh = null;
+  }
+
+  getBlock(x: int, y: int, z: int): BlockId {
+    return this.voxels.get(x, y, z) as BlockId;
+  }
+
+  setBlock(x: int, y: int, z: int, block: BlockId) {
+    this.voxels.set(x, y, z, block);
+    this._dirty = true;
+  }
+
+  refresh() {
+    const saved = this.container.inputs.pointer;
+    this.container.inputs.pointer = true;
+    this.update(0);
+    this.render(0);
+    this.container.inputs.pointer = saved;
   }
 
   render(dt: int) {
@@ -667,12 +692,32 @@ class Env {
 
   update(dt: int) {
     if (!this.container.inputs.pointer) return;
+
+    if (this._dirty) {
+      if (this._mesh) this._mesh.dispose();
+      this._mesh = this.mesher.mesh(this.voxels);
+      if (this._mesh) this.renderer.addMesh(this._mesh, false);
+      this._dirty = false;
+    }
+
     this.entities.update(dt);
   }
 };
 
 //////////////////////////////////////////////////////////////////////////////
 // The game code:
+
+class TypedEnv extends Env {
+  position: ComponentStore<PositionState>;
+  target: ComponentStore<ComponentState>;
+
+  constructor(id: string) {
+    super(id);
+    const ents = this.entities;
+    this.position = ents.registerComponent('position', Position);
+    this.target = ents.registerComponent('camera-target', CameraTarget(this));
+  }
+};
 
 // Position tracks (x, y, z) coordinates for an entity.
 
@@ -688,15 +733,13 @@ const Position: Component<PositionState> = {
   init: () => ({id: kNoEntity, index: 0, x: 0, y: 0, z: 0}),
 };
 
-type PositionStore = ComponentStore<PositionState>;
-
 // CameraTarget signifies that the camera will follow an entity.
 
-const CameraTarget = (env: Env, positions: PositionStore): Component => ({
+const CameraTarget = (env: TypedEnv): Component => ({
   init: () => ({id: kNoEntity, index: 0}),
   onRender: (dt: int, states: ComponentState[]) => {
     for (const state of states) {
-      const position = positions.getX(state.id);
+      const position = env.position.getX(state.id);
       env.renderer.camera.setPosition(position.x, position.y, position.z);
     }
   },
@@ -709,7 +752,7 @@ const CameraTarget = (env: Env, positions: PositionStore): Component => ({
     const direction = camera.direction;
 
     for (const state of states) {
-      const position = positions.getX(state.id);
+      const position = env.position.getX(state.id);
       position.x += speed * direction.x;
       position.y += speed * direction.y;
       position.z += speed * direction.z;
@@ -720,14 +763,9 @@ const CameraTarget = (env: Env, positions: PositionStore): Component => ({
 // Putting it all together:
 
 const main = () => {
-  const env = new Env('container');
-
-  const entities = env.entities;
-  const positions = entities.registerComponent('position', Position);
-  entities.registerComponent('camera-target', CameraTarget(env, positions));
-
-  const player = entities.addEntity(['position', 'camera-target']);
-  const position = positions.getX(player);
+  const env = new TypedEnv('container');
+  const player = env.entities.addEntity(['position', 'camera-target']);
+  const position = env.position.getX(player);
   position.x = 8;
   position.y = 4;
   position.z = 1.5;
@@ -741,25 +779,20 @@ const main = () => {
   const size = Constants.CHUNK_SIZE;
   const pl = size / 4;
   const pr = 3 * size / 4;
-  const voxels = new Tensor3(size, size, size);
   for (let x = 0; x < size; x++) {
     for (let z = 0; z < size; z++) {
       const wall = x === 0 || x === size - 1 || z === 0 || z === size - 1;
       const pool = (pl <= x && x < pr && 4 && pl <= z && z < pr);
       const height = Math.min(wall ? 7 : 3, size);
       for (let y = 0; y < height; y++) {
-        assert(voxels.get(x, y, z) === 0);
+        assert(env.getBlock(x, y, z) === 0);
         const tile = y > 0 && pool ? water : grass;
-        voxels.set(x, y, z, tile);
+        env.setBlock(x, y, z, tile);
       }
     }
   }
 
-  const renderer = env.renderer;
-  const mesh = env.mesher.mesh(voxels);
-  if (mesh) renderer.addMesh(mesh, false);
-  entities.render(0);
-  renderer.render();
+  env.refresh();
 };
 
 window.onload = main;
