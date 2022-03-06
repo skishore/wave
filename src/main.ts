@@ -1,4 +1,4 @@
-import {sweep} from './sweep';
+import {Point, sweep} from './sweep.js';
 
 //////////////////////////////////////////////////////////////////////////////
 // Utilities and math:
@@ -711,12 +711,14 @@ class Env {
 
 class TypedEnv extends Env {
   position: ComponentStore<PositionState>;
-  target: ComponentStore<ComponentState>;
+  physics: ComponentStore<PhysicsState>;
+  target: ComponentStore;
 
   constructor(id: string) {
     super(id);
     const ents = this.entities;
     this.position = ents.registerComponent('position', Position);
+    this.physics = ents.registerComponent('physics', Physics(this));
     this.target = ents.registerComponent('camera-target', CameraTarget(this));
   }
 };
@@ -734,6 +736,78 @@ interface PositionState {
 const Position: Component<PositionState> = {
   init: () => ({id: kNoEntity, index: 0, x: 0, y: 0, z: 0}),
 };
+
+// Physics tracks an axis-aligned bounding box (AABB) for an entity,
+// along with things like its velocity, forces on it, etc.
+
+interface PhysicsState {
+  id: EntityId,
+  index: int,
+  min: Point,
+  max: Point,
+  vel: Point,
+  resting: Point,
+};
+
+const setPhysicsFromPosition = (a: PositionState, b: PhysicsState) => {
+  const size = [0.25, 0.25, 0.25];
+  b.min = [a.x - size[0], a.y - size[1], a.z - size[2]];
+  b.max = [a.x + size[0], a.y + size[1], a.z + size[2]];
+};
+
+const setPositionFromPhysics = (a: PositionState, b: PhysicsState) => {
+  a.x = (b.min[0] + b.max[0]) / 2;
+  a.y = (b.min[1] + b.max[1]) / 2;
+  a.z = (b.min[2] + b.max[2]) / 2;
+};
+
+const runPhysics = (env: TypedEnv, dt: int, state: PhysicsState) => {
+  dt = dt / 1000;
+  state.vel[1] += -dt * 40;
+
+  const delta = state.vel.map(x => x * dt) as Point;
+  const impacts: Point = [0, 0, 0];
+  sweep(state.min, state.max, delta, impacts,
+        (p: Point) => env.getBlock(p[0], p[1], p[2]) === 0);
+
+  for (let i = 0; i < 3; i++) {
+    const old_state = state.resting[i];
+    const new_state = impacts[i];
+    state.resting[i] = new_state;
+    if (new_state !== 0) state.vel[i] = 0;
+
+    if (new_state && !old_state) {
+      console.log(`Impact on axis ${i}: ${impacts[i]}`);
+    }
+  }
+};
+
+const Physics = (env: TypedEnv): Component<PhysicsState> => ({
+  init: () => ({
+    id: kNoEntity,
+    index: 0,
+    min: [0, 0, 0],
+    max: [0, 0, 0],
+    vel: [0, 0, 0],
+    resting: [0, 0, 0],
+  }),
+  onAdd: (state: PhysicsState) => {
+    setPhysicsFromPosition(env.position.getX(state.id), state);
+  },
+  onRemove: (state: PhysicsState) => {
+    setPositionFromPhysics(env.position.getX(state.id), state);
+  },
+  onRender: (dt: int, states: PhysicsState[]) => {
+    for (const state of states) {
+      setPositionFromPhysics(env.position.getX(state.id), state);
+    }
+  },
+  onUpdate: (dt: int, states: PhysicsState[]) => {
+    for (const state of states) {
+      runPhysics(env, dt, state);
+    }
+  },
+});
 
 // CameraTarget signifies that the camera will follow an entity.
 
@@ -769,8 +843,9 @@ const main = () => {
   const player = env.entities.addEntity(['position', 'camera-target']);
   const position = env.position.getX(player);
   position.x = 8;
-  position.y = 4;
+  position.y = 5;
   position.z = 1.5;
+  env.entities.addComponent(player, 'physics');
 
   const registry = env.registry;
   registry.addMaterialOfColor('grass', [0.2, 0.8, 0.2]);

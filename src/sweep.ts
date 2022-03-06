@@ -1,6 +1,4 @@
-type int = number;
-
-type Point = [int, int, int];
+type Point = [number, number, number];
 
 type Check = (x: Point) => boolean;
 
@@ -13,11 +11,12 @@ const kDistances = [0, 0, 0, kSweepResolution];
 const kCellCur: Point = [0, 0, 0];
 const kCellEnd: Point = [0, 0, 0];
 
-const sweep = (min: Point, max: Point, delta: Point, check: Check) => {
+const sweep = (min: Point, max: Point, delta: Point, impacts: Point, check: Check) => {
   for (let i = 0; i < 3; i++) {
     min[i] = (min[i] * kSweepResolution) | 0;
     max[i] = (max[i] * kSweepResolution) | 0;
     delta[i] = (delta[i] * kSweepResolution) | 0;
+    impacts[i] = 0;
   }
 
   while (delta[0] || delta[1] || delta[2]) {
@@ -62,8 +61,6 @@ const sweep = (min: Point, max: Point, delta: Point, check: Check) => {
     {
       const i = best;
       kCellCur[i] = (delta[i] > 0 ? max[i] : min[i] - 1) >> kSweepShift;
-      console.log(`Checking for collision along: ${best}`);
-      console.log('  Position:', min.map(x => x / kSweepResolution));
 
       const j = i < 2 ? i + 1 : i - 2;
       const k = i < 1 ? i + 2 : i - 1;
@@ -72,14 +69,16 @@ const sweep = (min: Point, max: Point, delta: Point, check: Check) => {
       kCellCur[k] = min[k] >> kSweepShift;
       kCellEnd[k] = (max[k] - 1) >> kSweepShift;
 
-      for (; kCellCur[j] <= kCellEnd[j]; kCellCur[j]++) {
-        for (; kCellCur[k] <= kCellEnd[k]; kCellCur[k]++) {
+      let done = false;
+      for (; !done && kCellCur[j] <= kCellEnd[j]; kCellCur[j]++) {
+        for (; !done && kCellCur[k] <= kCellEnd[k]; kCellCur[k]++) {
           if (check(kCellCur)) continue;
-          kCellCur[j] = kCellEnd[j];
           const step =  delta[i] > 0 ? -1 : 1;
+          impacts[i] = -step;
           min[i] += step;
           max[i] += step;
           delta[i] = 0;
+          done = true;
         }
       }
     }
@@ -89,10 +88,6 @@ const sweep = (min: Point, max: Point, delta: Point, check: Check) => {
     min[i] = min[i] / kSweepResolution;
     max[i] = max[i] / kSweepResolution;
   }
-  console.log('Final position:', min);
 };
 
-sweep([1, 1, 1], [1.5, 1.5, 1.5], [-0.2, -0.2, -0.2],
-      (p: Point) => { console.log('  Checking cell:', p); return p[0] !== 0 || p[1] !== 0 || p[2] !== 0; });
-
-export {sweep};
+export {Point, sweep};
