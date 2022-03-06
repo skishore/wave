@@ -1,4 +1,4 @@
-import {Point, sweep} from './sweep.js';
+import {sweep} from './sweep.js';
 
 //////////////////////////////////////////////////////////////////////////////
 // Utilities and math:
@@ -25,6 +25,75 @@ const nonnull = <T>(x: T | null, message?: () => string): T => {
 };
 
 //////////////////////////////////////////////////////////////////////////////
+
+type Vec3 = [number, number, number];
+
+const Vec3 = {
+  create: (): Vec3 => [0, 0, 0],
+  from: (x: number, y: number, z: number): Vec3 => [x, y, z],
+  copy: (d: Vec3, a: Vec3) => {
+    d[0] = a[0];
+    d[1] = a[1];
+    d[2] = a[2];
+  },
+  set: (d: Vec3, x: number, y: number, z: number) => {
+    d[0] = x;
+    d[1] = y;
+    d[2] = z;
+  },
+  add: (d: Vec3, a: Vec3, b: Vec3) => {
+    d[0] = a[0] + b[0];
+    d[1] = a[1] + b[1];
+    d[2] = a[2] + b[2];
+  },
+  sub: (d: Vec3, a: Vec3, b: Vec3) => {
+    d[0] = a[0] - b[0];
+    d[1] = a[1] - b[1];
+    d[2] = a[2] - b[2];
+  },
+  rotateX: (d: Vec3, a: Vec3, r: number) => {
+    const sin = Math.sin(r);
+    const cos = Math.cos(r);
+    const ax = a[0], ay = a[1], az = a[2];
+    d[0] = ax;
+    d[1] = ay * cos - az * sin;
+    d[2] = ay * sin + az * cos;
+  },
+  rotateY: (d: Vec3, a: Vec3, r: number) => {
+    const sin = Math.sin(r);
+    const cos = Math.cos(r);
+    const ax = a[0], ay = a[1], az = a[2];
+    d[0] = az * sin + ax * cos;
+    d[1] = ay;
+    d[2] = az * cos - ax * sin;
+  },
+  rotateZ: (d: Vec3, a: Vec3, r: number) => {
+    const sin = Math.sin(r);
+    const cos = Math.cos(r);
+    const ax = a[0], ay = a[1], az = a[2];
+    d[0] = ax * cos - ay * sin;
+    d[1] = ax * sin + ay * cos;
+    d[2] = az;
+  },
+  scale: (d: Vec3, a: Vec3, k: number) => {
+    d[0] = a[0] * k;
+    d[1] = a[1] * k;
+    d[2] = a[2] * k;
+  },
+  scaleAndAdd: (d: Vec3, a: Vec3, b: Vec3, k: number) => {
+    d[0] = a[0] + b[0] * k;
+    d[1] = a[1] + b[1] * k;
+    d[2] = a[2] + b[2] * k;
+  },
+  length: (a: Vec3) => {
+    const x = a[0], y = a[1], z = a[2];
+    return Math.sqrt(x * x + y * y + z * z);
+  },
+  normalize: (d: Vec3, a: Vec3) => {
+    const length = Vec3.length(a);
+    if (length !== 0) Vec3.scale(d, a, 1 / length);
+  },
+};
 
 class Tensor3 {
   data: Uint32Array;
@@ -64,7 +133,7 @@ const Constants = {
 
 //////////////////////////////////////////////////////////////////////////////
 
-type Input = 'up' | 'left' | 'down' | 'right' | 'pointer';
+type Input = 'up' | 'left' | 'down' | 'right' | 'space' | 'pointer';
 
 class Container {
   element: Element;
@@ -76,7 +145,14 @@ class Container {
   constructor(id: string) {
     this.element = nonnull(document.getElementById(id), () => id);
     this.canvas = nonnull(this.element.querySelector('canvas'));
-    this.inputs = {up: false, left: false, down: false, right: false, pointer: false};
+    this.inputs = {
+      up: false,
+      left: false,
+      down: false,
+      right: false,
+      space: false,
+      pointer: false,
+    };
     this.deltas = {x: 0, y: 0};
 
     this.bindings = new Map();
@@ -84,6 +160,7 @@ class Container {
     this.bindings.set('A'.charCodeAt(0), 'left');
     this.bindings.set('S'.charCodeAt(0), 'down');
     this.bindings.set('D'.charCodeAt(0), 'right');
+    this.bindings.set(' '.charCodeAt(0), 'space');
 
     const element = this.element;
     element.addEventListener('keydown', e => this.onKeyInput(e, true));
@@ -209,6 +286,8 @@ class Registry {
 
 //////////////////////////////////////////////////////////////////////////////
 
+const kTmpDir = Vec3.create();
+
 class Camera {
   camera: BABYLON.FreeCamera;
   holder: BABYLON.TransformNode;
@@ -248,12 +327,10 @@ class Camera {
     this.holder.rotation.x = this.pitch;
     this.holder.rotation.y = this.heading;
 
-    // Compute the direction: rotate around the X-axis, then the Y-axis.
-    const cp = Math.cos(this.pitch);
-    const sp = Math.sin(this.pitch);
-    const ch = Math.cos(this.heading);
-    const sh = Math.sin(this.heading);
-    this.direction.copyFromFloats(sh * cp, -sp, ch * cp);
+    Vec3.set(kTmpDir, 0, 0, 1);
+    Vec3.rotateX(kTmpDir, kTmpDir, this.pitch);
+    Vec3.rotateY(kTmpDir, kTmpDir, this.heading);
+    this.direction.copyFromFloats(kTmpDir[0], kTmpDir[1], kTmpDir[2]);
   }
 
   setPosition(x: number, y: number, z: number) {
@@ -711,6 +788,7 @@ class Env {
 
 class TypedEnv extends Env {
   position: ComponentStore<PositionState>;
+  movement: ComponentStore<MovementState>;
   physics: ComponentStore<PhysicsState>;
   target: ComponentStore;
 
@@ -718,6 +796,7 @@ class TypedEnv extends Env {
     super(id);
     const ents = this.entities;
     this.position = ents.registerComponent('position', Position);
+    this.movement = ents.registerComponent('movement', Movement(this));
     this.physics = ents.registerComponent('physics', Physics(this));
     this.target = ents.registerComponent('camera-target', CameraTarget(this));
   }
@@ -743,16 +822,29 @@ const Position: Component<PositionState> = {
 interface PhysicsState {
   id: EntityId,
   index: int,
-  min: Point,
-  max: Point,
-  vel: Point,
-  resting: Point,
+  min: Vec3,
+  max: Vec3,
+  vel: Vec3,
+  forces: Vec3,
+  resting: Vec3,
+  friction: number,
+  mass: number,
 };
 
+const kTmpGravity = Vec3.from(0, -40, 0);
+const kTmpAcceleration = Vec3.create();
+const kTmpFriction = Vec3.create();
+const kTmpImpact = Vec3.create();
+const kTmpDelta = Vec3.create();
+const kTmpSize = Vec3.create();
+const kTmpPush = Vec3.create();
+const kTmpPos = Vec3.create();
+
 const setPhysicsFromPosition = (a: PositionState, b: PhysicsState) => {
-  const size = [0.25, 0.25, 0.25];
-  b.min = [a.x - size[0], a.y - size[1], a.z - size[2]];
-  b.max = [a.x + size[0], a.y + size[1], a.z + size[2]];
+  Vec3.set(kTmpPos, a.x, a.y, a.z);
+  Vec3.set(kTmpSize, 0.25, 0.25, 0.25);
+  Vec3.sub(b.min, kTmpPos, kTmpSize);
+  Vec3.add(b.max, kTmpPos, kTmpSize);
 };
 
 const setPositionFromPhysics = (a: PositionState, b: PhysicsState) => {
@@ -761,23 +853,49 @@ const setPositionFromPhysics = (a: PositionState, b: PhysicsState) => {
   a.z = (b.min[2] + b.max[2]) / 2;
 };
 
-const runPhysics = (env: TypedEnv, dt: int, state: PhysicsState) => {
-  dt = dt / 1000;
-  state.vel[1] += -dt * 40;
+const applyFriction = (axis: int, state: PhysicsState, dv: Vec3) => {
+  const resting = state.resting[axis];
+  if (resting === 0 || resting * dv[axis] <= 0) return;
 
-  const delta = state.vel.map(x => x * dt) as Point;
-  const impacts: Point = [0, 0, 0];
-  sweep(state.min, state.max, delta, impacts,
-        (p: Point) => env.getBlock(p[0], p[1], p[2]) === 0);
+  Vec3.copy(kTmpFriction, state.vel);
+  kTmpFriction[axis] = 0;
+  const length = Vec3.length(kTmpFriction);
+  if (length === 0) return;
+
+  const loss = Math.abs(state.friction * dv[axis]);
+  const scale = length < loss ? 0 : (length - loss) / length;
+  state.vel[(axis + 1) % 3] *= scale;
+  state.vel[(axis + 2) % 3] *= scale;
+};
+
+const runPhysics = (env: TypedEnv, dt: int, state: PhysicsState) => {
+  if (state.mass <= 0) return;
+
+  dt = dt / 1000;
+  Vec3.scale(kTmpAcceleration, state.forces, 1 / state.mass);
+  Vec3.add(kTmpAcceleration, kTmpAcceleration, kTmpGravity);
+  Vec3.scale(kTmpDelta, kTmpAcceleration, dt);
+  if (state.friction) {
+    applyFriction(0, state, kTmpDelta);
+    applyFriction(1, state, kTmpDelta);
+    applyFriction(2, state, kTmpDelta);
+  }
+  Vec3.add(state.vel, state.vel, kTmpDelta);
+
+  Vec3.set(kTmpImpact, 0, 0, 0);
+  Vec3.scale(kTmpDelta, state.vel, dt);
+  sweep(state.min, state.max, kTmpDelta, kTmpImpact,
+        (p: Vec3) => env.getBlock(p[0], p[1], p[2]) === 0);
+  Vec3.set(state.forces, 0, 0, 0);
 
   for (let i = 0; i < 3; i++) {
     const old_state = state.resting[i];
-    const new_state = impacts[i];
+    const new_state = kTmpImpact[i];
     state.resting[i] = new_state;
     if (new_state !== 0) state.vel[i] = 0;
 
     if (new_state && !old_state) {
-      console.log(`Impact on axis ${i}: ${impacts[i]}`);
+      console.log(`Impact on axis ${i}: ${kTmpImpact[i]}`);
     }
   }
 };
@@ -786,10 +904,13 @@ const Physics = (env: TypedEnv): Component<PhysicsState> => ({
   init: () => ({
     id: kNoEntity,
     index: 0,
-    min: [0, 0, 0],
-    max: [0, 0, 0],
-    vel: [0, 0, 0],
-    resting: [0, 0, 0],
+    min: Vec3.create(),
+    max: Vec3.create(),
+    vel: Vec3.create(),
+    forces: Vec3.create(),
+    resting: Vec3.create(),
+    friction: 0,
+    mass: 1,
   }),
   onAdd: (state: PhysicsState) => {
     setPhysicsFromPosition(env.position.getX(state.id), state);
@@ -803,10 +924,83 @@ const Physics = (env: TypedEnv): Component<PhysicsState> => ({
     }
   },
   onUpdate: (dt: int, states: PhysicsState[]) => {
-    for (const state of states) {
-      runPhysics(env, dt, state);
-    }
+    for (const state of states) runPhysics(env, dt, state);
   },
+});
+
+// Movement allows an entity to process inputs and attempt to move.
+
+interface MovementState {
+  id: EntityId,
+  index: int,
+  heading: number,
+  running: boolean,
+  jumping: boolean,
+  maxSpeed: number,
+  moveForce: number,
+  responsiveness: number,
+  runningFriction: number,
+  standingFriction: number,
+};
+
+const runMovement = (env: TypedEnv, dt: int, state: MovementState) => {
+  dt = dt / 1000;
+
+  // Process the inputs to get a heading, running, and jumping state.
+  const inputs = env.container.inputs;
+  const fb = (inputs.up ? 1 : 0) - (inputs.down ? 1 : 0);
+  const lr = (inputs.right ? 1 : 0) - (inputs.left ? 1 : 0);
+  state.running = fb !== 0 || lr !== 0;
+  state.jumping = inputs.space;
+
+  if (state.running) {
+    let heading = env.renderer.camera.heading;
+    if (fb) {
+      if (fb === -1) heading += Math.PI;
+      heading += fb * lr * Math.PI / 4;
+    } else {
+      heading += lr * Math.PI / 2;
+    }
+    state.heading = heading;
+  }
+
+  // All inputs processed; update the entity's PhysicsState.
+  const body = env.physics.getX(state.id);
+  if (state.running) {
+    Vec3.set(kTmpDelta, 0, 0, state.maxSpeed);
+    Vec3.rotateY(kTmpDelta, kTmpDelta, state.heading);
+
+    Vec3.sub(kTmpPush, kTmpDelta, body.vel);
+    kTmpPush[1] = 0;
+    const length = Vec3.length(kTmpPush);
+    if (length > 0) {
+      const bound = state.moveForce;
+      const input = state.responsiveness * length;
+      Vec3.scale(kTmpPush, kTmpPush, Math.min(bound, input) / length);
+      Vec3.add(body.forces, body.forces, kTmpPush);
+    }
+    body.friction = state.runningFriction;
+  } else {
+    body.friction = state.standingFriction;
+  }
+};
+
+const Movement = (env: TypedEnv): Component<MovementState> => ({
+  init: () => ({
+    id: kNoEntity,
+    index: 0,
+    heading: 0,
+    running: false,
+    jumping: false,
+    maxSpeed: 10,
+    moveForce: 30,
+    responsiveness: 15,
+    runningFriction: 0,
+    standingFriction: 2,
+  }),
+  onUpdate: (dt: int, states: MovementState[]) => {
+    for (const state of states) runMovement(env, dt, state);
+  }
 });
 
 // CameraTarget signifies that the camera will follow an entity.
@@ -846,6 +1040,7 @@ const main = () => {
   position.y = 5;
   position.z = 1.5;
   env.entities.addComponent(player, 'physics');
+  env.entities.addComponent(player, 'movement');
 
   const registry = env.registry;
   registry.addMaterialOfColor('grass', [0.2, 0.8, 0.2]);
