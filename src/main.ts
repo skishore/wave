@@ -1,3 +1,5 @@
+import {sweep} from './sweep';
+
 //////////////////////////////////////////////////////////////////////////////
 // Utilities and math:
 
@@ -796,3 +798,5 @@ const main = () => {
 };
 
 window.onload = main;
+
+export {};
