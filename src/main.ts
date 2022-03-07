@@ -1058,11 +1058,13 @@ const main = () => {
       const height = Math.min(wall ? 7 : 3, size);
       for (let y = 0; y < height; y++) {
         assert(env.getBlock(x, y, z) === 0);
-        const tile = y > 0 && pool ? water : grass;
+        const tile = y > 0 && pool ? 0 as BlockId : grass;
         env.setBlock(x, y, z, tile);
       }
     }
   }
+  // For some reason, BabylonJS skips renders without a transparent block...
+  env.setBlock(0, 0, 0, water);
 
   env.refresh();
 };

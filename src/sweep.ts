@@ -8,8 +8,7 @@ const kSweepMask = kSweepResolution - 1;
 
 const kSpeeds = [0, 0, 0, 0];
 const kDistances = [0, 0, 0, kSweepResolution];
-const kCellCur: Point = [0, 0, 0];
-const kCellEnd: Point = [0, 0, 0];
+const kVoxel: Point = [0, 0, 0];
 
 const sweep = (min: Point, max: Point, delta: Point, impacts: Point, check: Check) => {
   for (let i = 0; i < 3; i++) {
@@ -45,6 +44,7 @@ const sweep = (min: Point, max: Point, delta: Point, impacts: Point, check: Chec
       break;
     }
 
+    const direction = delta[best] > 0 ? 1 : -1;
     const factor = kDistances[best] / kSpeeds[best];
     for (let i = 0; i < 3; i++) {
       const speed = kSpeeds[i];
@@ -60,23 +60,22 @@ const sweep = (min: Point, max: Point, delta: Point, impacts: Point, check: Chec
 
     {
       const i = best;
-      kCellCur[i] = (delta[i] > 0 ? max[i] : min[i] - 1) >> kSweepShift;
+      kVoxel[i] = (direction > 0 ? max[i] - 1 : min[i]) >> kSweepShift;
 
       const j = i < 2 ? i + 1 : i - 2;
       const k = i < 1 ? i + 2 : i - 1;
-      kCellCur[j] = min[j] >> kSweepShift;
-      kCellEnd[j] = (max[j] - 1) >> kSweepShift;
-      kCellCur[k] = min[k] >> kSweepShift;
-      kCellEnd[k] = (max[k] - 1) >> kSweepShift;
+      const jlo = min[j] >> kSweepShift;
+      const jhi = (max[j] - 1) >> kSweepShift;
+      const klo = min[k] >> kSweepShift;
+      const khi = (max[k] - 1) >> kSweepShift;
 
       let done = false;
-      for (; !done && kCellCur[j] <= kCellEnd[j]; kCellCur[j]++) {
-        for (; !done && kCellCur[k] <= kCellEnd[k]; kCellCur[k]++) {
-          if (check(kCellCur)) continue;
-          const step =  delta[i] > 0 ? -1 : 1;
-          impacts[i] = -step;
-          min[i] += step;
-          max[i] += step;
+      for (kVoxel[j] = jlo; !done && kVoxel[j] <= jhi; kVoxel[j]++) {
+        for (kVoxel[k] = klo; !done && kVoxel[k] <= khi; kVoxel[k]++) {
+          if (check(kVoxel)) continue;
+          impacts[i] = direction;
+          min[i] -= direction;
+          max[i] -= direction;
           delta[i] = 0;
           done = true;
         }
