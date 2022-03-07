@@ -826,6 +826,7 @@ interface PhysicsState {
   max: Vec3,
   vel: Vec3,
   forces: Vec3,
+  impulses: Vec3,
   resting: Vec3,
   friction: number,
   mass: number,
@@ -834,7 +835,6 @@ interface PhysicsState {
 const kTmpGravity = Vec3.from(0, -40, 0);
 const kTmpAcceleration = Vec3.create();
 const kTmpFriction = Vec3.create();
-const kTmpImpact = Vec3.create();
 const kTmpDelta = Vec3.create();
 const kTmpSize = Vec3.create();
 const kTmpPush = Vec3.create();
@@ -875,28 +875,23 @@ const runPhysics = (env: TypedEnv, dt: int, state: PhysicsState) => {
   Vec3.scale(kTmpAcceleration, state.forces, 1 / state.mass);
   Vec3.add(kTmpAcceleration, kTmpAcceleration, kTmpGravity);
   Vec3.scale(kTmpDelta, kTmpAcceleration, dt);
+  Vec3.scaleAndAdd(kTmpDelta, kTmpDelta, state.impulses, 1 / state.mass);
   if (state.friction) {
     applyFriction(0, state, kTmpDelta);
     applyFriction(1, state, kTmpDelta);
     applyFriction(2, state, kTmpDelta);
   }
-  Vec3.add(state.vel, state.vel, kTmpDelta);
 
-  Vec3.set(kTmpImpact, 0, 0, 0);
+  // Update our state based on the computations above.
+  Vec3.add(state.vel, state.vel, kTmpDelta);
   Vec3.scale(kTmpDelta, state.vel, dt);
-  sweep(state.min, state.max, kTmpDelta, kTmpImpact,
+  sweep(state.min, state.max, kTmpDelta, state.resting,
         (p: Vec3) => env.getBlock(p[0], p[1], p[2]) === 0);
   Vec3.set(state.forces, 0, 0, 0);
+  Vec3.set(state.impulses, 0, 0, 0);
 
   for (let i = 0; i < 3; i++) {
-    const old_state = state.resting[i];
-    const new_state = kTmpImpact[i];
-    state.resting[i] = new_state;
-    if (new_state !== 0) state.vel[i] = 0;
-
-    if (new_state && !old_state) {
-      console.log(`Impact on axis ${i}: ${kTmpImpact[i]}`);
-    }
+    if (state.resting[i] !== 0) state.vel[i] = 0;
   }
 };
 
@@ -908,6 +903,7 @@ const Physics = (env: TypedEnv): Component<PhysicsState> => ({
     max: Vec3.create(),
     vel: Vec3.create(),
     forces: Vec3.create(),
+    impulses: Vec3.create(),
     resting: Vec3.create(),
     friction: 0,
     mass: 1,
@@ -941,6 +937,54 @@ interface MovementState {
   responsiveness: number,
   runningFriction: number,
   standingFriction: number,
+  airMoveMultiplier: number,
+  airJumps: number,
+  jumpTime: number,
+  jumpForce: number,
+  jumpImpulse: number,
+  _isJumping: boolean,
+  _jumpCount: number,
+  _jumpTimeLeft: number,
+};
+
+const handleJumping =
+    (dt: int, state: MovementState, body: PhysicsState, grounded: boolean) => {
+  if (state._isJumping) {
+    if (state._jumpTimeLeft <= 0) return;
+    const delta = state._jumpTimeLeft <= dt ? state._jumpTimeLeft / dt : 1;
+    const force = state.jumpForce * delta;
+    Vec3.add(body.forces, body.forces, [0, force, 0]);
+    return;
+  }
+
+  const hasAirJumps = state._jumpCount < state.airJumps;
+  const canJump = grounded || hasAirJumps;
+  if (!canJump) return;
+
+  state._isJumping = true;
+  state._jumpTimeLeft = state.jumpTime;
+  Vec3.add(body.impulses, body.impulses, [0, state.jumpImpulse, 0]);
+  if (grounded) return;
+
+  body.vel[1] = Math.max(body.vel[1], 0);
+  state._jumpCount++;
+};
+
+const handleRunning =
+    (dt: int, state: MovementState, body: PhysicsState, grounded: boolean) => {
+  const speed = state.maxSpeed;
+  Vec3.set(kTmpDelta, 0, 0, speed);
+  Vec3.rotateY(kTmpDelta, kTmpDelta, state.heading);
+
+  Vec3.sub(kTmpPush, kTmpDelta, body.vel);
+  kTmpPush[1] = 0;
+  const length = Vec3.length(kTmpPush);
+  if (length === 0) return;
+
+  const bound = state.moveForce * (grounded ? 1 : state.airMoveMultiplier);
+  const input = state.responsiveness * length;
+  Vec3.scale(kTmpPush, kTmpPush, Math.min(bound, input) / length);
+  Vec3.add(body.forces, body.forces, kTmpPush);
 };
 
 const runMovement = (env: TypedEnv, dt: int, state: MovementState) => {
@@ -966,19 +1010,20 @@ const runMovement = (env: TypedEnv, dt: int, state: MovementState) => {
 
   // All inputs processed; update the entity's PhysicsState.
   const body = env.physics.getX(state.id);
-  if (state.running) {
-    Vec3.set(kTmpDelta, 0, 0, state.maxSpeed);
-    Vec3.rotateY(kTmpDelta, kTmpDelta, state.heading);
+  const grounded = body.resting[1] < 0;
+  if (grounded) {
+    state._isJumping = false;
+    state._jumpCount = 0;
+  }
 
-    Vec3.sub(kTmpPush, kTmpDelta, body.vel);
-    kTmpPush[1] = 0;
-    const length = Vec3.length(kTmpPush);
-    if (length > 0) {
-      const bound = state.moveForce;
-      const input = state.responsiveness * length;
-      Vec3.scale(kTmpPush, kTmpPush, Math.min(bound, input) / length);
-      Vec3.add(body.forces, body.forces, kTmpPush);
-    }
+  if (state.jumping) {
+    handleJumping(dt, state, body, grounded);
+  } else {
+    state._isJumping = false;
+  }
+
+  if (state.running) {
+    handleRunning(dt, state, body, grounded);
     body.friction = state.runningFriction;
   } else {
     body.friction = state.standingFriction;
@@ -997,6 +1042,14 @@ const Movement = (env: TypedEnv): Component<MovementState> => ({
     responsiveness: 15,
     runningFriction: 0,
     standingFriction: 2,
+    airMoveMultiplier: 0.5,
+    airJumps: 1,
+    jumpTime: 500,
+    jumpForce: 15,
+    jumpImpulse: 10,
+    _isJumping: false,
+    _jumpCount: 0,
+    _jumpTimeLeft: 0,
   }),
   onUpdate: (dt: int, states: MovementState[]) => {
     for (const state of states) runMovement(env, dt, state);
