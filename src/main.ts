@@ -616,7 +616,7 @@ class ComponentStore<T extends ComponentState = ComponentState> {
     return result;
   }
 
-  add(entity: EntityId) {
+  add(entity: EntityId): T {
     if (this.lookup.has(entity)) {
       throw new Error(`Duplicate for ${entity}: ${this.component}`);
     }
@@ -631,6 +631,7 @@ class ComponentStore<T extends ComponentState = ComponentState> {
 
     const callback = this.definition.onAdd;
     if (callback) callback(state);
+    return state;
   }
 
   remove(entity: EntityId) {
@@ -677,17 +678,8 @@ class EntityComponentSystem {
     this.onUpdates = [];
   }
 
-  addEntity(components: string[]): EntityId {
-    this.last = (this.last + 1) as EntityId;
-    const result = this.last;
-    components.forEach(x => this.addComponent(result, x));
-    return result;
-  }
-
-  addComponent(entity: EntityId, component: string) {
-    const store = this.components.get(component);
-    if (!store) throw new Error(`Unknown component: ${component}`);
-    store.add(entity);
+  addEntity(): EntityId {
+    return this.last = (this.last + 1) as EntityId;
   }
 
   removeEntity(entity: EntityId) {
@@ -790,6 +782,7 @@ class TypedEnv extends Env {
   position: ComponentStore<PositionState>;
   movement: ComponentStore<MovementState>;
   physics: ComponentStore<PhysicsState>;
+  mesh: ComponentStore<MeshState>;
   target: ComponentStore;
 
   constructor(id: string) {
@@ -798,11 +791,13 @@ class TypedEnv extends Env {
     this.position = ents.registerComponent('position', Position);
     this.movement = ents.registerComponent('movement', Movement(this));
     this.physics = ents.registerComponent('physics', Physics(this));
+    this.mesh = ents.registerComponent('mesh', Mesh(this));
     this.target = ents.registerComponent('camera-target', CameraTarget(this));
   }
 };
 
-// Position tracks (x, y, z) coordinates for an entity.
+// An entity with a position is an axis-aligned bounding box (AABB) centered
+// at (x, y, z), with x- and z-extents equal to w and y-extent equal to h.
 
 interface PositionState {
   id: EntityId,
@@ -810,14 +805,17 @@ interface PositionState {
   x: number,
   y: number,
   z: number,
+  h: number,
+  w: number,
 };
 
 const Position: Component<PositionState> = {
-  init: () => ({id: kNoEntity, index: 0, x: 0, y: 0, z: 0}),
+  init: () => ({id: kNoEntity, index: 0, x: 0, y: 0, z: 0, h: 0, w: 0}),
 };
 
-// Physics tracks an axis-aligned bounding box (AABB) for an entity,
-// along with things like its velocity, forces on it, etc.
+// An entity's physics state tracks its location and velocity, and allows
+// other systems to apply forces and impulses to it. It updates the entity's
+// AABB and keeps its position in sync.
 
 interface PhysicsState {
   id: EntityId,
@@ -842,7 +840,7 @@ const kTmpPos = Vec3.create();
 
 const setPhysicsFromPosition = (a: PositionState, b: PhysicsState) => {
   Vec3.set(kTmpPos, a.x, a.y, a.z);
-  Vec3.set(kTmpSize, 0.25, 0.25, 0.25);
+  Vec3.set(kTmpSize, a.w / 2, a.h / 2, a.w / 2);
   Vec3.sub(b.min, kTmpPos, kTmpSize);
   Vec3.add(b.max, kTmpPos, kTmpSize);
 };
@@ -1056,6 +1054,36 @@ const Movement = (env: TypedEnv): Component<MovementState> => ({
   }
 });
 
+// Mesh signifies that an entity should be rendered as a rectangular solid.
+
+interface MeshState {
+  id: EntityId,
+  index: int,
+  mesh: BABYLON.Mesh | null,
+};
+
+const Mesh = (env: TypedEnv): Component<MeshState> => ({
+  init: () => ({id: kNoEntity, index: 0, mesh: null}),
+  onAdd: (state: MeshState) => {
+    const position = env.position.getX(state.id);
+    const mesh = BABYLON.Mesh.CreateBox('box', 1, env.renderer.scene);
+    mesh.scaling.x = position.w;
+    mesh.scaling.y = position.h;
+    mesh.scaling.z = position.w;
+    env.renderer.addMesh(mesh, true);
+    state.mesh = mesh;
+  },
+  onRemove: (state: MeshState) => {
+    if (state.mesh) state.mesh.dispose();
+  },
+  onRender: (dt: int, states: MeshState[]) => {
+    for (const state of states) {
+      const {x, y, z} = env.position.getX(state.id);
+      if (state.mesh) state.mesh.position.copyFromFloats(x, y, z);
+    }
+  },
+});
+
 // CameraTarget signifies that the camera will follow an entity.
 
 const CameraTarget = (env: TypedEnv): Component => ({
@@ -1087,13 +1115,18 @@ const CameraTarget = (env: TypedEnv): Component => ({
 
 const main = () => {
   const env = new TypedEnv('container');
-  const player = env.entities.addEntity(['position', 'camera-target']);
-  const position = env.position.getX(player);
+  const player = env.entities.addEntity();
+  const position = env.position.add(player);
   position.x = 8;
   position.y = 5;
   position.z = 1.5;
-  env.entities.addComponent(player, 'physics');
-  env.entities.addComponent(player, 'movement');
+  position.w = 0.6;
+  position.h = 1.2;
+
+  env.physics.add(player);
+  env.movement.add(player);
+  env.mesh.add(player);
+  env.target.add(player);
 
   const registry = env.registry;
   registry.addMaterialOfColor('grass', [0.2, 0.8, 0.2]);
@@ -1116,8 +1149,6 @@ const main = () => {
       }
     }
   }
-  // For some reason, BabylonJS skips renders without a transparent block...
-  env.setBlock(0, 0, 0, water);
 
   env.refresh();
 };
