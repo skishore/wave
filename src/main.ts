@@ -140,7 +140,7 @@ class Container {
   canvas: HTMLCanvasElement;
   bindings: Map<int, Input>;
   inputs: Record<Input, boolean>;
-  deltas: {x: int, y: int};
+  deltas: {x: int, y: int, scroll: int};
 
   constructor(id: string) {
     this.element = nonnull(document.getElementById(id), () => id);
@@ -153,7 +153,7 @@ class Container {
       space: false,
       pointer: false,
     };
-    this.deltas = {x: 0, y: 0};
+    this.deltas = {x: 0, y: 0, scroll: 0};
 
     this.bindings = new Map();
     this.bindings.set('W'.charCodeAt(0), 'up');
@@ -169,6 +169,7 @@ class Container {
     element.addEventListener('click', () => element.requestPointerLock());
     document.addEventListener('pointerlockchange', e => this.onPointerInput(e));
     document.addEventListener('mousemove', e => this.onMouseMove(e));
+    document.addEventListener('wheel', e => this.onMouseWheel(e));
   }
 
   onKeyInput(e: Event, down: boolean) {
@@ -180,6 +181,11 @@ class Container {
     if (!this.inputs.pointer) return;
     this.deltas.x += (e as any).movementX;
     this.deltas.y += (e as any).movementY;
+  }
+
+  onMouseWheel(e: Event) {
+    if (!this.inputs.pointer) return;
+    this.deltas.scroll += (e as any).deltaY;
   }
 
   onPointerInput(e: Event) {
@@ -286,14 +292,13 @@ class Registry {
 
 //////////////////////////////////////////////////////////////////////////////
 
-const kTmpDir = Vec3.create();
-
 class Camera {
   camera: BABYLON.FreeCamera;
   holder: BABYLON.TransformNode;
-  direction: BABYLON.Vector3;
+  direction: Vec3;
   heading: number; // In radians: [0, 2π)
   pitch: number;   // In radians: (-π/2, π/2)
+  zoom: number;
 
   constructor(scene: BABYLON.Scene) {
     const origin = new BABYLON.Vector3(0, 0, 0);
@@ -304,10 +309,11 @@ class Camera {
 
     this.pitch = 0;
     this.heading = 0;
-    this.direction = new BABYLON.Vector3(0, 0, 1);
+    this.zoom = 0;
+    this.direction = Vec3.create();
   }
 
-  applyInputs(dx: number, dy: number) {
+  applyInputs(dx: number, dy: number, dscroll: number) {
     let pitch = this.holder.rotation.x;
     let heading = this.holder.rotation.y;
 
@@ -327,14 +333,20 @@ class Camera {
     this.holder.rotation.x = this.pitch;
     this.holder.rotation.y = this.heading;
 
-    Vec3.set(kTmpDir, 0, 0, 1);
-    Vec3.rotateX(kTmpDir, kTmpDir, this.pitch);
-    Vec3.rotateY(kTmpDir, kTmpDir, this.heading);
-    this.direction.copyFromFloats(kTmpDir[0], kTmpDir[1], kTmpDir[2]);
+    const dir = this.direction;
+    Vec3.set(dir, 0, 0, 1);
+    Vec3.rotateX(dir, dir, this.pitch);
+    Vec3.rotateY(dir, dir, this.heading);
+
+    // Scrolling is trivial to apply: add and clamp.
+    if (dscroll === 0) return;
+    this.zoom = Math.max(0, Math.min(10, this.zoom + Math.sign(dscroll)));
   }
 
-  setPosition(x: number, y: number, z: number) {
-    this.holder.position.copyFromFloats(x, y, z);
+  setTarget(x: number, y: number, z: number) {
+    Vec3.set(kTmpPos, x, y, z);
+    Vec3.scaleAndAdd(kTmpPos, kTmpPos, this.direction, -this.zoom);
+    this.holder.position.copyFromFloats(kTmpPos[0], kTmpPos[1], kTmpPos[2]);
   }
 };
 
@@ -755,8 +767,8 @@ class Env {
     if (!this.container.inputs.pointer) return;
 
     const deltas = this.container.deltas;
-    this.renderer.camera.applyInputs(deltas.x, deltas.y);
-    deltas.x = deltas.y = 0;
+    this.renderer.camera.applyInputs(deltas.x, deltas.y, deltas.scroll);
+    deltas.x = deltas.y = deltas.scroll = 0;
     this.entities.render(dt);
     this.renderer.render();
   }
@@ -1091,7 +1103,7 @@ const CameraTarget = (env: TypedEnv): Component => ({
   onRender: (dt: int, states: ComponentState[]) => {
     for (const state of states) {
       const position = env.position.getX(state.id);
-      env.renderer.camera.setPosition(position.x, position.y, position.z);
+      env.renderer.camera.setTarget(position.x, position.y, position.z);
     }
   },
   onUpdate: (dt: int, states: ComponentState[]) => {
@@ -1104,9 +1116,9 @@ const CameraTarget = (env: TypedEnv): Component => ({
 
     for (const state of states) {
       const position = env.position.getX(state.id);
-      position.x += speed * direction.x;
-      position.y += speed * direction.y;
-      position.z += speed * direction.z;
+      position.x += speed * direction[0];
+      position.y += speed * direction[1];
+      position.z += speed * direction[2];
     }
   },
 });
