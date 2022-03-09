@@ -1141,22 +1141,28 @@ const main = () => {
   env.target.add(player);
 
   const registry = env.registry;
-  registry.addMaterialOfColor('grass', [0.2, 0.8, 0.2]);
-  registry.addMaterialOfColor('water', [0.4, 0.4, 0.8], 0.6);
-  const grass = registry.addBlock(['grass'], true);
-  const water = registry.addBlock(['water'], false);
+  const textures = ['dirt', 'grass', 'ground', 'wall'];
+  for (const texture of textures) {
+    registry.addMaterialOfTexture(texture, `images/${texture}.png`);
+  }
+  const wall = registry.addBlock(['wall'], true);
+  const grass = registry.addBlock(['grass', 'dirt', 'dirt'], true);
+  const ground = registry.addBlock(['ground', 'dirt', 'dirt'], true);
 
   const size = Constants.CHUNK_SIZE;
   const pl = size / 4;
   const pr = 3 * size / 4;
   for (let x = 0; x < size; x++) {
     for (let z = 0; z < size; z++) {
-      const wall = x === 0 || x === size - 1 || z === 0 || z === size - 1;
+      const edge = x === 0 || x === size - 1 || z === 0 || z === size - 1;
       const pool = (pl <= x && x < pr && 4 && pl <= z && z < pr);
-      const height = Math.min(wall ? 7 : 3, size);
+      const height = Math.min(edge ? 7 : 3, size);
       for (let y = 0; y < height; y++) {
         assert(env.getBlock(x, y, z) === 0);
-        const tile = y > 0 && pool ? 0 as BlockId : grass;
+        const tile = (() => {
+          if (y > 0 && pool) return 0 as BlockId;
+          return y > 2 ? wall : y > 1 ? grass : ground;
+        })();
         env.setBlock(x, y, z, tile);
       }
     }
