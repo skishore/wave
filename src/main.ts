@@ -217,18 +217,22 @@ interface Material {
 const kBlack: Color = [0, 0, 0];
 const kWhite: Color = [1, 1, 1];
 
+const kNoMaterial = 0 as MaterialId;
+
 class Registry {
   _opaque: boolean[];
   _solid: boolean[];
   _faces: MaterialId[];
+  _meshes: (BABYLON.Mesh | null)[];
   _materials: Material[];
   _ids: Map<string, MaterialId>;
 
   constructor() {
     this._opaque = [false];
     this._solid = [false];
-    const none = 0 as MaterialId;
-    this._faces = [none, none, none, none, none, none];
+    this._meshes = [null];
+    this._faces = []
+    for (let i = 0; i < 6; i++) this._faces.push(kNoMaterial);
     this._materials = [];
     this._ids = new Map();
   }
@@ -253,11 +257,36 @@ class Registry {
     const result = this._opaque.length as BlockId;
     this._opaque.push(solid);
     this._solid.push(solid);
+    this._meshes.push(null);
     materials.forEach(x => {
       const material = this._ids.get(x);
       if (material === undefined) throw new Error(`Unknown material: ${x}`);
       this._faces.push(material + 1 as MaterialId);
     });
+
+    return result;
+  }
+
+  addBlockSprite(url: string, solid: boolean, scene: BABYLON.Scene): BlockId {
+    const mode = BABYLON.Texture.NEAREST_SAMPLINGMODE;
+    const texture = new BABYLON.Texture(url, scene, true, true, mode);
+    texture.uScale = texture.vScale = 1 - 1 / 256;
+    texture.hasAlpha = true;
+
+    const material = new BABYLON.StandardMaterial(`material-${url}`, scene);
+    material.specularColor.copyFromFloats(0, 0, 0);
+    material.emissiveColor.copyFromFloats(1, 1, 1);
+    material.backFaceCulling = false;
+    material.diffuseTexture = texture;
+
+    const mesh = BABYLON.Mesh.CreatePlane(`block-${url}`, 1, scene);
+    mesh.material = material;
+
+    const result = this._opaque.length as BlockId;
+    this._opaque.push(false);
+    this._solid.push(solid);
+    this._meshes.push(mesh);
+    for (let i = 0; i < 6; i++) this._faces.push(kNoMaterial);
 
     return result;
   }
@@ -721,15 +750,137 @@ class EntityComponentSystem {
 
 //////////////////////////////////////////////////////////////////////////////
 
+interface TerrainSprite {
+  dirty: boolean;
+  mesh: BABYLON.Mesh;
+  buffer: Float32Array;
+  capacity: int;
+  size: int;
+};
+
+const kMinCapacity = 4;
+const kSpriteRadius = 1 / 2 + 1 / 256;
+
+const kTmpReset = new Float32Array([
+  -kSpriteRadius, -kSpriteRadius, 0,
+   kSpriteRadius, -kSpriteRadius, 0,
+   kSpriteRadius,  kSpriteRadius, 0,
+  -kSpriteRadius,  kSpriteRadius, 0,
+]);
+
+const kTmpTransform = new Float32Array([
+  1, 0, 0, 0,
+  0, 1, 0, 0,
+  0, 0, 1, 0,
+  0, 0, 0, 1,
+]);
+
+class TerrainSprites {
+  renderer: Renderer;
+  kinds: Map<BlockId, TerrainSprite>;
+  root: BABYLON.TransformNode;
+
+  constructor(renderer: Renderer) {
+    this.renderer = renderer;
+    this.kinds = new Map();
+    this.root = new BABYLON.TransformNode('sprites', renderer.scene);
+    this.root.position.copyFromFloats(0.5, 0.5, 0.5);
+  }
+
+  add(x: int, y: int, z: int, block: BlockId, mesh: BABYLON.Mesh) {
+    let data = this.kinds.get(block);
+    if (!data) {
+      const capacity = kMinCapacity;
+      const buffer = new Float32Array(capacity * 16);
+      data = {dirty: false, mesh, buffer, capacity, size: 0};
+      this.kinds.set(block, data);
+
+      mesh.parent = this.root;
+      mesh.position.setAll(0);
+      mesh.alwaysSelectAsActiveMesh = true;
+      mesh.doNotSyncBoundingInfo = true;
+      mesh.thinInstanceSetBuffer('matrix', buffer);
+      this.renderer.addMesh(mesh, true);
+    }
+
+    if (data.size === data.capacity) {
+      this.reallocate(data, data.capacity * 2);
+    }
+
+    kTmpTransform[12] = x;
+    kTmpTransform[13] = y;
+    kTmpTransform[14] = z;
+    this.copy(kTmpTransform, 0, data.buffer, data.size);
+
+    data.size++;
+    data.dirty = true;
+  }
+
+  remove(x: int, y: int, z: int, block: BlockId) {
+    const data = this.kinds.get(block);
+    if (!data) throw new Error(`Unknown block ${block} at (${x}, ${y}, ${z})`);
+
+    const buffer = data.buffer;
+    const index = (() => {
+      for (let i = 0; i < data.size; i++) {
+        if (buffer[i * 16 + 12] !== x) continue;
+        if (buffer[i * 16 + 13] !== y) continue;
+        if (buffer[i * 16 + 14] !== z) continue;
+        return i;
+      }
+      throw new Error(`Missing block ${block} at (${x}, ${y}, ${z})`);
+    })();
+
+    const last = data.size - 1;
+    if (index !== last) this.copy(buffer, last, buffer, index);
+
+    data.size--;
+    if (data.capacity > Math.max(kMinCapacity, 4 * data.size)) {
+      this.reallocate(data, data.capacity / 2);
+    }
+    data.dirty = true;
+  }
+
+  update() {
+    for (const data of this.kinds.values()) {
+      if (!data.dirty) continue;
+      data.mesh.thinInstanceCount = data.size;
+      data.mesh.thinInstanceBufferUpdated('matrix');
+      data.mesh.isVisible = data.size > 0;
+      data.dirty = false;
+    }
+  }
+
+  private copy(src: Float32Array, srcOff: int, dst: Float32Array, dstOff: int) {
+    srcOff *= 16;
+    dstOff *= 16;
+    for (let i = 0; i < 16; i++) {
+      dst[dstOff + i] = src[srcOff + i];
+    }
+  }
+
+  private reallocate(data: TerrainSprite, capacity: int) {
+    data.capacity = capacity;
+    const buffer = new Float32Array(capacity * 16);
+    for (let i = 0; i < data.size * 16; i++) buffer[i] = data.buffer[i];
+    data.mesh.thinInstanceSetBuffer('matrix', buffer);
+    data.buffer = buffer;
+  }
+};
+
+//////////////////////////////////////////////////////////////////////////////
+
 class Env {
   container: Container;
   entities: EntityComponentSystem;
   registry: Registry;
   renderer: Renderer;
+  sprites: TerrainSprites;
   mesher: TerrainMesher;
   timing: Timing;
   voxels: Tensor3;
-  _dirty: boolean;
+  _spritesDirty: boolean;
+  _terrainDirty: boolean;
   _mesh: BABYLON.Mesh | null;
 
   constructor(id: string) {
@@ -737,12 +888,14 @@ class Env {
     this.entities = new EntityComponentSystem();
     this.registry = new Registry();
     this.renderer = new Renderer(this.container);
+    this.sprites = new TerrainSprites(this.renderer);
     this.mesher = new TerrainMesher(this.renderer.scene, this.registry);
     this.timing = new Timing(this.render.bind(this), this.update.bind(this));
 
     const size = Constants.CHUNK_SIZE;
     this.voxels = new Tensor3(size, size, size);
-    this._dirty = true;
+    this._spritesDirty = true;
+    this._terrainDirty = true;
     this._mesh = null;
   }
 
@@ -751,8 +904,18 @@ class Env {
   }
 
   setBlock(x: int, y: int, z: int, block: BlockId) {
+    const old = this.voxels.get(x, y, z) as BlockId;
+    if (old === block) return;
+
+    const old_mesh = this.registry._meshes[old];
+    const new_mesh = this.registry._meshes[block];
+    if (old_mesh) this.sprites.remove(x, y, z, old);
+    if (new_mesh) this.sprites.add(x, y, z, block, new_mesh);
+
     this.voxels.set(x, y, z, block);
-    this._dirty = true;
+    this._spritesDirty ||= !!(old_mesh || new_mesh);
+    this._terrainDirty ||= !(old_mesh || old === 0) ||
+                           !(new_mesh || block === 0);
   }
 
   refresh() {
@@ -766,9 +929,18 @@ class Env {
   render(dt: int) {
     if (!this.container.inputs.pointer) return;
 
+    const camera = this.renderer.camera;
     const deltas = this.container.deltas;
-    this.renderer.camera.applyInputs(deltas.x, deltas.y, deltas.scroll);
+    camera.applyInputs(deltas.x, deltas.y, deltas.scroll);
     deltas.x = deltas.y = deltas.scroll = 0;
+
+    const transform = BABYLON.Matrix.RotationY(camera.holder.rotation.y);
+    for (const data of this.sprites.kinds.values()) {
+      if (data.size === 0) continue;
+      data.mesh.setVerticesData('position', kTmpReset);
+      data.mesh.bakeTransformIntoVertices(transform);
+    }
+
     this.entities.render(dt);
     this.renderer.render();
   }
@@ -776,11 +948,15 @@ class Env {
   update(dt: int) {
     if (!this.container.inputs.pointer) return;
 
-    if (this._dirty) {
+    if (this._spritesDirty) {
+      this.sprites.update();
+      this._spritesDirty = false;
+    }
+    if (this._terrainDirty) {
       if (this._mesh) this._mesh.dispose();
       this._mesh = this.mesher.mesh(this.voxels);
       if (this._mesh) this.renderer.addMesh(this._mesh, false);
-      this._dirty = false;
+      this._terrainDirty = false;
     }
 
     this.entities.update(dt);
@@ -1141,6 +1317,7 @@ const main = () => {
   env.target.add(player);
 
   const registry = env.registry;
+  const scene = env.renderer.scene;
   const textures = ['dirt', 'grass', 'ground', 'wall'];
   for (const texture of textures) {
     registry.addMaterialOfTexture(texture, `images/${texture}.png`);
@@ -1148,25 +1325,31 @@ const main = () => {
   const wall = registry.addBlock(['wall'], true);
   const grass = registry.addBlock(['grass', 'dirt', 'dirt'], true);
   const ground = registry.addBlock(['ground', 'dirt', 'dirt'], true);
+  const rock = registry.addBlockSprite('images/rock.png', true, scene);
+  const tree = registry.addBlockSprite('images/tree.png', true, scene);
+  const tree0 = registry.addBlockSprite('images/tree0.png', true, scene);
+  const tree1 = registry.addBlockSprite('images/tree1.png', true, scene);
 
   const size = Constants.CHUNK_SIZE;
   const pl = size / 4;
   const pr = 3 * size / 4;
+  const layers = [ground, ground, grass, wall, tree0, tree1];
   for (let x = 0; x < size; x++) {
     for (let z = 0; z < size; z++) {
       const edge = x === 0 || x === size - 1 || z === 0 || z === size - 1;
       const pool = (pl <= x && x < pr && 4 && pl <= z && z < pr);
-      const height = Math.min(edge ? 7 : 3, size);
+      const height = Math.min(edge ? 6 : 3, size);
       for (let y = 0; y < height; y++) {
         assert(env.getBlock(x, y, z) === 0);
-        const tile = (() => {
-          if (y > 0 && pool) return 0 as BlockId;
-          return y > 2 ? wall : y > 1 ? grass : ground;
-        })();
+        const tile = y > 0 && pool ? 0 as BlockId : layers[y];
         env.setBlock(x, y, z, tile);
       }
     }
   }
+  env.setBlock(8, 1, 8, rock);
+  env.setBlock(7, 1, 8, rock);
+  env.setBlock(6, 1, 7, rock);
+  env.setBlock(6, 1, 9, rock);
 
   env.refresh();
 };
