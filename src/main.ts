@@ -1128,14 +1128,14 @@ interface MovementState {
   jumpTime: number,
   jumpForce: number,
   jumpImpulse: number,
-  _isJumping: boolean,
+  _jumped: boolean,
   _jumpCount: number,
   _jumpTimeLeft: number,
 };
 
 const handleJumping =
     (dt: int, state: MovementState, body: PhysicsState, grounded: boolean) => {
-  if (state._isJumping) {
+  if (state._jumped) {
     if (state._jumpTimeLeft <= 0) return;
     const delta = state._jumpTimeLeft <= dt ? state._jumpTimeLeft / dt : 1;
     const force = state.jumpForce * delta;
@@ -1147,7 +1147,7 @@ const handleJumping =
   const canJump = grounded || hasAirJumps;
   if (!canJump) return;
 
-  state._isJumping = true;
+  state._jumped = true;
   state._jumpTimeLeft = state.jumpTime;
   Vec3.add(body.impulses, body.impulses, [0, state.jumpImpulse, 0]);
   if (grounded) return;
@@ -1197,15 +1197,12 @@ const runMovement = (env: TypedEnv, dt: int, state: MovementState) => {
   // All inputs processed; update the entity's PhysicsState.
   const body = env.physics.getX(state.id);
   const grounded = body.resting[1] < 0;
-  if (grounded) {
-    state._isJumping = false;
-    state._jumpCount = 0;
-  }
+  if (grounded) state._jumpCount = 0;
 
   if (state.jumping) {
     handleJumping(dt, state, body, grounded);
   } else {
-    state._isJumping = false;
+    state._jumped = false;
   }
 
   if (state.running) {
@@ -1233,7 +1230,7 @@ const Movement = (env: TypedEnv): Component<MovementState> => ({
     jumpTime: 500,
     jumpForce: 15,
     jumpImpulse: 10,
-    _isJumping: false,
+    _jumped: false,
     _jumpCount: 0,
     _jumpTimeLeft: 0,
   }),
