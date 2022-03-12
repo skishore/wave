@@ -423,7 +423,7 @@ class Renderer {
     mesh.freezeNormals();
   }
 
-  createSprite(url: string): BABYLON.Mesh {
+  makeSprite(url: string): BABYLON.Mesh {
     const scene = this.scene;
     const mode = BABYLON.Texture.NEAREST_SAMPLINGMODE;
     const texture = new BABYLON.Texture(url, scene, true, true, mode);
@@ -439,6 +439,14 @@ class Renderer {
     const mesh = BABYLON.Mesh.CreatePlane(`block-${url}`, 1, scene);
     mesh.material = material;
     return mesh;
+  }
+
+  makeStandardMaterial(name: string): BABYLON.StandardMaterial {
+    const result = new BABYLON.StandardMaterial(name, this.scene);
+    result.specularColor.copyFromFloats(0, 0, 0);
+    result.ambientColor.copyFromFloats(1, 1, 1);
+    result.diffuseColor.copyFromFloats(1, 1, 1);
+    return result;
   }
 
   render() {
@@ -485,14 +493,12 @@ declare const NoaTerrainMesher: any;
 
 class TerrainMesher {
   mesher: any;
-  scene: BABYLON.Scene;
   flatMaterial: BABYLON.Material;
   registry: Registry;
   requests: int;
 
-  constructor(scene: BABYLON.Scene, registry: Registry) {
-    this.scene = scene;
-    this.flatMaterial = this.makeStandardMaterial('flat-material');
+  constructor(renderer: Renderer, registry: Registry) {
+    this.flatMaterial = renderer.makeStandardMaterial('flat-material');
     this.registry = registry;
     this.requests = 0;
 
@@ -511,19 +517,11 @@ class TerrainMesher {
         revAoVal: 1.0,
         flatMaterial: this.flatMaterial,
         addMeshToScene: () => {},
-        makeStandardMaterial: this.makeStandardMaterial.bind(this),
-        getScene: () => scene,
+        makeStandardMaterial: renderer.makeStandardMaterial.bind(renderer),
+        getScene: () => renderer.scene,
       },
     };
     this.mesher = new NoaTerrainMesher(shim);
-  }
-
-  makeStandardMaterial(name: string): BABYLON.Material {
-    const result = new BABYLON.StandardMaterial(name, this.scene);
-    result.specularColor.copyFromFloats(0, 0, 0);
-    result.ambientColor.copyFromFloats(1, 1, 1);
-    result.diffuseColor.copyFromFloats(1, 1, 1);
-    return result;
   }
 
   mesh(voxels: Tensor3): BABYLON.Mesh | null {
@@ -908,7 +906,7 @@ class Env {
     this.registry = new Registry();
     this.renderer = new Renderer(this.container);
     this.sprites = new TerrainSprites(this.renderer);
-    this.mesher = new TerrainMesher(this.renderer.scene, this.registry);
+    this.mesher = new TerrainMesher(this.renderer, this.registry);
     this.timing = new Timing(this.render.bind(this), this.update.bind(this));
 
     const size = Constants.CHUNK_SIZE;
@@ -978,6 +976,7 @@ class TypedEnv extends Env {
   movement: ComponentStore<MovementState>;
   physics: ComponentStore<PhysicsState>;
   mesh: ComponentStore<MeshState>;
+  shadow: ComponentStore<ShadowState>;
   target: ComponentStore;
 
   constructor(id: string) {
@@ -987,6 +986,7 @@ class TypedEnv extends Env {
     this.movement = ents.registerComponent('movement', Movement(this));
     this.physics = ents.registerComponent('physics', Physics(this));
     this.mesh = ents.registerComponent('mesh', Mesh(this));
+    this.shadow = ents.registerComponent('shadow', Shadow(this));
     this.target = ents.registerComponent('camera-target', CameraTarget(this));
   }
 };
@@ -1295,23 +1295,91 @@ const Mesh = (env: TypedEnv): Component<MeshState> => ({
   onRender: (dt: int, states: MeshState[]) => {
     for (const state of states) {
       const {x, y, z} = env.position.getX(state.id);
-      const {mesh, texture} = state;
-      if (mesh) mesh.position.copyFromFloats(x, y, z);
-
-      if (!texture) return;
+      if (state.mesh) state.mesh.position.copyFromFloats(x, y, z);
+    }
+  },
+  onUpdate: (dt: int, states: MeshState[]) => {
+    for (const state of states) {
+      if (!state.texture) return;
       const body = env.physics.get(state.id);
       if (!body) return;
+
       const setting = (() => {
         if (!body.resting[1]) return 1;
         const speed = Vec3.length(body.vel);
-        state.frame = speed ? (state.frame + 0.015 * speed) % 4 : 0;
-        const value = Math.floor(state.frame + 0.5);
-        return value & 1 ? (value + 1) >> 1 : 0;
+        state.frame = speed ? (state.frame + 0.025 * speed) % 4 : 0;
+        if (!speed) return 0;
+        const value = Math.floor(state.frame);
+        return value & 1 ? 0 : (value + 2) >> 1;
       })();
-      texture.uOffset = texture.uScale * setting;
+      state.texture.uOffset = state.texture.uScale * setting;
     }
   },
 });
+
+// Shadow places a shadow underneath the entity.
+
+interface ShadowState {
+  id: EntityId,
+  index: int,
+  mesh: BABYLON.Mesh | null,
+  extent: number,
+  height: number,
+};
+
+const Shadow = (env: TypedEnv): Component<ShadowState> => {
+  const material = env.renderer.makeStandardMaterial('shadow-material');
+  material.ambientColor.copyFromFloats(0, 0, 0);
+  material.diffuseColor.copyFromFloats(0, 0, 0);
+  material.alpha = 0.5;
+
+  const scene = env.renderer.scene;
+  const option = {radius: 1, tessellation: 16};
+  const shadow = BABYLON.CreateDisc('shadow', option, scene);
+  scene.removeMesh(shadow);
+
+  shadow.material = material;
+  shadow.rotation.x = Math.PI / 2;
+  shadow.setEnabled(true);
+
+  return {
+    init: () => ({id: kNoEntity, index: 0, mesh: null, extent: 8, height: 0}),
+    onAdd: (state: ShadowState) => {
+      const instance = shadow.createInstance('shadow-instance');
+      const mesh = instance as any as BABYLON.Mesh;
+      env.renderer.addMesh(mesh, true);
+      state.mesh = mesh;
+    },
+    onRemove: (state: ShadowState) => {
+      if (state.mesh) state.mesh.dispose();
+    },
+    onRender: (dt: int, states: ShadowState[]) => {
+      for (const state of states) {
+        if (!state.mesh) continue;
+        const {x, y, z, w} = env.position.getX(state.id);
+        state.mesh.position.copyFromFloats(x, state.height + 0.01, z);
+        const fraction = 1 - (y - state.height) / state.extent;
+        const scale = w * Math.max(0, Math.min(1, fraction)) / 2;
+        state.mesh.scaling.copyFromFloats(scale, scale, scale);
+      }
+    },
+    onUpdate: (dt: int, states: ShadowState[]) => {
+      for (const state of states) {
+        const position = env.position.getX(state.id);
+        const x = Math.floor(position.x);
+        const y = Math.floor(position.y);
+        const z = Math.floor(position.z);
+        state.height = (() => {
+          for (let i = 0; i < state.extent; i++) {
+            const h = y - i;
+            if (env.voxels.get(x, h - 1, z) !== 0) return h;
+          }
+          return y - state.extent;
+        })();
+      }
+    },
+  };
+};
 
 // CameraTarget signifies that the camera will follow an entity.
 
@@ -1323,28 +1391,13 @@ const CameraTarget = (env: TypedEnv): Component => ({
       env.renderer.camera.setTarget(position.x, position.y, position.z);
     }
   },
-  onUpdate: (dt: int, states: ComponentState[]) => {
-    const inputs = env.container.inputs;
-    const ud = (inputs.up ? 1 : 0) - (inputs.down ? 1 : 0);
-    const speed = 0.5 * ud;
-
-    const camera = env.renderer.camera;
-    const direction = camera.direction;
-
-    for (const state of states) {
-      const position = env.position.getX(state.id);
-      position.x += speed * direction[0];
-      position.y += speed * direction[1];
-      position.z += speed * direction[2];
-    }
-  },
 });
 
 // Putting it all together:
 
 const main = () => {
   const env = new TypedEnv('container');
-  const sprite = (x: string) => env.renderer.createSprite(`images/${x}.png`);
+  const sprite = (x: string) => env.renderer.makeSprite(`images/${x}.png`);
 
   const player = env.entities.addEntity();
   const position = env.position.add(player);
@@ -1356,6 +1409,7 @@ const main = () => {
 
   env.physics.add(player);
   env.movement.add(player);
+  env.shadow.add(player);
   env.target.add(player);
 
   const mesh = env.mesh.add(player);
