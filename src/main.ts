@@ -761,11 +761,11 @@ interface TerrainSprite {
 const kMinCapacity = 4;
 const kSpriteRadius = 1 / 2 + 1 / 256;
 
-const kTmpReset = new Float32Array([
-  -kSpriteRadius, -kSpriteRadius, 0,
-   kSpriteRadius, -kSpriteRadius, 0,
-   kSpriteRadius,  kSpriteRadius, 0,
-  -kSpriteRadius,  kSpriteRadius, 0,
+const kTmpBillboard = new Float32Array([
+  0, -kSpriteRadius, 0,
+  0, -kSpriteRadius, 0,
+  0,  kSpriteRadius, 0,
+  0,  kSpriteRadius, 0,
 ]);
 
 const kTmpTransform = new Float32Array([
@@ -841,8 +841,19 @@ class TerrainSprites {
     data.dirty = true;
   }
 
-  update() {
+  update(heading: number) {
+    const cos = kSpriteRadius * Math.cos(heading);
+    const sin = kSpriteRadius * Math.sin(heading);
+
+    kTmpBillboard[0] = kTmpBillboard[9]  = -cos;
+    kTmpBillboard[2] = kTmpBillboard[11] = sin;
+    kTmpBillboard[3] = kTmpBillboard[6]  = cos;
+    kTmpBillboard[5] = kTmpBillboard[8]  = -sin;
+
     for (const data of this.kinds.values()) {
+      if (data.size !== 0) {
+        data.mesh.setVerticesData('position', kTmpBillboard);
+      }
       if (!data.dirty) continue;
       data.mesh.thinInstanceCount = data.size;
       data.mesh.thinInstanceBufferUpdated('matrix');
@@ -879,7 +890,6 @@ class Env {
   mesher: TerrainMesher;
   timing: Timing;
   voxels: Tensor3;
-  _spritesDirty: boolean;
   _terrainDirty: boolean;
   _mesh: BABYLON.Mesh | null;
 
@@ -894,7 +904,6 @@ class Env {
 
     const size = Constants.CHUNK_SIZE;
     this.voxels = new Tensor3(size, size, size);
-    this._spritesDirty = true;
     this._terrainDirty = true;
     this._mesh = null;
   }
@@ -913,7 +922,6 @@ class Env {
     if (new_mesh) this.sprites.add(x, y, z, block, new_mesh);
 
     this.voxels.set(x, y, z, block);
-    this._spritesDirty ||= !!(old_mesh || new_mesh);
     this._terrainDirty ||= !(old_mesh || old === 0) ||
                            !(new_mesh || block === 0);
   }
@@ -934,13 +942,7 @@ class Env {
     camera.applyInputs(deltas.x, deltas.y, deltas.scroll);
     deltas.x = deltas.y = deltas.scroll = 0;
 
-    const transform = BABYLON.Matrix.RotationY(camera.holder.rotation.y);
-    for (const data of this.sprites.kinds.values()) {
-      if (data.size === 0) continue;
-      data.mesh.setVerticesData('position', kTmpReset);
-      data.mesh.bakeTransformIntoVertices(transform);
-    }
-
+    this.sprites.update(camera.heading);
     this.entities.render(dt);
     this.renderer.render();
   }
@@ -948,10 +950,6 @@ class Env {
   update(dt: int) {
     if (!this.container.inputs.pointer) return;
 
-    if (this._spritesDirty) {
-      this.sprites.update();
-      this._spritesDirty = false;
-    }
     if (this._terrainDirty) {
       if (this._mesh) this._mesh.dispose();
       this._mesh = this.mesher.mesh(this.voxels);
