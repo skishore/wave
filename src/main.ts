@@ -267,27 +267,12 @@ class Registry {
     return result;
   }
 
-  addBlockSprite(url: string, solid: boolean, scene: BABYLON.Scene): BlockId {
-    const mode = BABYLON.Texture.NEAREST_SAMPLINGMODE;
-    const texture = new BABYLON.Texture(url, scene, true, true, mode);
-    texture.uScale = texture.vScale = 1 - 1 / 256;
-    texture.hasAlpha = true;
-
-    const material = new BABYLON.StandardMaterial(`material-${url}`, scene);
-    material.specularColor.copyFromFloats(0, 0, 0);
-    material.emissiveColor.copyFromFloats(1, 1, 1);
-    material.backFaceCulling = false;
-    material.diffuseTexture = texture;
-
-    const mesh = BABYLON.Mesh.CreatePlane(`block-${url}`, 1, scene);
-    mesh.material = material;
-
+  addBlockSprite(mesh: BABYLON.Mesh, solid: boolean): BlockId {
     const result = this._opaque.length as BlockId;
     this._opaque.push(false);
     this._solid.push(solid);
     this._meshes.push(mesh);
     for (let i = 0; i < 6; i++) this._faces.push(kNoMaterial);
-
     return result;
   }
 
@@ -436,6 +421,24 @@ class Renderer {
     mesh.alwaysSelectAsActiveMesh = true;
     mesh.freezeWorldMatrix();
     mesh.freezeNormals();
+  }
+
+  createSprite(url: string): BABYLON.Mesh {
+    const scene = this.scene;
+    const mode = BABYLON.Texture.NEAREST_SAMPLINGMODE;
+    const texture = new BABYLON.Texture(url, scene, true, true, mode);
+    texture.uScale = texture.vScale = 1 - 1 / 256;
+    texture.hasAlpha = true;
+
+    const material = new BABYLON.StandardMaterial(`material-${url}`, scene);
+    material.specularColor.copyFromFloats(0, 0, 0);
+    material.emissiveColor.copyFromFloats(1, 1, 1);
+    material.backFaceCulling = false;
+    material.diffuseTexture = texture;
+
+    const mesh = BABYLON.Mesh.CreatePlane(`block-${url}`, 1, scene);
+    mesh.material = material;
+    return mesh;
   }
 
   render() {
@@ -779,12 +782,14 @@ class TerrainSprites {
   renderer: Renderer;
   kinds: Map<BlockId, TerrainSprite>;
   root: BABYLON.TransformNode;
+  billboards: BABYLON.Mesh[];
 
   constructor(renderer: Renderer) {
     this.renderer = renderer;
     this.kinds = new Map();
     this.root = new BABYLON.TransformNode('sprites', renderer.scene);
     this.root.position.copyFromFloats(0.5, 0.5, 0.5);
+    this.billboards = [];
   }
 
   add(x: int, y: int, z: int, block: BlockId, mesh: BABYLON.Mesh) {
@@ -849,6 +854,10 @@ class TerrainSprites {
     kTmpBillboard[2] = kTmpBillboard[11] = sin;
     kTmpBillboard[3] = kTmpBillboard[6]  = cos;
     kTmpBillboard[5] = kTmpBillboard[8]  = -sin;
+
+    for (const mesh of this.billboards) {
+      mesh.setVerticesData('position', kTmpBillboard);
+    }
 
     for (const data of this.kinds.values()) {
       if (data.size !== 0) {
@@ -1237,32 +1246,69 @@ const Movement = (env: TypedEnv): Component<MovementState> => ({
   }
 });
 
-// Mesh signifies that an entity should be rendered as a rectangular solid.
+// Mesh signifies that an entity should be rendered with some provided mesh.
 
 interface MeshState {
   id: EntityId,
   index: int,
   mesh: BABYLON.Mesh | null,
+  texture: BABYLON.Texture | null,
+  frame: number,
+};
+
+const setMesh = (env: TypedEnv, state: MeshState, mesh: BABYLON.Mesh) => {
+  if (state.mesh) state.mesh.dispose();
+
+  env.renderer.addMesh(mesh, true);
+  const billboards = env.sprites.billboards;
+  mesh.onDisposeObservable.add(() => drop(billboards, mesh));
+  billboards.push(mesh);
+
+  const position = env.position.getX(state.id);
+  mesh.scaling.x = position.h;
+  mesh.scaling.y = position.h;
+  mesh.scaling.z = position.h;
+
+  const texture = (() => {
+    const material = mesh.material;
+    if (!(material instanceof BABYLON.StandardMaterial)) return null;
+    const texture = (material as BABYLON.StandardMaterial).diffuseTexture;
+    if (!(texture instanceof BABYLON.Texture)) return null;
+    return texture as BABYLON.Texture;
+  })();
+  if (texture) {
+    const fudge = 1 - 1 / 256;
+    texture.uScale = fudge / 3;
+    texture.vScale = fudge / 4;
+    texture.vOffset = 0.75;
+  }
+
+  state.mesh = mesh;
+  state.texture = texture;
 };
 
 const Mesh = (env: TypedEnv): Component<MeshState> => ({
-  init: () => ({id: kNoEntity, index: 0, mesh: null}),
-  onAdd: (state: MeshState) => {
-    const position = env.position.getX(state.id);
-    const mesh = BABYLON.Mesh.CreateBox('box', 1, env.renderer.scene);
-    mesh.scaling.x = position.w;
-    mesh.scaling.y = position.h;
-    mesh.scaling.z = position.w;
-    env.renderer.addMesh(mesh, true);
-    state.mesh = mesh;
-  },
+  init: () => ({id: kNoEntity, index: 0, mesh: null, texture: null, frame: 0}),
   onRemove: (state: MeshState) => {
     if (state.mesh) state.mesh.dispose();
   },
   onRender: (dt: int, states: MeshState[]) => {
     for (const state of states) {
       const {x, y, z} = env.position.getX(state.id);
-      if (state.mesh) state.mesh.position.copyFromFloats(x, y, z);
+      const {mesh, texture} = state;
+      if (mesh) mesh.position.copyFromFloats(x, y, z);
+
+      if (!texture) return;
+      const body = env.physics.get(state.id);
+      if (!body) return;
+      const setting = (() => {
+        if (!body.resting[1]) return 1;
+        const speed = Vec3.length(body.vel);
+        state.frame = speed ? (state.frame + 0.015 * speed) % 4 : 0;
+        const value = Math.floor(state.frame + 0.5);
+        return value & 1 ? (value + 1) >> 1 : 0;
+      })();
+      texture.uOffset = texture.uScale * setting;
     }
   },
 });
@@ -1298,18 +1344,22 @@ const CameraTarget = (env: TypedEnv): Component => ({
 
 const main = () => {
   const env = new TypedEnv('container');
+  const sprite = (x: string) => env.renderer.createSprite(`images/${x}.png`);
+
   const player = env.entities.addEntity();
   const position = env.position.add(player);
   position.x = 8;
   position.y = 5;
   position.z = 1.5;
   position.w = 0.6;
-  position.h = 1.2;
+  position.h = 1.0;
 
   env.physics.add(player);
   env.movement.add(player);
-  env.mesh.add(player);
   env.target.add(player);
+
+  const mesh = env.mesh.add(player);
+  setMesh(env, mesh, sprite('player'));
 
   const registry = env.registry;
   const scene = env.renderer.scene;
@@ -1320,10 +1370,11 @@ const main = () => {
   const wall = registry.addBlock(['wall'], true);
   const grass = registry.addBlock(['grass', 'dirt', 'dirt'], true);
   const ground = registry.addBlock(['ground', 'dirt', 'dirt'], true);
-  const rock = registry.addBlockSprite('images/rock.png', true, scene);
-  const tree = registry.addBlockSprite('images/tree.png', true, scene);
-  const tree0 = registry.addBlockSprite('images/tree0.png', true, scene);
-  const tree1 = registry.addBlockSprite('images/tree1.png', true, scene);
+
+  const rock = registry.addBlockSprite(sprite('rock'), true);
+  const tree = registry.addBlockSprite(sprite('tree'), true);
+  const tree0 = registry.addBlockSprite(sprite('tree0'), true);
+  const tree1 = registry.addBlockSprite(sprite('tree1'), true);
 
   const size = Constants.CHUNK_SIZE;
   const pl = size / 4;
