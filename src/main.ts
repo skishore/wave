@@ -273,6 +273,7 @@ class Registry {
     this._solid.push(solid);
     this._meshes.push(mesh);
     for (let i = 0; i < 6; i++) this._faces.push(kNoMaterial);
+    mesh.setEnabled(false);
     return result;
   }
 
@@ -392,6 +393,7 @@ class Renderer {
 
     const scene = this.scene;
     scene.detachControl();
+    scene.skipPointerMovePicking = true;
     scene._addComponent(new BABYLON.OctreeSceneComponent(scene));
     this.camera = new Camera(scene);
     this.octree = new BABYLON.Octree(() => {});
@@ -419,6 +421,7 @@ class Renderer {
     block.entries.push(mesh);
 
     mesh.alwaysSelectAsActiveMesh = true;
+    mesh.doNotSyncBoundingInfo = true;
     mesh.freezeWorldMatrix();
     mesh.freezeNormals();
   }
@@ -426,8 +429,9 @@ class Renderer {
   makeSprite(url: string): BABYLON.Mesh {
     const scene = this.scene;
     const mode = BABYLON.Texture.NEAREST_SAMPLINGMODE;
+    const wrap = BABYLON.Texture.CLAMP_ADDRESSMODE;
     const texture = new BABYLON.Texture(url, scene, true, true, mode);
-    texture.uScale = texture.vScale = 1 - 1 / 256;
+    texture.wrapU = texture.wrapV = wrap;
     texture.hasAlpha = true;
 
     const material = new BABYLON.StandardMaterial(`material-${url}`, scene);
@@ -453,6 +457,28 @@ class Renderer {
     this.engine.beginFrame();
     this.scene.render();
     this.engine.endFrame();
+  }
+
+  startInstrumentation() {
+    const perf = new BABYLON.SceneInstrumentation(this.scene);
+    perf.captureActiveMeshesEvaluationTime = true;
+    perf.captureRenderTargetsRenderTime = true;
+    perf.captureCameraRenderTime = true;
+    perf.captureRenderTime = true;
+    let frame = 0;
+
+    this.scene.onAfterRenderObservable.add(() => {
+      frame = (frame + 1) % 60;
+      if (frame !== 0) return;
+
+      console.log(`
+activeMeshesEvaluationTime: ${perf.activeMeshesEvaluationTimeCounter.average}
+   renderTargetsRenderTime: ${perf.renderTargetsRenderTimeCounter.average}
+          cameraRenderTime: ${perf.cameraRenderTimeCounter.average}
+          drawCallsCounter: ${perf.drawCallsCounter.lastSecAverage}
+                renderTime: ${perf.renderTimeCounter.average}
+      `.trim());
+    });
   }
 
   private getMeshKey(mesh: BABYLON.Mesh): int {
@@ -802,6 +828,7 @@ class TerrainSprites {
       mesh.position.setAll(0);
       mesh.alwaysSelectAsActiveMesh = true;
       mesh.doNotSyncBoundingInfo = true;
+      mesh.freezeWorldMatrix();
       mesh.thinInstanceSetBuffer('matrix', buffer);
       this.renderer.addMesh(mesh, true);
     }
@@ -864,7 +891,7 @@ class TerrainSprites {
       if (!data.dirty) continue;
       data.mesh.thinInstanceCount = data.size;
       data.mesh.thinInstanceBufferUpdated('matrix');
-      data.mesh.isVisible = data.size > 0;
+      data.mesh.setEnabled(data.size > 0);
       data.dirty = false;
     }
   }
@@ -1340,7 +1367,7 @@ const Shadow = (env: TypedEnv): Component<ShadowState> => {
 
   shadow.material = material;
   shadow.rotation.x = Math.PI / 2;
-  shadow.setEnabled(true);
+  shadow.setEnabled(false);
 
   return {
     init: () => ({id: kNoEntity, index: 0, mesh: null, extent: 8, height: 0}),
@@ -1398,6 +1425,7 @@ const CameraTarget = (env: TypedEnv): Component => ({
 const main = () => {
   const env = new TypedEnv('container');
   const sprite = (x: string) => env.renderer.makeSprite(`images/${x}.png`);
+  //env.renderer.startInstrumentation();
 
   const player = env.entities.addEntity();
   const position = env.position.add(player);
