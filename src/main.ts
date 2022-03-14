@@ -123,7 +123,7 @@ class Tensor3 {
 // The game engine:
 
 const Constants = {
-  CHUNK_SIZE: 16,
+  CHUNK_SIZE: 128,
   CHUNK_KEY_BITS: 8,
   TICK_RESOLUTION: 4,
   TICKS_PER_FRAME: 4,
@@ -1425,12 +1425,12 @@ const CameraTarget = (env: TypedEnv): Component => ({
 const main = () => {
   const env = new TypedEnv('container');
   const sprite = (x: string) => env.renderer.makeSprite(`images/${x}.png`);
-  //env.renderer.startInstrumentation();
+  env.renderer.startInstrumentation();
 
   const player = env.entities.addEntity();
   const position = env.position.add(player);
   position.x = 8;
-  position.y = 5;
+  position.y = 8;
   position.z = 1.5;
   position.w = 0.6;
   position.h = 1.0;
@@ -1465,19 +1465,26 @@ const main = () => {
   for (let x = 0; x < size; x++) {
     for (let z = 0; z < size; z++) {
       const edge = x === 0 || x === size - 1 || z === 0 || z === size - 1;
-      const pool = (pl <= x && x < pr && 4 && pl <= z && z < pr);
-      const height = Math.min(edge ? 6 : 3, size);
+      const height = Math.min(edge ? layers.length : 3, size);
       for (let y = 0; y < height; y++) {
         assert(env.getBlock(x, y, z) === 0);
-        const tile = y > 0 && pool ? 0 as BlockId : layers[y];
-        env.setBlock(x, y, z, tile);
+        env.setBlock(x, y, z, layers[y]);
+      }
+      if (edge) continue;
+      const test = Math.random();
+      const limit = 0.05;
+      if (test < 1 * limit) {
+        env.setBlock(x, 3, z, rock);
+      } else if (test < 2 * limit) {
+        env.setBlock(x, 3, z, tree);
+      } else if (test < 3 * limit) {
+        env.setBlock(x, 3, z, wall);
+      } else if (test < 4 * limit) {
+        env.setBlock(x, 3, z, tree0);
+        env.setBlock(x, 4, z, tree1);
       }
     }
   }
-  env.setBlock(8, 1, 8, rock);
-  env.setBlock(7, 1, 8, rock);
-  env.setBlock(6, 1, 7, rock);
-  env.setBlock(6, 1, 9, rock);
 
   env.refresh();
 };
