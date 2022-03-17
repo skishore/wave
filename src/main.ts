@@ -912,6 +912,11 @@ const kChunkKeyMask = kChunkKeySize - 1;
 const kChunkRadiusX = 8;
 const kChunkRadiusY = 0;
 
+// These conditions ensure that we'll dispose of a sprite before allocating
+// a new sprite at a key that collides with the old one.
+assert((1 << kSpriteKeyBits) > (kChunkSize * (2 * kChunkRadiusX + 1)));
+assert((1 << kSpriteKeyBits) > (kChunkSize * (2 * kChunkRadiusY + 1)));
+
 class World {
   chunks: Map<int, Chunk>;
   mesher: TerrainMesher;
@@ -978,7 +983,10 @@ class World {
     const removed = [];
     for (const item of this.chunks) {
       const {cx, cy, cz} = item[1];
-      const remove = this.distance(cx, cy, cz, x, y, z) > hi;
+      const remove = Math.abs(cx - dx) > kChunkRadiusX + 1 ||
+                     Math.abs(cy - dy) > kChunkRadiusY + 1 ||
+                     Math.abs(cz - dz) > kChunkRadiusX + 1 ||
+                     this.distance(cx, cy, cz, x, y, z) > hi;
       if (remove) removed.push(item);
     }
 
