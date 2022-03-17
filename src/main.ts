@@ -318,6 +318,8 @@ class Camera {
   heading: number; // In radians: [0, 2π)
   pitch: number;   // In radians: (-π/2, π/2)
   zoom: number;
+  last_dx: number;
+  last_dy: number;
 
   constructor(scene: BABYLON.Scene) {
     const origin = new BABYLON.Vector3(0, 0, 0);
@@ -330,9 +332,27 @@ class Camera {
     this.heading = 0;
     this.zoom = 0;
     this.direction = Vec3.create();
+
+    this.last_dx = 0;
+    this.last_dy = 0;
   }
 
   applyInputs(dx: number, dy: number, dscroll: number) {
+    // Smooth out large mouse-move inputs.
+    const jerkx = Math.abs(dx) > 400 && Math.abs(dx / (this.last_dx || 1)) > 4;
+    const jerky = Math.abs(dy) > 400 && Math.abs(dy / (this.last_dy || 1)) > 4;
+    if (jerkx || jerky) {
+      const saved_x = this.last_dx;
+      const saved_y = this.last_dy;
+      this.last_dx = (dx + this.last_dx) / 2;
+      this.last_dy = (dy + this.last_dy) / 2;
+      dx = saved_x;
+      dy = saved_y;
+    } else {
+      this.last_dx = dx;
+      this.last_dy = dy;
+    }
+
     let pitch = this.holder.rotation.x;
     let heading = this.holder.rotation.y;
 
@@ -411,6 +431,7 @@ class Renderer {
     material.diffuseTexture = texture;
 
     const mesh = BABYLON.Mesh.CreatePlane(`block-${url}`, 1, scene);
+    mesh.cullingStrategy = BABYLON.AbstractMesh.CULLINGSTRATEGY_STANDARD;
     mesh.material = material;
     return mesh;
   }
@@ -864,7 +885,7 @@ interface Chunk {
   cz: int;
 };
 
-const kChunkBits = 6;
+const kChunkBits = 5;
 const kChunkSize = 1 << kChunkBits;
 const kChunkMask = kChunkSize - 1;
 
@@ -872,7 +893,7 @@ const kChunkKeyBits = 8;
 const kChunkKeySize = 1 << kChunkKeyBits;
 const kChunkKeyMask = kChunkKeySize - 1;
 
-const kChunkRadiusX = 2;
+const kChunkRadiusX = 4;
 const kChunkRadiusY = 0;
 
 class World {
@@ -977,6 +998,7 @@ class World {
         const {cx, cy, cz, mesh} = chunk;
         mesh.position.copyFromFloats(
           cx << kChunkBits, cy << kChunkBits, cz << kChunkBits);
+        mesh.cullingStrategy = BABYLON.AbstractMesh.CULLINGSTRATEGY_STANDARD;
         mesh.doNotSyncBoundingInfo = true;
         mesh.freezeWorldMatrix();
         mesh.freezeNormals();
@@ -1420,6 +1442,7 @@ const Shadow = (env: TypedEnv): Component<ShadowState> => {
   const scene = env.renderer.scene;
   const option = {radius: 1, tessellation: 16};
   const shadow = BABYLON.CreateDisc('shadow', option, scene);
+  shadow.cullingStrategy = BABYLON.AbstractMesh.CULLINGSTRATEGY_STANDARD;
   scene.removeMesh(shadow);
 
   shadow.material = material;
@@ -1439,7 +1462,7 @@ const Shadow = (env: TypedEnv): Component<ShadowState> => {
       for (const state of states) {
         if (!state.mesh) continue;
         const {x, y, z, w} = env.position.getX(state.id);
-        state.mesh.position.copyFromFloats(x, state.height + 0.01, z);
+        state.mesh.position.copyFromFloats(x, state.height + 0.05, z);
         const fraction = 1 - (y - state.height) / state.extent;
         const scale = w * Math.max(0, Math.min(1, fraction)) / 2;
         state.mesh.scaling.copyFromFloats(scale, scale, scale);
@@ -1469,8 +1492,8 @@ const CameraTarget = (env: TypedEnv): Component => ({
   init: () => ({id: kNoEntity, index: 0}),
   onRender: (dt: int, states: ComponentState[]) => {
     for (const state of states) {
-      const position = env.position.getX(state.id);
-      env.renderer.camera.setTarget(position.x, position.y, position.z);
+      const {x, y, z, h} = env.position.getX(state.id);
+      env.renderer.camera.setTarget(x, y + h / 3, z);
     }
   },
 });
