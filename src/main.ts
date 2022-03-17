@@ -893,7 +893,7 @@ const kChunkKeyBits = 8;
 const kChunkKeySize = 1 << kChunkKeyBits;
 const kChunkKeyMask = kChunkKeySize - 1;
 
-const kChunkRadiusX = 4;
+const kChunkRadiusX = 8;
 const kChunkRadiusY = 0;
 
 class World {
@@ -956,12 +956,13 @@ class World {
     const dy = (y >> kChunkBits);
     const dz = (z >> kChunkBits);
 
+    const lo = (kChunkRadiusX * kChunkRadiusX + 1) * kChunkSize * kChunkSize;
+    const hi = (kChunkRadiusX * kChunkRadiusX + 9) * kChunkSize * kChunkSize;
+
     const removed = [];
     for (const item of this.chunks) {
       const {cx, cy, cz} = item[1];
-      const remove = Math.abs(cx - dx) > kChunkRadiusX + 1 ||
-                     Math.abs(cy - dy) > kChunkRadiusY + 1 ||
-                     Math.abs(cz - dz) > kChunkRadiusX + 1;
+      const remove = this.distance(cx, cy, cz, x, y, z) > hi;
       if (remove) removed.push(item);
     }
 
@@ -975,6 +976,7 @@ class World {
     for (let i = dx - kChunkRadiusX; i <= dx + kChunkRadiusX; i++) {
       for (let j = dy - kChunkRadiusY; j <= dy + kChunkRadiusY; j++) {
         for (let k = dz - kChunkRadiusX; k <= dz + kChunkRadiusX; k++) {
+          if (this.distance(i, j, k, x, y, z) > lo) continue;
           const chunk = this.getChunk(i, j, k, true);
           if (chunk && !chunk.loaded) result.push(chunk);
         }
@@ -1005,6 +1007,14 @@ class World {
       }
       chunk.dirty = false;
     }
+  }
+
+  private distance(cx: int, cy: int, cz: int, x: number, y: number, z: number) {
+    const half = kChunkSize / 2;
+    const i = (cx << kChunkBits) + half - x;
+    const j = (cy << kChunkBits) + half - y;
+    const k = (cz << kChunkBits) + half - z;
+    return i * i + j * j + k * k;
   }
 
   private remeshSprites(chunk: Chunk, add: boolean) {
