@@ -741,6 +741,7 @@ interface TerrainSprite {
   dirty: boolean;
   mesh: BABYLON.Mesh;
   buffer: Float32Array;
+  index: Map<int, int>;
   capacity: int;
   size: int;
 };
@@ -762,6 +763,10 @@ const kTmpTransform = new Float32Array([
   0, 0, 0, 1,
 ]);
 
+const kSpriteKeyBits = 10;
+const kSpriteKeySize = 1 << kSpriteKeyBits;
+const kSpriteKeyMask = kSpriteKeySize - 1;
+
 class TerrainSprites {
   renderer: Renderer;
   kinds: Map<BlockId, TerrainSprite>;
@@ -781,7 +786,7 @@ class TerrainSprites {
     if (!data) {
       const capacity = kMinCapacity;
       const buffer = new Float32Array(capacity * 16);
-      data = {dirty: false, mesh, buffer, capacity, size: 0};
+      data = {dirty: false, mesh, buffer, index: new Map(), capacity, size: 0};
       this.kinds.set(block, data);
 
       mesh.parent = this.root;
@@ -792,6 +797,9 @@ class TerrainSprites {
       mesh.thinInstanceSetBuffer('matrix', buffer);
     }
 
+    const key = this.key(x, y, z);
+    if (data.index.has(key)) return;
+
     if (data.size === data.capacity) {
       this.reallocate(data, data.capacity * 2);
     }
@@ -800,6 +808,7 @@ class TerrainSprites {
     kTmpTransform[13] = y;
     kTmpTransform[14] = z;
     this.copy(kTmpTransform, 0, data.buffer, data.size);
+    data.index.set(key, data.size);
 
     data.size++;
     data.dirty = true;
@@ -807,21 +816,22 @@ class TerrainSprites {
 
   remove(x: int, y: int, z: int, block: BlockId) {
     const data = this.kinds.get(block);
-    if (!data) throw new Error(`Unknown block ${block} at (${x}, ${y}, ${z})`);
+    if (!data) return;
 
     const buffer = data.buffer;
-    const index = (() => {
-      for (let i = 0; i < data.size; i++) {
-        if (buffer[i * 16 + 12] !== x) continue;
-        if (buffer[i * 16 + 13] !== y) continue;
-        if (buffer[i * 16 + 14] !== z) continue;
-        return i;
-      }
-      throw new Error(`Missing block ${block} at (${x}, ${y}, ${z})`);
-    })();
+    const key = this.key(x, y, z);
+    const index = data.index.get(key);
+    if (index === undefined) return;
 
     const last = data.size - 1;
-    if (index !== last) this.copy(buffer, last, buffer, index);
+    if (index !== last) {
+      const b = 16 * last + 12;
+      const other = this.key(buffer[b + 0], buffer[b + 1], buffer[b + 2]);
+      assert(data.index.get(other) === last);
+      this.copy(buffer, last, buffer, index);
+      data.index.set(other, index);
+    }
+    data.index.delete(key);
 
     data.size--;
     if (data.capacity > Math.max(kMinCapacity, 4 * data.size)) {
@@ -861,6 +871,12 @@ class TerrainSprites {
     for (let i = 0; i < 16; i++) {
       dst[dstOff + i] = src[srcOff + i];
     }
+  }
+
+  private key(x: int, y: int, z: int): int {
+    return (x & kSpriteKeyMask) << (0 * kSpriteKeyBits) |
+           (y & kSpriteKeyMask) << (1 * kSpriteKeyBits) |
+           (z & kSpriteKeyMask) << (2 * kSpriteKeyBits);
   }
 
   private reallocate(data: TerrainSprite, capacity: int) {
