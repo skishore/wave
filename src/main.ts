@@ -371,16 +371,11 @@ class Camera {
 
 //////////////////////////////////////////////////////////////////////////////
 
-type Octree = BABYLON.Octree<BABYLON.Mesh>;
-type OctreeBlock = BABYLON.OctreeBlock<BABYLON.Mesh>;
-
 class Renderer {
   camera: Camera;
   engine: BABYLON.Engine;
   light: BABYLON.Light;
   scene: BABYLON.Scene;
-  octree: Octree;
-  blocks: Map<int, OctreeBlock>;
 
   constructor(container: Container) {
     const antialias = true;
@@ -398,36 +393,7 @@ class Renderer {
     const scene = this.scene;
     scene.detachControl();
     scene.skipPointerMovePicking = true;
-    scene._addComponent(new BABYLON.OctreeSceneComponent(scene));
     this.camera = new Camera(scene);
-    this.octree = new BABYLON.Octree(() => {});
-    this.octree.blocks = [];
-    scene._selectionOctree = this.octree;
-    this.blocks = new Map();
-  }
-
-  addMesh(mesh: BABYLON.Mesh, dynamic: boolean) {
-    if (dynamic) {
-      const meshes = this.octree.dynamicContent;
-      mesh.onDisposeObservable.add(() => drop(meshes, mesh));
-      meshes.push(mesh);
-      return;
-    }
-
-    const key = this.getMeshKey(mesh);
-    const block = this.getMeshBlock(mesh, key);
-    mesh.onDisposeObservable.add(() => {
-      drop(block.entries, mesh);
-      if (block.entries.length) return;
-      drop(this.octree.blocks, block);
-      this.blocks.delete(key);
-    });
-    block.entries.push(mesh);
-
-    mesh.alwaysSelectAsActiveMesh = true;
-    mesh.doNotSyncBoundingInfo = true;
-    mesh.freezeWorldMatrix();
-    mesh.freezeNormals();
   }
 
   makeSprite(url: string): BABYLON.Mesh {
@@ -483,37 +449,6 @@ activeMeshesEvaluationTime: ${perf.activeMeshesEvaluationTimeCounter.average}
                 renderTime: ${perf.renderTimeCounter.average}
       `.trim());
     });
-  }
-
-  private getMeshKey(mesh: BABYLON.Mesh): int {
-    assert(!mesh.parent);
-    const mod = kChunkSize;
-    const pos = mesh.position;
-    assert(pos.x % mod === 0);
-    assert(pos.y % mod === 0);
-    assert(pos.z % mod === 0);
-
-    const bits = Constants.CHUNK_KEY_BITS;
-    const mask = (1 << bits) - 1;
-    return (((pos.x / mod) & mask) << (0 * bits)) |
-           (((pos.y / mod) & mask) << (1 * bits)) |
-           (((pos.z / mod) & mask) << (2 * bits));
-  }
-
-  private getMeshBlock(mesh: BABYLON.Mesh, key: int): OctreeBlock {
-    const cached = this.blocks.get(key);
-    if (cached) return cached;
-
-    const mod = kChunkSize;
-    const pos = mesh.position;
-    const min = new BABYLON.Vector3(pos.x, pos.y, pos.z);
-    const max = new BABYLON.Vector3(pos.x + mod, pos.y + mod, pos.z + mod);
-
-    const block: OctreeBlock =
-      new BABYLON.OctreeBlock(min, max, 0, 0, 0, () => {});
-    this.octree.blocks.push(block);
-    this.blocks.set(key, block);
-    return block;
   }
 };
 
@@ -834,7 +769,6 @@ class TerrainSprites {
       mesh.doNotSyncBoundingInfo = true;
       mesh.freezeWorldMatrix();
       mesh.thinInstanceSetBuffer('matrix', buffer);
-      this.renderer.addMesh(mesh, true);
     }
 
     if (data.size === data.capacity) {
@@ -1040,10 +974,12 @@ class World {
       if (chunk.mesh) chunk.mesh.dispose();
       chunk.mesh = this.mesher.mesh(chunk.voxels);
       if (chunk.mesh) {
-        const {cx, cy, cz} = chunk;
-        chunk.mesh.position.copyFromFloats(
+        const {cx, cy, cz, mesh} = chunk;
+        mesh.position.copyFromFloats(
           cx << kChunkBits, cy << kChunkBits, cz << kChunkBits);
-        this.renderer.addMesh(chunk.mesh, false);
+        mesh.doNotSyncBoundingInfo = true;
+        mesh.freezeWorldMatrix();
+        mesh.freezeNormals();
       }
       chunk.dirty = false;
     }
@@ -1411,7 +1347,6 @@ interface MeshState {
 const setMesh = (env: TypedEnv, state: MeshState, mesh: BABYLON.Mesh) => {
   if (state.mesh) state.mesh.dispose();
 
-  env.renderer.addMesh(mesh, true);
   const billboards = env.world.sprites.billboards;
   mesh.onDisposeObservable.add(() => drop(billboards, mesh));
   billboards.push(mesh);
@@ -1495,9 +1430,7 @@ const Shadow = (env: TypedEnv): Component<ShadowState> => {
     init: () => ({id: kNoEntity, index: 0, mesh: null, extent: 8, height: 0}),
     onAdd: (state: ShadowState) => {
       const instance = shadow.createInstance('shadow-instance');
-      const mesh = instance as any as BABYLON.Mesh;
-      env.renderer.addMesh(mesh, true);
-      state.mesh = mesh;
+      state.mesh = instance as any as BABYLON.Mesh;
     },
     onRemove: (state: ShadowState) => {
       if (state.mesh) state.mesh.dispose();
