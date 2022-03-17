@@ -1369,7 +1369,7 @@ const Movement = (env: TypedEnv): Component<MovementState> => ({
     runningFriction: 0,
     standingFriction: 2,
     airMoveMultiplier: 0.5,
-    airJumps: 1,
+    airJumps: 9999,
     jumpTime: 500,
     jumpForce: 15,
     jumpImpulse: 10,
