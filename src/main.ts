@@ -525,7 +525,8 @@ class TerrainMesher {
       _isEmpty: false,
       _terrainMeshes: meshes,
       _neighbors: {get: (x: int, y: int, z: int) => {
-        return this.world.getChunk(cx + x, cy + y, cz + z, false);
+        const chunk = this.world.getChunk(x + cx, y + cy, z + cz, false);
+        return chunk && chunk.voxels ? chunk : null;
       }},
     };
 
@@ -903,6 +904,7 @@ const kChunkKeyMask = kChunkKeySize - 1;
 
 const kChunkRadiusX = 8;
 const kChunkRadiusY = 0;
+const kNeighbors = (kChunkRadiusX ? 4 : 0) + (kChunkRadiusY ? 2 : 0);
 
 const kNumChunksToLoadPerFrame = 1;
 const kNumChunksToMeshPerFrame = 1;
@@ -914,70 +916,81 @@ assert((1 << kSpriteKeyBits) > (kChunkSize * (2 * kChunkRadiusY + 1)));
 
 class Chunk {
   world: World;
-  bodyDirty: boolean;
-  edgeDirty: boolean;
+  active: boolean;
+  enabled: boolean;
+  finished: boolean;
+  requested: boolean;
+  neighbors: int;
+  spritesDirty: boolean;
+  terrainDirty: boolean;
   mesh: BABYLON.Mesh | null;
   voxels: Tensor3 | null;
-  requested: boolean;
-  loaded: boolean;
-  sprites: int;
   cx: int;
   cy: int;
   cz: int;
 
   constructor(world: World, cx: int, cy: int, cz: int) {
     this.world = world;
-    this.bodyDirty = false;
-    this.edgeDirty = false;
+    this.active = false;
+    this.enabled = false;
+    this.finished = false;
+    this.requested = false;
+    this.neighbors = kNeighbors;
+    this.spritesDirty = true;
+    this.terrainDirty = true;
     this.mesh = null;
     this.voxels = null;
-    this.requested = false;
-    this.loaded = false;
-    this.sprites = 0;
     this.cx = cx;
     this.cy = cy;
     this.cz = cz;
   }
 
-  dispose() {
-    if (!this.voxels) return;
+  disable() {
+    if (!this.enabled) return;
+    this.world.enabled.delete(this);
+
+    if (!this.spritesDirty) this.refreshSprites(false);
     if (this.mesh) this.mesh.dispose();
+    this.mesh = null;
 
-    const dx = this.cx << kChunkBits;
-    const dy = this.cy << kChunkBits;
-    const dz = this.cz << kChunkBits;
+    this.active = false;
+    this.enabled = false;
+    this.spritesDirty = true;
+    this.terrainDirty = true;
+  }
 
-    for (let y = 0; y < kChunkSize; y++) {
-      for (let x = 0; x < kChunkSize; x++) {
-        for (let z = 0; z < kChunkSize; z++) {
-          const cell = this.voxels.get(x, y, z) as BlockId;
-          const mesh = this.world.registry._meshes[cell];
-          if (!mesh) continue;
-          this.world.sprites.remove(x + dx, y + dy, z + dz, cell);
-          this.sprites--;
-          if (!this.sprites) return;
-        }
-      }
-    }
+  enable() {
+    this.world.enabled.add(this);
+    this.enabled = true;
+    this.active = this.checkActive();
   }
 
   finish() {
-    this.loaded = true;
-    if (!this.voxels) return;
+    assert(!this.finished);
+    this.finished = true;
 
     const {cx, cy, cz} = this;
     const neighbor = (x: int, y: int, z: int) => {
-      const chunk = this.world.getChunk(cx + x, cy + y, cz + z, false);
-      if (chunk) chunk.edgeDirty = true;
+      const chunk = this.world.getChunk(x + cx, y + cy, z + cz, false);
+      if (!(chunk && chunk.finished)) return;
+      chunk.notifyNeighborFinished();
+      this.neighbors--;
     };
     neighbor(1, 0, 0); neighbor(-1, 0, 0);
     neighbor(0, 1, 0); neighbor(0, -1, 0);
     neighbor(0, 0, 1); neighbor(0, 0, -1);
+
+    if (!this.voxels) {
+      this.spritesDirty = false;
+      this.terrainDirty = false;
+    }
+
+    this.active = this.checkActive();
   }
 
   getBlock(x: int, y: int, z: int): BlockId {
     const mask = kChunkMask;
-    if (!this.voxels) return this.loaded ? kEmptyBlock : kUnknownBlock;
+    if (!this.voxels) return kUnknownBlock;
     return this.voxels.get(x & mask, y & mask, z & mask) as BlockId;
   }
 
@@ -990,18 +1003,80 @@ class Chunk {
 
     const old_mesh = this.world.registry._meshes[old];
     const new_mesh = this.world.registry._meshes[block];
-    if (old_mesh) this.world.sprites.remove(x, y, z, old);
-    if (new_mesh) this.world.sprites.add(x, y, z, block, new_mesh);
-    this.sprites += (new_mesh ? 1 : 0) - (old_mesh ? 1 : 0);
+    if (!this.spritesDirty) {
+      if (old_mesh) this.world.sprites.remove(x, y, z, old);
+      if (new_mesh) this.world.sprites.add(x, y, z, block, new_mesh);
+    }
 
     this.voxels.set(x & mask, y & mask, z & mask, block);
-    this.bodyDirty ||= !(old_mesh || old === 0) ||
-                       !(new_mesh || block === 0);
+    this.terrainDirty ||= !(old_mesh || old === 0) ||
+                          !(new_mesh || block === 0);
+  }
+
+  needsRemesh() {
+    return this.active && (this.spritesDirty || this.terrainDirty);
+  }
+
+  remesh() {
+    if (this.spritesDirty) {
+      this.refreshSprites(true);
+      this.spritesDirty = false;
+    }
+    if (this.terrainDirty) {
+      this.refreshTerrain();
+      this.terrainDirty = false;
+    }
+  }
+
+  private checkActive(): boolean {
+    return this.enabled && this.finished && this.neighbors === 0;
+  }
+
+  private notifyNeighborFinished() {
+    assert(this.neighbors > 0);
+    this.neighbors--;
+    this.active = this.checkActive();
+  }
+
+  private refreshSprites(enabled: boolean) {
+    if (!this.voxels) return;
+    const dx = this.cx << kChunkBits;
+    const dy = this.cy << kChunkBits;
+    const dz = this.cz << kChunkBits;
+
+    const sprites = this.world.sprites;
+    for (let x = 0; x < kChunkSize; x++) {
+      for (let y = 0; y < kChunkSize; y++) {
+        for (let z = 0; z < kChunkSize; z++) {
+          const cell = this.voxels.get(x, y, z) as BlockId;
+          const mesh = this.world.registry._meshes[cell];
+          if (!mesh) continue;
+          enabled ? sprites.add(x + dx, y + dy, z + dz, cell, mesh)
+                  : sprites.remove(x + dx, y + dy, z + dz, cell);
+        }
+      }
+    }
+  }
+
+  private refreshTerrain() {
+    if (this.mesh) this.mesh.dispose();
+    const {cx, cy, cz, voxels} = this;
+    const mesh = voxels ? this.world.mesher.mesh(cx, cy, cz, voxels) : null;
+    if (mesh) {
+      mesh.position.copyFromFloats(
+        cx << kChunkBits, cy << kChunkBits, cz << kChunkBits);
+      mesh.cullingStrategy = BABYLON.AbstractMesh.CULLINGSTRATEGY_STANDARD;
+      mesh.doNotSyncBoundingInfo = true;
+      mesh.freezeWorldMatrix();
+      mesh.freezeNormals();
+    }
+    this.mesh = mesh;
   }
 };
 
 class World {
   chunks: Map<int, Chunk>;
+  enabled: Set<Chunk>;
   renderer: Renderer;
   registry: Registry;
   mesher: TerrainMesher;
@@ -1009,6 +1084,7 @@ class World {
 
   constructor(registry: Registry, renderer: Renderer) {
     this.chunks = new Map();
+    this.enabled = new Set();
     this.renderer = renderer;
     this.registry = registry;
     this.mesher = new TerrainMesher(this);
@@ -1018,13 +1094,13 @@ class World {
   getBlock(x: int, y: int, z: int): BlockId {
     const bits = kChunkBits;
     const chunk = this.getChunk(x >> bits, y >> bits, z >> bits, false);
-    return chunk ? chunk.getBlock(x, y, z) : kUnknownBlock;
+    return chunk && chunk.active ? chunk.getBlock(x, y, z) : kUnknownBlock;
   }
 
   setBlock(x: int, y: int, z: int, block: BlockId) {
     const bits = kChunkBits;
     const chunk = this.getChunk(x >> bits, y >> bits, z >> bits, false);
-    if (chunk) chunk.setBlock(x, y, z, block);
+    if (chunk && chunk.active) chunk.setBlock(x, y, z, block);
   }
 
   getChunk(cx: int, cy: int, cz: int, add: boolean): Chunk | null {
@@ -1047,20 +1123,16 @@ class World {
     const lo = (kChunkRadiusX * kChunkRadiusX + 1) * kChunkSize * kChunkSize;
     const hi = (kChunkRadiusX * kChunkRadiusX + 9) * kChunkSize * kChunkSize;
 
-    const removed = [];
-    for (const item of this.chunks) {
-      const {cx, cy, cz} = item[1];
-      const remove = Math.abs(cx - dx) > kChunkRadiusX + 1 ||
-                     Math.abs(cy - dy) > kChunkRadiusY + 1 ||
-                     Math.abs(cz - dz) > kChunkRadiusX + 1 ||
-                     this.distance(cx, cy, cz, x, y, z) > hi;
-      if (remove) removed.push(item);
+    const disabled = [];
+    for (const chunk of this.enabled) {
+      const {cx, cy, cz} = chunk;
+      const disable = Math.abs(cx - dx) > kChunkRadiusX + 1 ||
+                      Math.abs(cy - dy) > kChunkRadiusY + 1 ||
+                      Math.abs(cz - dz) > kChunkRadiusX + 1 ||
+                      this.distance(cx, cy, cz, x, y, z) > hi;
+      if (disable) disabled.push(chunk);
     }
-
-    for (const [key, chunk] of removed) {
-      this.chunks.delete(key);
-      chunk.dispose();
-    }
+    for (const chunk of disabled) chunk.disable();
 
     const result = [];
     for (let i = dx - kChunkRadiusX; i <= dx + kChunkRadiusX; i++) {
@@ -1068,6 +1140,8 @@ class World {
         for (let k = dz - kChunkRadiusX; k <= dz + kChunkRadiusX; k++) {
           if (this.distance(i, j, k, x, y, z) > lo) continue;
           const chunk = nonnull(this.getChunk(i, j, k, true));
+          chunk.enable();
+
           if (chunk.requested) continue;
           result.push(chunk);
           chunk.requested = true;
@@ -1081,32 +1155,10 @@ class World {
   remesh() {
     const queued = [];
     for (const chunk of this.chunks.values()) {
-      if (chunk.bodyDirty && chunk.voxels) queued.push(chunk);
+      if (chunk.needsRemesh()) queued.push(chunk);
       if (queued.length === kNumChunksToMeshPerFrame) break;
     }
-    if (queued.length < kNumChunksToMeshPerFrame) {
-      for (const chunk of this.chunks.values()) {
-        if (chunk.edgeDirty && chunk.voxels) queued.push(chunk);
-        if (queued.length === kNumChunksToMeshPerFrame) break;
-      }
-    }
-
-    for (const chunk of queued) {
-      if (chunk.mesh) chunk.mesh.dispose();
-      const {cx, cy, cz, voxels} = chunk;
-      const mesh = voxels ? this.mesher.mesh(cx, cy, cz, voxels) : null;
-      if (mesh) {
-        mesh.position.copyFromFloats(
-          cx << kChunkBits, cy << kChunkBits, cz << kChunkBits);
-        mesh.cullingStrategy = BABYLON.AbstractMesh.CULLINGSTRATEGY_STANDARD;
-        mesh.doNotSyncBoundingInfo = true;
-        mesh.freezeWorldMatrix();
-        mesh.freezeNormals();
-      }
-      chunk.edgeDirty = false;
-      chunk.bodyDirty = false;
-      chunk.mesh = mesh;
-    }
+    for (const chunk of queued) chunk.remesh();
   }
 
   private distance(cx: int, cy: int, cz: int, x: number, y: number, z: number) {
@@ -1599,7 +1651,7 @@ const RecenterWorld = (env: TypedEnv): Component => ({
     for (const state of states) {
       const position = env.position.getX(state.id);
       const chunks = env.world.recenter(position.x, position.y, position.z);
-      for (const chunk of chunks) loadChunkData(chunk);
+      chunks.forEach(x => { loadChunkData(x); x.finish(); });
       break;
     }
   },
@@ -1679,7 +1731,6 @@ const main = () => {
         }
       }
     }
-    chunk.finish();
   };
 
   env.refresh();
