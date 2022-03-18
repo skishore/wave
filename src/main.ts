@@ -995,10 +995,13 @@ class Chunk {
   }
 
   setBlock(x: int, y: int, z: int, block: BlockId) {
-    const mask = kChunkMask;
     const size = kChunkSize;
     if (!this.voxels) this.voxels = new Tensor3(size, size, size);
-    const old = this.voxels.get(x & mask, y & mask, z & mask) as BlockId;
+
+    const xm = x & kChunkMask;
+    const ym = y & kChunkMask;
+    const zm = z & kChunkMask;
+    const old = this.voxels.get(xm, ym, zm) as BlockId;
     if (old === block) return;
 
     const old_mesh = this.world.registry._meshes[old];
@@ -1008,9 +1011,22 @@ class Chunk {
       if (new_mesh) this.world.sprites.add(x, y, z, block, new_mesh);
     }
 
-    this.voxels.set(x & mask, y & mask, z & mask, block);
-    this.terrainDirty ||= !(old_mesh || old === 0) ||
-                          !(new_mesh || block === 0);
+    this.voxels.set(xm, ym, zm, block);
+    if (old_mesh && new_mesh) return;
+
+    this.terrainDirty = true;
+    const neighbor = (x: int, y: int, z: int) => {
+      const {cx, cy, cz} = this;
+      const chunk = this.world.getChunk(x + cx, y + cy, z + cz, false);
+      if (!(chunk && chunk.finished)) return;
+      chunk.terrainDirty = true;
+    };
+    if (xm === 0) neighbor(-1, 0, 0);
+    if (xm === kChunkMask) neighbor(1, 0, 0);
+    if (ym === 0) neighbor(0, -1, 0);
+    if (ym === kChunkMask) neighbor(0, 1, 0);
+    if (zm === 0) neighbor(0, 0, -1);
+    if (zm === kChunkMask) neighbor(0, 0, 1);
   }
 
   needsRemesh() {
