@@ -890,17 +890,6 @@ class TerrainSprites {
 
 //////////////////////////////////////////////////////////////////////////////
 
-interface Chunk {
-  dirty: boolean;
-  loaded: boolean;
-  sprites: boolean;
-  mesh: BABYLON.Mesh | null;
-  voxels: Tensor3 | null;
-  cx: int;
-  cy: int;
-  cz: int;
-};
-
 const kChunkBits = 5;
 const kChunkSize = 1 << kChunkBits;
 const kChunkMask = kChunkSize - 1;
@@ -912,10 +901,85 @@ const kChunkKeyMask = kChunkKeySize - 1;
 const kChunkRadiusX = 8;
 const kChunkRadiusY = 0;
 
+const kNumChunksToLoadPerFrame = 1;
+const kNumChunksToMeshPerFrame = 1;
+
 // These conditions ensure that we'll dispose of a sprite before allocating
 // a new sprite at a key that collides with the old one.
 assert((1 << kSpriteKeyBits) > (kChunkSize * (2 * kChunkRadiusX + 1)));
 assert((1 << kSpriteKeyBits) > (kChunkSize * (2 * kChunkRadiusY + 1)));
+
+class Chunk {
+  world: World;
+  dirty: boolean;
+  mesh: BABYLON.Mesh | null;
+  voxels: Tensor3 | null;
+  requested: boolean;
+  loaded: boolean;
+  sprites: int;
+  cx: int;
+  cy: int;
+  cz: int;
+
+  constructor(world: World, cx: int, cy: int, cz: int) {
+    this.world = world;
+    this.dirty = false;
+    this.mesh = null;
+    this.voxels = null;
+    this.requested = false;
+    this.loaded = false;
+    this.sprites = 0;
+    this.cx = cx;
+    this.cy = cy;
+    this.cz = cz;
+  }
+
+  dispose() {
+    if (!this.voxels) return;
+    if (this.mesh) this.mesh.dispose();
+
+    const dx = this.cx << kChunkBits;
+    const dy = this.cy << kChunkBits;
+    const dz = this.cz << kChunkBits;
+
+    for (let y = 0; y < kChunkSize; y++) {
+      for (let x = 0; x < kChunkSize; x++) {
+        for (let z = 0; z < kChunkSize; z++) {
+          const cell = this.voxels.get(x, y, z) as BlockId;
+          const mesh = this.world.registry._meshes[cell];
+          if (!mesh) continue;
+          this.world.sprites.remove(x + dx, y + dy, z + dz, cell);
+          this.sprites--;
+          if (!this.sprites) return;
+        }
+      }
+    }
+  }
+
+  getBlock(x: int, y: int, z: int): BlockId {
+    const mask = kChunkMask;
+    if (!this.voxels) return this.loaded ? kEmptyBlock : kUnknownBlock;
+    return this.voxels.get(x & mask, y & mask, z & mask) as BlockId;
+  }
+
+  setBlock(x: int, y: int, z: int, block: BlockId) {
+    const mask = kChunkMask;
+    const size = kChunkSize;
+    if (!this.voxels) this.voxels = new Tensor3(size, size, size);
+    const old = this.voxels.get(x & mask, y & mask, z & mask) as BlockId;
+    if (old === block) return;
+
+    const old_mesh = this.world.registry._meshes[old];
+    const new_mesh = this.world.registry._meshes[block];
+    if (old_mesh) this.world.sprites.remove(x, y, z, old);
+    if (new_mesh) this.world.sprites.add(x, y, z, block, new_mesh);
+    this.sprites += (new_mesh ? 1 : 0) - (old_mesh ? 1 : 0);
+
+    this.voxels.set(x & mask, y & mask, z & mask, block);
+    this.dirty ||= !(old_mesh || old === 0) ||
+                   !(new_mesh || block === 0);
+  }
+};
 
 class World {
   chunks: Map<int, Chunk>;
@@ -935,28 +999,13 @@ class World {
   getBlock(x: int, y: int, z: int): BlockId {
     const bits = kChunkBits;
     const chunk = this.getChunk(x >> bits, y >> bits, z >> bits, false);
-    if (!chunk || !chunk.voxels) return kUnknownBlock;
-    const mask = kChunkMask;
-    return chunk.voxels.get(x & mask, y & mask, z & mask) as BlockId;
+    return chunk ? chunk.getBlock(x, y, z) : kUnknownBlock;
   }
 
   setBlock(x: int, y: int, z: int, block: BlockId) {
     const bits = kChunkBits;
     const chunk = this.getChunk(x >> bits, y >> bits, z >> bits, false);
-    if (!chunk || !chunk.voxels) return;
-
-    const mask = kChunkMask;
-    const old = chunk.voxels.get(x & mask, y & mask, z & mask) as BlockId;
-    if (old === block) return;
-
-    const old_mesh = this.registry._meshes[old];
-    const new_mesh = this.registry._meshes[block];
-    if (old_mesh) this.sprites.remove(x, y, z, old);
-    if (new_mesh) this.sprites.add(x, y, z, block, new_mesh);
-
-    chunk.voxels.set(x & mask, y & mask, z & mask, block);
-    chunk.dirty ||= !(old_mesh || old === 0) ||
-                    !(new_mesh || block === 0);
+    if (chunk) chunk.setBlock(x, y, z, block);
   }
 
   getChunk(cx: int, cy: int, cz: int, add: boolean): Chunk | null {
@@ -966,8 +1015,7 @@ class World {
     const result = this.chunks.get(key);
     if (result) return result;
     if (!add) return null;
-
-    const chunk = {dirty: true, loaded: false, sprites: false, mesh: null, voxels: null, cx, cy, cz};
+    const chunk = new Chunk(this, cx, cy, cz);
     this.chunks.set(key, chunk);
     return chunk;
   }
@@ -991,9 +1039,8 @@ class World {
     }
 
     for (const [key, chunk] of removed) {
-      if (chunk.mesh) chunk.mesh.dispose();
-      if (chunk.sprites) this.remeshSprites(chunk, false);
       this.chunks.delete(key);
+      chunk.dispose();
     }
 
     const result = [];
@@ -1002,24 +1049,23 @@ class World {
         for (let k = dz - kChunkRadiusX; k <= dz + kChunkRadiusX; k++) {
           if (this.distance(i, j, k, x, y, z) > lo) continue;
           const chunk = this.getChunk(i, j, k, true);
-          if (chunk && !chunk.loaded) result.push(chunk);
+          if (chunk && !chunk.requested) result.push(chunk);
+          if (result.length === kNumChunksToLoadPerFrame) break;
         }
       }
     }
+
+    for (const chunk of result) chunk.requested = true;
+
     return result;
   }
 
   remesh() {
     for (const chunk of this.chunks.values()) {
       if (!chunk.dirty || !chunk.voxels) continue;
-
-      if (!chunk.sprites) {
-        this.remeshSprites(chunk, true);
-        chunk.sprites = true;
-      }
-
       if (chunk.mesh) chunk.mesh.dispose();
       chunk.mesh = this.mesher.mesh(chunk.voxels);
+
       if (chunk.mesh) {
         const {cx, cy, cz, mesh} = chunk;
         mesh.position.copyFromFloats(
@@ -1039,25 +1085,6 @@ class World {
     const j = (cy << kChunkBits) + half - y;
     const k = (cz << kChunkBits) + half - z;
     return i * i + j * j + k * k;
-  }
-
-  private remeshSprites(chunk: Chunk, add: boolean) {
-    const voxels = nonnull(chunk.voxels);
-    const dx = chunk.cx << kChunkBits;
-    const dy = chunk.cy << kChunkBits;
-    const dz = chunk.cz << kChunkBits;
-
-    for (let x = 0; x < kChunkSize; x++) {
-      for (let y = 0; y < kChunkSize; y++) {
-        for (let z = 0; z < kChunkSize; z++) {
-          const cell = voxels.get(x, y, z) as BlockId;
-          const mesh = this.registry._meshes[cell];
-          if (!mesh) continue;
-          add ? this.sprites.add(x + dx, y + dy, z + dz, cell, mesh)
-              : this.sprites.remove(x + dx, y + dy, z + dz, cell);
-        }
-      }
-    }
   }
 };
 
@@ -1534,9 +1561,7 @@ const CameraTarget = (env: TypedEnv): Component => ({
 
 // RecenterWorld signifies that we'll load the world around an entity.
 
-const kNumChunksToLoad = 1;
-
-let loadChunkData = (chunk: Chunk): Tensor3 | null => null;
+let loadChunkData = (chunk: Chunk) => {};
 
 const RecenterWorld = (env: TypedEnv): Component => ({
   init: () => ({id: kNoEntity, index: 0}),
@@ -1544,13 +1569,7 @@ const RecenterWorld = (env: TypedEnv): Component => ({
     for (const state of states) {
       const position = env.position.getX(state.id);
       const chunks = env.world.recenter(position.x, position.y, position.z);
-      let remainder = kNumChunksToLoad;
-      for (const chunk of chunks) {
-        chunk.loaded = true;
-        chunk.voxels = loadChunkData(chunk);
-        if (chunk.voxels) remainder--;
-        if (!remainder) return;
-      }
+      for (const chunk of chunks) loadChunkData(chunk);
       break;
     }
   },
@@ -1561,7 +1580,7 @@ const RecenterWorld = (env: TypedEnv): Component => ({
 const main = () => {
   const env = new TypedEnv('container');
   const sprite = (x: string) => env.renderer.makeSprite(`images/${x}.png`);
-  env.renderer.startInstrumentation();
+  //env.renderer.startInstrumentation();
 
   const player = env.entities.addEntity();
   const position = env.position.add(player);
@@ -1595,43 +1614,42 @@ const main = () => {
   const tree0 = registry.addBlockSprite(sprite('tree0'), true);
   const tree1 = registry.addBlockSprite(sprite('tree1'), true);
 
-  loadChunkData = (chunk: Chunk): Tensor3 | null => {
+  loadChunkData = (chunk: Chunk) => {
     if (chunk.cx < 0 || chunk.cz < 0) return null;
     if (chunk.cy !== 0) return null;
+    chunk.loaded = true;
 
     const size = kChunkSize;
-    const voxels = new Tensor3(size, size, size);
-    console.log(`Loading chunk: (${chunk.cx}, ${chunk.cy}, ${chunk.cz})`);
-
     const pl = size / 4;
     const pr = 3 * size / 4;
     const layers = [ground, ground, grass, wall, tree0, tree1];
+    const dx = chunk.cx << kChunkBits;
+    const dy = chunk.cy << kChunkBits;
+    const dz = chunk.cz << kChunkBits;
+
     for (let x = 0; x < size; x++) {
       for (let z = 0; z < size; z++) {
         const edge = (chunk.cx === 0 && x === 0) ||
                      (chunk.cz === 0 && z === 0);
         const height = Math.min(edge ? layers.length : 3, size);
         for (let y = 0; y < height; y++) {
-          assert(voxels.get(x, y, z) === 0);
-          voxels.set(x, y, z, layers[y]);
+          chunk.setBlock(x + dx, y + dy, z + dz, layers[y]);
         }
         if (edge) continue;
         const test = Math.random();
         const limit = 0.05;
         if (test < 1 * limit) {
-          voxels.set(x, 3, z, rock);
+          chunk.setBlock(x + dx, 3 + dy, z + dz, rock);
         } else if (test < 2 * limit) {
-          voxels.set(x, 3, z, tree);
+          chunk.setBlock(x + dx, 3 + dy, z + dz, tree);
         } else if (test < 3 * limit) {
-          voxels.set(x, 3, z, wall);
+          chunk.setBlock(x + dx, 3 + dy, z + dz, wall);
         } else if (test < 4 * limit) {
-          voxels.set(x, 3, z, tree0);
-          voxels.set(x, 4, z, tree1);
+          chunk.setBlock(x + dx, 3 + dy, z + dz, tree0);
+          chunk.setBlock(x + dx, 4 + dy, z + dz, tree1);
         }
       }
     }
-
-    return voxels;
   };
 
   env.refresh();
