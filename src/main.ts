@@ -482,11 +482,15 @@ class TerrainMesher {
   flatMaterial: BABYLON.Material;
   registry: Registry;
   requests: int;
+  world: World;
 
-  constructor(registry: Registry, renderer: Renderer) {
+  constructor(world: World) {
+    const registry = world.registry;
+    const renderer = world.renderer;
     this.flatMaterial = renderer.makeStandardMaterial('flat-material');
     this.registry = registry;
     this.requests = 0;
+    this.world = world;
 
     const shim = {
       registry: {
@@ -510,7 +514,7 @@ class TerrainMesher {
     this.mesher = new NoaTerrainMesher(shim);
   }
 
-  mesh(voxels: Tensor3): BABYLON.Mesh | null {
+  mesh(cx: int, cy: int, cz: int, voxels: Tensor3): BABYLON.Mesh | null {
     const requestID = this.requests++;
     const meshes: BABYLON.Mesh[] = [];
     const chunk = {
@@ -521,8 +525,7 @@ class TerrainMesher {
       _isEmpty: false,
       _terrainMeshes: meshes,
       _neighbors: {get: (x: int, y: int, z: int) => {
-        const self = x === 0 && y === 0 && z === 0;
-        return self ? {voxels} : null;
+        return this.world.getChunk(cx + x, cy + y, cz + z, false);
       }},
     };
 
@@ -911,7 +914,8 @@ assert((1 << kSpriteKeyBits) > (kChunkSize * (2 * kChunkRadiusY + 1)));
 
 class Chunk {
   world: World;
-  dirty: boolean;
+  bodyDirty: boolean;
+  edgeDirty: boolean;
   mesh: BABYLON.Mesh | null;
   voxels: Tensor3 | null;
   requested: boolean;
@@ -923,7 +927,8 @@ class Chunk {
 
   constructor(world: World, cx: int, cy: int, cz: int) {
     this.world = world;
-    this.dirty = false;
+    this.bodyDirty = false;
+    this.edgeDirty = false;
     this.mesh = null;
     this.voxels = null;
     this.requested = false;
@@ -956,6 +961,20 @@ class Chunk {
     }
   }
 
+  finish() {
+    this.loaded = true;
+    if (!this.voxels) return;
+
+    const {cx, cy, cz} = this;
+    const neighbor = (x: int, y: int, z: int) => {
+      const chunk = this.world.getChunk(cx + x, cy + y, cz + z, false);
+      if (chunk) chunk.edgeDirty = true;
+    };
+    neighbor(1, 0, 0); neighbor(-1, 0, 0);
+    neighbor(0, 1, 0); neighbor(0, -1, 0);
+    neighbor(0, 0, 1); neighbor(0, 0, -1);
+  }
+
   getBlock(x: int, y: int, z: int): BlockId {
     const mask = kChunkMask;
     if (!this.voxels) return this.loaded ? kEmptyBlock : kUnknownBlock;
@@ -976,24 +995,24 @@ class Chunk {
     this.sprites += (new_mesh ? 1 : 0) - (old_mesh ? 1 : 0);
 
     this.voxels.set(x & mask, y & mask, z & mask, block);
-    this.dirty ||= !(old_mesh || old === 0) ||
-                   !(new_mesh || block === 0);
+    this.bodyDirty ||= !(old_mesh || old === 0) ||
+                       !(new_mesh || block === 0);
   }
 };
 
 class World {
   chunks: Map<int, Chunk>;
-  mesher: TerrainMesher;
-  sprites: TerrainSprites;
   renderer: Renderer;
   registry: Registry;
+  mesher: TerrainMesher;
+  sprites: TerrainSprites;
 
   constructor(registry: Registry, renderer: Renderer) {
     this.chunks = new Map();
-    this.mesher = new TerrainMesher(registry, renderer);
-    this.sprites = new TerrainSprites(renderer);
     this.renderer = renderer;
     this.registry = registry;
+    this.mesher = new TerrainMesher(this);
+    this.sprites = new TerrainSprites(renderer);
   }
 
   getBlock(x: int, y: int, z: int): BlockId {
@@ -1048,26 +1067,35 @@ class World {
       for (let j = dy - kChunkRadiusY; j <= dy + kChunkRadiusY; j++) {
         for (let k = dz - kChunkRadiusX; k <= dz + kChunkRadiusX; k++) {
           if (this.distance(i, j, k, x, y, z) > lo) continue;
-          const chunk = this.getChunk(i, j, k, true);
-          if (chunk && !chunk.requested) result.push(chunk);
+          const chunk = nonnull(this.getChunk(i, j, k, true));
+          if (chunk.requested) continue;
+          result.push(chunk);
+          chunk.requested = true;
           if (result.length === kNumChunksToLoadPerFrame) break;
         }
       }
     }
-
-    for (const chunk of result) chunk.requested = true;
-
     return result;
   }
 
   remesh() {
+    const queued = [];
     for (const chunk of this.chunks.values()) {
-      if (!chunk.dirty || !chunk.voxels) continue;
-      if (chunk.mesh) chunk.mesh.dispose();
-      chunk.mesh = this.mesher.mesh(chunk.voxels);
+      if (chunk.bodyDirty && chunk.voxels) queued.push(chunk);
+      if (queued.length === kNumChunksToMeshPerFrame) break;
+    }
+    if (queued.length < kNumChunksToMeshPerFrame) {
+      for (const chunk of this.chunks.values()) {
+        if (chunk.edgeDirty && chunk.voxels) queued.push(chunk);
+        if (queued.length === kNumChunksToMeshPerFrame) break;
+      }
+    }
 
-      if (chunk.mesh) {
-        const {cx, cy, cz, mesh} = chunk;
+    for (const chunk of queued) {
+      if (chunk.mesh) chunk.mesh.dispose();
+      const {cx, cy, cz, voxels} = chunk;
+      const mesh = voxels ? this.mesher.mesh(cx, cy, cz, voxels) : null;
+      if (mesh) {
         mesh.position.copyFromFloats(
           cx << kChunkBits, cy << kChunkBits, cz << kChunkBits);
         mesh.cullingStrategy = BABYLON.AbstractMesh.CULLINGSTRATEGY_STANDARD;
@@ -1075,7 +1103,9 @@ class World {
         mesh.freezeWorldMatrix();
         mesh.freezeNormals();
       }
-      chunk.dirty = false;
+      chunk.edgeDirty = false;
+      chunk.bodyDirty = false;
+      chunk.mesh = mesh;
     }
   }
 
@@ -1617,7 +1647,6 @@ const main = () => {
   loadChunkData = (chunk: Chunk) => {
     if (chunk.cx < 0 || chunk.cz < 0) return null;
     if (chunk.cy !== 0) return null;
-    chunk.loaded = true;
 
     const size = kChunkSize;
     const pl = size / 4;
@@ -1650,6 +1679,7 @@ const main = () => {
         }
       }
     }
+    chunk.finish();
   };
 
   env.refresh();
