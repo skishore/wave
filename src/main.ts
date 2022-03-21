@@ -488,6 +488,7 @@ class TerrainMesher {
     const registry = world.registry;
     const renderer = world.renderer;
     this.flatMaterial = renderer.makeStandardMaterial('flat-material');
+    this.flatMaterial.freeze();
     this.registry = registry;
     this.requests = 0;
     this.world = world;
@@ -799,6 +800,8 @@ class TerrainSprites {
       mesh.doNotSyncBoundingInfo = true;
       mesh.freezeWorldMatrix();
       mesh.thinInstanceSetBuffer('matrix', buffer);
+      mesh.setVerticesData('position', kTmpBillboard, true);
+      if (mesh.material) mesh.material.freeze();
     }
 
     const key = this.key(x, y, z);
@@ -844,7 +847,16 @@ class TerrainSprites {
     data.dirty = true;
   }
 
-  update(heading: number) {
+  registerBillboard(mesh: BABYLON.Mesh) {
+    this.billboards.push(mesh);
+    mesh.setVerticesData('position', kTmpBillboard, true);
+  }
+
+  unregisterBillboard(mesh: BABYLON.Mesh) {
+    drop(this.billboards, mesh);
+  }
+
+  updateBillboards(heading: number) {
     const cos = kSpriteRadius * Math.cos(heading);
     const sin = kSpriteRadius * Math.sin(heading);
 
@@ -854,12 +866,14 @@ class TerrainSprites {
     kTmpBillboard[5] = kTmpBillboard[8]  = -sin;
 
     for (const mesh of this.billboards) {
-      mesh.setVerticesData('position', kTmpBillboard);
+      const geo = mesh.geometry;
+      if (geo) geo.updateVerticesDataDirectly('position', kTmpBillboard, 0);
     }
 
     for (const data of this.kinds.values()) {
       if (data.size !== 0) {
-        data.mesh.setVerticesData('position', kTmpBillboard);
+        const geo = data.mesh.geometry;
+        if (geo) geo.updateVerticesDataDirectly('position', kTmpBillboard, 0);
       }
       if (!data.dirty) continue;
       data.mesh.thinInstanceCount = data.size;
@@ -1221,7 +1235,7 @@ class Env {
     camera.applyInputs(deltas.x, deltas.y, deltas.scroll);
     deltas.x = deltas.y = deltas.scroll = 0;
 
-    this.world.sprites.update(camera.heading);
+    this.world.sprites.updateBillboards(camera.heading);
     this.entities.render(dt);
     this.renderer.render();
   }
@@ -1528,9 +1542,9 @@ interface MeshState {
 const setMesh = (env: TypedEnv, state: MeshState, mesh: BABYLON.Mesh) => {
   if (state.mesh) state.mesh.dispose();
 
-  const billboards = env.world.sprites.billboards;
-  mesh.onDisposeObservable.add(() => drop(billboards, mesh));
-  billboards.push(mesh);
+  const sprites = env.world.sprites;
+  mesh.onDisposeObservable.add(() => sprites.unregisterBillboard(mesh));
+  sprites.registerBillboard(mesh);
 
   const texture = (() => {
     const material = mesh.material;
@@ -1597,6 +1611,7 @@ const Shadow = (env: TypedEnv): Component<ShadowState> => {
   material.ambientColor.copyFromFloats(0, 0, 0);
   material.diffuseColor.copyFromFloats(0, 0, 0);
   material.alpha = 0.5;
+  material.freeze();
 
   const scene = env.renderer.scene;
   const option = {radius: 1, tessellation: 16};
