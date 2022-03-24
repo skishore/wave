@@ -1688,6 +1688,70 @@ const RecenterWorld = (env: TypedEnv): Component => ({
   },
 });
 
+// Perlin noise implementation:
+
+const perlin2D = () => {
+  const getPermutation = (x: int): int[] => {
+    const result = [];
+    for (let i = 0; i < x; i++) {
+      result.push(i);
+      const idx = Math.floor(Math.random() * result.length);
+      result[result.length - 1] = result[idx];
+      result[idx] = i;
+    }
+    return result;
+  };
+
+  const count = 256;
+  const table = getPermutation(count);
+  table.slice().forEach(x => table.push(x));
+
+  const gradients: [int, int][] = [];
+  for (let i = 0; i < count; i++) {
+    const angle = 2 * Math.PI * i / count;
+    gradients.push([Math.cos(angle), Math.sin(angle)]);
+  }
+
+  const dot = (gradient: [int, int], x: number, y: number) => {
+    return gradient[0] * x + gradient[1] * y;
+  };
+
+  const fade = (x: number): number => {
+    return x * x * x * (x * (x * 6 - 15) + 10);
+  };
+
+  const lerp = (x: number, a: number, b: number): number => {
+    return a + x * (b - a);
+  };
+
+  const noise = (x: number, y: number): number => {
+    let ix = Math.floor(x);
+    let iy = Math.floor(y);
+    x -= ix;
+    y -= iy;
+    ix &= 255;
+    iy &= 255;
+
+    const g00 = table[ix +     table[iy    ]];
+    const g10 = table[ix + 1 + table[iy    ]];
+    const g01 = table[ix +     table[iy + 1]];
+    const g11 = table[ix + 1 + table[iy + 1]];
+
+    const n00 = dot(gradients[g00], x,     y    );
+    const n10 = dot(gradients[g10], x - 1, y    );
+    const n01 = dot(gradients[g01], x,     y - 1);
+    const n11 = dot(gradients[g11], x - 1, y - 1);
+
+    const fx = fade(x);
+    const fy = fade(y);
+    const y1 = lerp(fx, n00, n10);
+    const y2 = lerp(fx, n01, n11);
+    return lerp(fy, y1, y2);
+  };
+
+  return noise;
+};
+
 // Putting it all together:
 
 const main = () => {
@@ -1698,7 +1762,7 @@ const main = () => {
   const player = env.entities.addEntity();
   const position = env.position.add(player);
   position.x = 2;
-  position.y = 5;
+  position.y = 12;
   position.z = 2;
   position.w = 0.6;
   position.h = 0.8;
@@ -1727,38 +1791,32 @@ const main = () => {
   const tree0 = registry.addBlockSprite(sprite('tree0'), true);
   const tree1 = registry.addBlockSprite(sprite('tree1'), true);
 
-  loadChunkData = (chunk: Chunk) => {
-    if (chunk.cx < 0 || chunk.cz < 0) return null;
-    if (chunk.cy !== 0) return null;
+  const noise0 = perlin2D();
+  const noise1 = perlin2D();
 
+  loadChunkData = (chunk: Chunk) => {
     const size = kChunkSize;
     const pl = size / 4;
     const pr = 3 * size / 4;
-    const layers = [ground, ground, grass, wall, tree0, tree1];
+    const layers = [wall, wall, wall, wall, ground, ground];
     const dx = chunk.cx << kChunkBits;
     const dy = chunk.cy << kChunkBits;
     const dz = chunk.cz << kChunkBits;
 
     for (let x = 0; x < size; x++) {
       for (let z = 0; z < size; z++) {
-        const edge = (chunk.cx === 0 && x === 0) ||
-                     (chunk.cz === 0 && z === 0);
-        const height = Math.min(edge ? layers.length : 3, size);
+        const edge = (x === 0) || (z === 0);
+        const fx = (x + 0.5) / kChunkSize + chunk.cx;
+        const fz = (z + 0.5) / kChunkSize + chunk.cz;
+        const height = Math.max(Math.floor(6 * (noise0(fx, fz) + 1)), 0) + 1;
+        const cutoff = height - layers.length;
+        const plants = cutoff > 0 && ((((noise1(fx, fz) + 1) * (1 << 16)) | 0) % 17) < cutoff;
         for (let y = 0; y < height; y++) {
-          chunk.setBlock(x + dx, y + dy, z + dz, layers[y]);
+          const tile = y < layers.length ? layers[y] : grass;
+          chunk.setBlock(x + dx, y + dy, z + dz, tile);
         }
-        if (edge) continue;
-        const test = Math.random();
-        const limit = 0.05;
-        if (test < 1 * limit) {
-          chunk.setBlock(x + dx, 3 + dy, z + dz, rock);
-        } else if (test < 2 * limit) {
-          chunk.setBlock(x + dx, 3 + dy, z + dz, tree);
-        } else if (test < 3 * limit) {
-          chunk.setBlock(x + dx, 3 + dy, z + dz, wall);
-        } else if (test < 4 * limit) {
-          chunk.setBlock(x + dx, 3 + dy, z + dz, tree0);
-          chunk.setBlock(x + dx, 4 + dy, z + dz, tree1);
+        if (plants) {
+          chunk.setBlock(x + dx, height + dy, z + dz, tree);
         }
       }
     }
