@@ -420,7 +420,7 @@ class Renderer {
     const scene = this.scene;
     const mode = BABYLON.Texture.NEAREST_SAMPLINGMODE;
     const wrap = BABYLON.Texture.CLAMP_ADDRESSMODE;
-    const texture = new BABYLON.Texture(url, scene, true, true, mode);
+    const texture = new BABYLON.Texture(url, scene, false, true, mode);
     texture.wrapU = texture.wrapV = wrap;
     texture.hasAlpha = true;
 
