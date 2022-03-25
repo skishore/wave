@@ -1156,28 +1156,43 @@ class World {
     const disabled = [];
     for (const chunk of this.enabled) {
       const {cx, cy, cz} = chunk;
-      const disable = Math.abs(cx - dx) > kChunkRadiusX + 1 ||
-                      Math.abs(cy - dy) > kChunkRadiusY + 1 ||
-                      Math.abs(cz - dz) > kChunkRadiusX + 1 ||
+      const ax = Math.abs(cx - dx);
+      const ay = Math.abs(cy - dy);
+      const az = Math.abs(cz - dz);
+      if (ax + ay + az <= 1) continue;
+      const disable = ax > kChunkRadiusX + 1 ||
+                      ay > kChunkRadiusY + 1 ||
+                      az > kChunkRadiusX + 1 ||
                       this.distance(cx, cy, cz, x, y, z) > hi;
       if (disable) disabled.push(chunk);
     }
     for (const chunk of disabled) chunk.disable();
 
-    const result = [];
+    const requests: [Chunk, number][] = [];
     for (let i = dx - kChunkRadiusX; i <= dx + kChunkRadiusX; i++) {
+      const ax = Math.abs(i - dx);
       for (let j = dy - kChunkRadiusY; j <= dy + kChunkRadiusY; j++) {
+        const ay = Math.abs(j - dy);
         for (let k = dz - kChunkRadiusX; k <= dz + kChunkRadiusX; k++) {
-          if (this.distance(i, j, k, x, y, z) > lo) continue;
+          const az = Math.abs(k - dz);
+          const distance = this.distance(i, j, k, x, y, z);
+          if (ax + ay + az > 1 && distance > lo) continue;
           const chunk = nonnull(this.getChunk(i, j, k, true));
+          if (!chunk.requested) requests.push([chunk, distance]);
           chunk.enable();
-
-          if (chunk.requested) continue;
-          result.push(chunk);
-          chunk.requested = true;
-          if (result.length === kNumChunksToLoadPerFrame) break;
         }
       }
+    }
+
+    if (!requests.length) return [];
+
+    const result = [];
+    const n = Math.min(requests.length, kNumChunksToLoadPerFrame);
+    requests.sort((x, y) => x[1] - y[1]);
+    for (let i = 0; i < n; i++) {
+      const chunk = requests[i][0];
+      chunk.requested = true;
+      result.push(chunk);
     }
     return result;
   }
