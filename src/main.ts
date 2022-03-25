@@ -916,17 +916,15 @@ const kChunkKeyBits = 8;
 const kChunkKeySize = 1 << kChunkKeyBits;
 const kChunkKeyMask = kChunkKeySize - 1;
 
-const kChunkRadiusX = 8;
-const kChunkRadiusY = 0;
-const kNeighbors = (kChunkRadiusX ? 4 : 0) + (kChunkRadiusY ? 2 : 0);
+const kChunkRadius = 8;
+const kNeighbors = (kChunkRadius ? 6 : 0);
 
 const kNumChunksToLoadPerFrame = 1;
 const kNumChunksToMeshPerFrame = 1;
 
 // These conditions ensure that we'll dispose of a sprite before allocating
 // a new sprite at a key that collides with the old one.
-assert((1 << kSpriteKeyBits) > (kChunkSize * (2 * kChunkRadiusX + 1)));
-assert((1 << kSpriteKeyBits) > (kChunkSize * (2 * kChunkRadiusY + 1)));
+assert((1 << kSpriteKeyBits) > (kChunkSize * (2 * kChunkRadius + 1)));
 
 class Chunk {
   world: World;
@@ -939,6 +937,7 @@ class Chunk {
   terrainDirty: boolean;
   mesh: BABYLON.Mesh | null;
   voxels: Tensor3 | null;
+  distance: number;
   cx: int;
   cy: int;
   cz: int;
@@ -954,6 +953,7 @@ class Chunk {
     this.terrainDirty = true;
     this.mesh = null;
     this.voxels = null;
+    this.distance = 0;
     this.cx = cx;
     this.cy = cy;
     this.cz = cz;
@@ -977,6 +977,11 @@ class Chunk {
     this.world.enabled.add(this);
     this.enabled = true;
     this.active = this.checkActive();
+  }
+
+  init() {
+    assert(!this.voxels);
+    this.voxels = new Tensor3(kChunkSize, kChunkSize, kChunkSize);
   }
 
   finish() {
@@ -1004,18 +1009,16 @@ class Chunk {
 
   getBlock(x: int, y: int, z: int): BlockId {
     const mask = kChunkMask;
-    if (!this.voxels) return kUnknownBlock;
+    if (!this.voxels) return kEmptyBlock;
     return this.voxels.get(x & mask, y & mask, z & mask) as BlockId;
   }
 
   setBlock(x: int, y: int, z: int, block: BlockId) {
-    const size = kChunkSize;
-    if (!this.voxels) this.voxels = new Tensor3(size, size, size);
-
     const xm = x & kChunkMask;
     const ym = y & kChunkMask;
     const zm = z & kChunkMask;
-    const old = this.voxels.get(xm, ym, zm) as BlockId;
+    const voxels = nonnull(this.voxels);
+    const old = voxels.get(xm, ym, zm) as BlockId;
     if (old === block) return;
 
     const old_mesh = this.world.registry._meshes[old];
@@ -1025,7 +1028,7 @@ class Chunk {
       if (new_mesh) this.world.sprites.add(x, y, z, block, new_mesh);
     }
 
-    this.voxels.set(xm, ym, zm, block);
+    voxels.set(xm, ym, zm, block);
     if (old_mesh && new_mesh) return;
 
     this.terrainDirty = true;
@@ -1124,7 +1127,7 @@ class World {
   getBlock(x: int, y: int, z: int): BlockId {
     const bits = kChunkBits;
     const chunk = this.getChunk(x >> bits, y >> bits, z >> bits, false);
-    return chunk && chunk.active ? chunk.getBlock(x, y, z) : kUnknownBlock;
+    return chunk && chunk.finished ? chunk.getBlock(x, y, z) : kUnknownBlock;
   }
 
   setBlock(x: int, y: int, z: int, block: BlockId) {
@@ -1150,8 +1153,9 @@ class World {
     const dy = (y >> kChunkBits);
     const dz = (z >> kChunkBits);
 
-    const lo = (kChunkRadiusX * kChunkRadiusX + 1) * kChunkSize * kChunkSize;
-    const hi = (kChunkRadiusX * kChunkRadiusX + 9) * kChunkSize * kChunkSize;
+    const lo = (kChunkRadius * kChunkRadius + 1) * kChunkSize * kChunkSize;
+    const hi = (kChunkRadius * kChunkRadius + 9) * kChunkSize * kChunkSize;
+    const limit = kChunkRadius + 1;
 
     const disabled = [];
     for (const chunk of this.enabled) {
@@ -1160,40 +1164,36 @@ class World {
       const ay = Math.abs(cy - dy);
       const az = Math.abs(cz - dz);
       if (ax + ay + az <= 1) continue;
-      const disable = ax > kChunkRadiusX + 1 ||
-                      ay > kChunkRadiusY + 1 ||
-                      az > kChunkRadiusX + 1 ||
+      const disable = ax > limit || ay > limit || az > limit ||
                       this.distance(cx, cy, cz, x, y, z) > hi;
       if (disable) disabled.push(chunk);
     }
     for (const chunk of disabled) chunk.disable();
 
-    const requests: [Chunk, number][] = [];
-    for (let i = dx - kChunkRadiusX; i <= dx + kChunkRadiusX; i++) {
+    const requests = [];
+    for (let i = dx - kChunkRadius; i <= dx + kChunkRadius; i++) {
       const ax = Math.abs(i - dx);
-      for (let j = dy - kChunkRadiusY; j <= dy + kChunkRadiusY; j++) {
+      for (let j = dy - kChunkRadius; j <= dy + kChunkRadius; j++) {
         const ay = Math.abs(j - dy);
-        for (let k = dz - kChunkRadiusX; k <= dz + kChunkRadiusX; k++) {
+        for (let k = dz - kChunkRadius; k <= dz + kChunkRadius; k++) {
           const az = Math.abs(k - dz);
           const distance = this.distance(i, j, k, x, y, z);
           if (ax + ay + az > 1 && distance > lo) continue;
           const chunk = nonnull(this.getChunk(i, j, k, true));
-          if (!chunk.requested) requests.push([chunk, distance]);
+          if (!chunk.requested) requests.push(chunk);
+          chunk.distance = distance;
           chunk.enable();
         }
       }
     }
 
-    if (!requests.length) return [];
-
-    const result = [];
-    const n = Math.min(requests.length, kNumChunksToLoadPerFrame);
-    requests.sort((x, y) => x[1] - y[1]);
-    for (let i = 0; i < n; i++) {
-      const chunk = requests[i][0];
-      chunk.requested = true;
-      result.push(chunk);
+    const n = kNumChunksToLoadPerFrame;
+    let result = requests;
+    if (requests.length > n) {
+      requests.sort((x, y) => x.distance - y.distance);
+      result = requests.slice(0, n);
     }
+    result.forEach(x => x.requested = true);
     return result;
   }
 
@@ -1201,9 +1201,11 @@ class World {
     const queued = [];
     for (const chunk of this.chunks.values()) {
       if (chunk.needsRemesh()) queued.push(chunk);
-      if (queued.length === kNumChunksToMeshPerFrame) break;
     }
-    for (const chunk of queued) chunk.remesh();
+    const n = kNumChunksToMeshPerFrame;
+    const m = Math.min(queued.length, kNumChunksToMeshPerFrame);
+    if (queued.length > n) queued.sort((x, y) => x.distance - y.distance);
+    for (let i = 0; i < m; i++) queued[i].remesh();
   }
 
   private distance(cx: int, cy: int, cz: int, x: number, y: number, z: number) {
@@ -1798,6 +1800,7 @@ const main = () => {
     registry.addMaterialOfTexture(texture, `images/${texture}.png`);
   }
   const wall = registry.addBlock(['wall'], true);
+  const dirt = registry.addBlock(['dirt'], true);
   const grass = registry.addBlock(['grass', 'dirt', 'dirt'], true);
   const ground = registry.addBlock(['ground', 'dirt', 'dirt'], true);
 
@@ -1806,32 +1809,29 @@ const main = () => {
   const tree0 = registry.addBlockSprite(sprite('tree0'), true);
   const tree1 = registry.addBlockSprite(sprite('tree1'), true);
 
-  const noise0 = perlin2D();
-  const noise1 = perlin2D();
+  const noise = perlin2D();
 
   loadChunkData = (chunk: Chunk) => {
+    if (chunk.cy > 0) return;
+    chunk.init();
+
     const size = kChunkSize;
     const pl = size / 4;
     const pr = 3 * size / 4;
-    const layers = [wall, wall, wall, wall, ground, ground];
     const dx = chunk.cx << kChunkBits;
     const dy = chunk.cy << kChunkBits;
     const dz = chunk.cz << kChunkBits;
 
     for (let x = 0; x < size; x++) {
       for (let z = 0; z < size; z++) {
+        const fx = (x + dx) / 32;
+        const fz = (z + dz) / 32;
+        const height = 8 * noise(fx, fz);
         const edge = (x === 0) || (z === 0);
-        const fx = (x + 0.5) / kChunkSize + chunk.cx;
-        const fz = (z + 0.5) / kChunkSize + chunk.cz;
-        const height = Math.max(Math.floor(6 * (noise0(fx, fz) + 1)), 0) + 1;
-        const cutoff = height - layers.length;
-        const plants = cutoff > 0 && ((((noise1(fx, fz) + 1) * (1 << 16)) | 0) % 17) < cutoff;
-        for (let y = 0; y < height; y++) {
-          const tile = y < layers.length ? layers[y] : grass;
+        for (let y = 0; y < Math.min(height - dy, size); y++) {
+          const h = y + dy;
+          const tile = h < -1 ? wall : h < 0 ? dirt : h < 1 ? ground : grass;
           chunk.setBlock(x + dx, y + dy, z + dz, tile);
-        }
-        if (plants) {
-          chunk.setBlock(x + dx, height + dy, z + dz, tree);
         }
       }
     }
