@@ -1,5 +1,6 @@
 import {assert, drop, int, nonnull, Tensor3, Vec3} from './base.js';
-import {ECS} from './ecs.js';
+import {EntityComponentSystem} from './ecs.js';
+import {TerrainMesher} from './mesher.js';
 
 //////////////////////////////////////////////////////////////////////////////
 // The game engine:
@@ -278,7 +279,6 @@ class Camera {
 class Renderer {
   camera: Camera;
   engine: BABYLON.Engine;
-  light: BABYLON.Light;
   scene: BABYLON.Scene;
 
   constructor(container: Container) {
@@ -288,11 +288,8 @@ class Renderer {
     this.scene = new BABYLON.Scene(this.engine);
 
     const source = new BABYLON.Vector3(0.1, 1.0, 0.3);
-    this.light = new BABYLON.HemisphericLight('light', source, this.scene);
     this.scene.clearColor = new BABYLON.Color4(0.8, 0.9, 1.0);
     this.scene.ambientColor = new BABYLON.Color3(1, 1, 1);
-    this.light.diffuse = new BABYLON.Color3(1, 1, 1);
-    this.light.specular = new BABYLON.Color3(1, 1, 1);
 
     const scene = this.scene;
     scene.detachControl();
@@ -309,24 +306,16 @@ class Renderer {
     texture.hasAlpha = true;
 
     const material = new BABYLON.StandardMaterial(`material-${url}`, scene);
-    material.specularColor.copyFromFloats(0, 0, 0);
     material.emissiveColor.copyFromFloats(1, 1, 1);
     material.backFaceCulling = false;
     material.computeEffectOnlyOnce = true;
     material.diffuseTexture = texture;
+    material.disableLighting = true;
 
     const mesh = BABYLON.Mesh.CreatePlane(`block-${url}`, 1, scene);
     mesh.cullingStrategy = BABYLON.AbstractMesh.CULLINGSTRATEGY_STANDARD;
     mesh.material = material;
     return mesh;
-  }
-
-  makeStandardMaterial(name: string): BABYLON.StandardMaterial {
-    const result = new BABYLON.StandardMaterial(name, this.scene);
-    result.specularColor.copyFromFloats(0, 0, 0);
-    result.ambientColor.copyFromFloats(1, 1, 1);
-    result.diffuseColor.copyFromFloats(1, 1, 1);
-    return result;
   }
 
   render() {
@@ -355,70 +344,6 @@ activeMeshesEvaluationTime: ${perf.activeMeshesEvaluationTimeCounter.average}
                 renderTime: ${perf.renderTimeCounter.average}
       `.trim());
     });
-  }
-};
-
-//////////////////////////////////////////////////////////////////////////////
-
-declare const NoaTerrainMesher: any;
-
-class TerrainMesher {
-  mesher: any;
-  flatMaterial: BABYLON.Material;
-  registry: Registry;
-  requests: int;
-  world: World;
-
-  constructor(world: World) {
-    const registry = world.registry;
-    const renderer = world.renderer;
-    this.flatMaterial = renderer.makeStandardMaterial('flat-material');
-    this.flatMaterial.freeze();
-    this.registry = registry;
-    this.requests = 0;
-    this.world = world;
-
-    const shim = {
-      registry: {
-        _solidityLookup: registry._solid,
-        _opacityLookup: registry._opaque,
-        getBlockFaceMaterial: registry.getBlockFaceMaterial.bind(registry),
-        getMaterialData: (x: MaterialId) => registry.getMaterial(x),
-        getMaterialTexture: (x: MaterialId) => registry.getMaterial(x).texture,
-        _getMaterialVertexColor: (x: MaterialId) => registry.getMaterial(x).color,
-      },
-      rendering: {
-        useAO: true,
-        aoVals: [0.93, 0.8, 0.5],
-        revAoVal: 1.0,
-        flatMaterial: this.flatMaterial,
-        addMeshToScene: () => {},
-        makeStandardMaterial: renderer.makeStandardMaterial.bind(renderer),
-        getScene: () => renderer.scene,
-      },
-    };
-    this.mesher = new NoaTerrainMesher(shim);
-  }
-
-  mesh(cx: int, cy: int, cz: int, voxels: Tensor3): BABYLON.Mesh | null {
-    const requestID = this.requests++;
-    const meshes: BABYLON.Mesh[] = [];
-    const chunk = {
-      voxels,
-      requestID,
-      pos: null,
-      _isFull: false,
-      _isEmpty: false,
-      _terrainMeshes: meshes,
-      _neighbors: {get: (x: int, y: int, z: int) => {
-        const chunk = this.world.getChunk(x + cx, y + cy, z + cz, false);
-        return chunk && chunk.voxels ? chunk : null;
-      }},
-    };
-
-    this.mesher.meshChunk(chunk);
-    assert(meshes.length <= 1, () => `Unexpected: ${meshes.length} meshes`);
-    return meshes.length === 1 ? meshes[0] : null;
   }
 };
 
@@ -661,7 +586,7 @@ class TerrainSprites {
 
 //////////////////////////////////////////////////////////////////////////////
 
-const kChunkBits = 6;
+const kChunkBits = 4;
 const kChunkSize = 1 << kChunkBits;
 const kChunkMask = kChunkSize - 1;
 
@@ -669,7 +594,7 @@ const kChunkKeyBits = 8;
 const kChunkKeySize = 1 << kChunkKeyBits;
 const kChunkKeyMask = kChunkKeySize - 1;
 
-const kChunkRadius = 4;
+const kChunkRadius = 0;
 const kNeighbors = (kChunkRadius ? 6 : 0);
 
 const kNumChunksToLoadPerFrame = 1;
@@ -847,10 +772,11 @@ class Chunk {
   private refreshTerrain() {
     if (this.mesh) this.mesh.dispose();
     const {cx, cy, cz, voxels} = this;
-    const mesh = voxels ? this.world.mesher.mesh(cx, cy, cz, voxels) : null;
+    const mesh = voxels ? this.world.mesher.mesh(voxels) : null;
     if (mesh) {
       mesh.position.copyFromFloats(
         cx << kChunkBits, cy << kChunkBits, cz << kChunkBits);
+      mesh.position.addInPlaceFromFloats(1, 1, 1);
       mesh.cullingStrategy = BABYLON.AbstractMesh.CULLINGSTRATEGY_STANDARD;
       mesh.doNotSyncBoundingInfo = true;
       mesh.freezeWorldMatrix();
@@ -873,7 +799,7 @@ class World {
     this.enabled = new Set();
     this.renderer = renderer;
     this.registry = registry;
-    this.mesher = new TerrainMesher(this);
+    this.mesher = new TerrainMesher(registry, renderer.scene);
     this.sprites = new TerrainSprites(renderer);
   }
 
@@ -974,7 +900,7 @@ class World {
 
 class Env {
   container: Container;
-  entities: ECS;
+  entities: EntityComponentSystem;
   registry: Registry;
   renderer: Renderer;
   timing: Timing;
@@ -982,7 +908,7 @@ class Env {
 
   constructor(id: string) {
     this.container = new Container(id);
-    this.entities = new ECS();
+    this.entities = new EntityComponentSystem();
     this.registry = new Registry();
     this.renderer = new Renderer(this.container);
     this.timing = new Timing(this.render.bind(this), this.update.bind(this));

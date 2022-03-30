@@ -90,7 +90,7 @@ class ComponentStore<T extends ComponentState = ComponentState> {
   }
 };
 
-class ECS {
+class EntityComponentSystem {
   last: EntityId;
   components: Map<string, ComponentStore<any>>;
   onRenders: ComponentStore<any>[];
@@ -134,4 +134,4 @@ class ECS {
 
 //////////////////////////////////////////////////////////////////////////////
 
-export {Component, ComponentState, ComponentStore, ECS, EntityId, kNoEntity};
+export {Component, ComponentState, ComponentStore, EntityComponentSystem, EntityId, kNoEntity};

@@ -363,13 +363,12 @@ interface ShadowState {
 };
 
 const Shadow = (env: TypedEnv): Component<ShadowState> => {
-  const material = env.renderer.makeStandardMaterial('shadow-material');
-  material.ambientColor.copyFromFloats(0, 0, 0);
-  material.diffuseColor.copyFromFloats(0, 0, 0);
+  const scene = env.renderer.scene;
+  const material = new BABYLON.StandardMaterial('shadow-material', scene);
+  material.disableLighting = true;
   material.alpha = 0.5;
   material.freeze();
 
-  const scene = env.renderer.scene;
   const option = {radius: 1, tessellation: 16};
   const shadow = BABYLON.CreateDisc('shadow', option, scene);
   shadow.cullingStrategy = BABYLON.AbstractMesh.CULLINGSTRATEGY_STANDARD;
@@ -551,7 +550,19 @@ const main = () => {
   const noise = perlin2D();
 
   loadChunkData = (chunk: Chunk) => {
+    if (chunk.cx || chunk.cy || chunk.cz) return;
+    chunk.init();
+    for (let x = 1; x < kChunkSize - 1; x++) {
+      for (let z = 1; z < kChunkSize - 1; z++) {
+        if (4 < x && x < 12 && 4 < z && z < 12) continue;
+        chunk.setBlock(x, 1, z, wall);
+        chunk.setBlock(x, 2, z, wall);
+      }
+    }
+    return;
+
     if (chunk.cy > 0) return;
+
     chunk.init();
 
     const size = kChunkSize;
