@@ -19933,6 +19933,10 @@ declare module BABYLON {
          */
         checkReadyOnlyOnce: boolean;
         /**
+         * Specifies if shaders should only be computed once
+         */
+        computeEffectOnlyOnce: boolean;
+        /**
          * The state of the material
          */
         state: string;

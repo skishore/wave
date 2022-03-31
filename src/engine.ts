@@ -312,6 +312,7 @@ class Renderer {
     material.specularColor.copyFromFloats(0, 0, 0);
     material.emissiveColor.copyFromFloats(1, 1, 1);
     material.backFaceCulling = false;
+    material.computeEffectOnlyOnce = true;
     material.diffuseTexture = texture;
 
     const mesh = BABYLON.Mesh.CreatePlane(`block-${url}`, 1, scene);
