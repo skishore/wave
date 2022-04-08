@@ -21,11 +21,17 @@ const nonnull = <T>(x: T | null, message?: () => string): T => {
 
 //////////////////////////////////////////////////////////////////////////////
 
-type Vec3 = [number, number, number];
+interface Vec3 extends Float32Array {__type__: 'Vec3'};
 
 const Vec3 = {
-  create: (): Vec3 => [0, 0, 0],
-  from: (x: number, y: number, z: number): Vec3 => [x, y, z],
+  create: (): Vec3 => new Float32Array(3) as Vec3,
+  from: (x: number, y: number, z: number): Vec3 => {
+    const result = new Float32Array(3) as Vec3;
+    result[0] = x;
+    result[1] = y;
+    result[2] = z;
+    return result;
+  },
   copy: (d: Vec3, a: Vec3) => {
     d[0] = a[0];
     d[1] = a[1];
@@ -90,6 +96,113 @@ const Vec3 = {
   },
 };
 
+interface Mat4 extends Float32Array {__type__: 'Mat4'};
+
+const Mat4 = {
+  create: (): Mat4 => new Float32Array(16) as Mat4,
+  identity: (d: Mat4) => {
+    d[0]  = 1; d[1]  = 0; d[2]  = 0; d[3]  = 0;
+    d[4]  = 0; d[5]  = 1; d[6]  = 0; d[7]  = 0;
+    d[8]  = 0; d[9]  = 0; d[10] = 1; d[11] = 0;
+    d[12] = 0; d[13] = 0; d[14] = 0; d[15] = 1;
+  },
+  multiply: (d: Mat4, a: Mat4, b: Mat4) => {
+    const a00 = a[0];  const a01 = a[1];  const a02 = a[2];  const a03 = a[3];
+    const a10 = a[4];  const a11 = a[5];  const a12 = a[6];  const a13 = a[7];
+    const a20 = a[8];  const a21 = a[9];  const a22 = a[10]; const a23 = a[11];
+    const a30 = a[12]; const a31 = a[13]; const a32 = a[14]; const a33 = a[15];
+
+    let b0 = b[0]; let b1 = b[1]; let b2 = b[2]; let b3 = b[3];
+    d[0]  = b0 * a00 + b1 * a10 + b2 * a20 + b3 * a30;
+    d[1]  = b0 * a01 + b1 * a11 + b2 * a21 + b3 * a31;
+    d[2]  = b0 * a02 + b1 * a12 + b2 * a22 + b3 * a32;
+    d[3]  = b0 * a03 + b1 * a13 + b2 * a23 + b3 * a33;
+
+    b0 = b[4]; b1 = b[5]; b2 = b[6]; b3 = b[7];
+    d[4]  = b0 * a00 + b1 * a10 + b2 * a20 + b3 * a30;
+    d[5]  = b0 * a01 + b1 * a11 + b2 * a21 + b3 * a31;
+    d[6]  = b0 * a02 + b1 * a12 + b2 * a22 + b3 * a32;
+    d[7]  = b0 * a03 + b1 * a13 + b2 * a23 + b3 * a33;
+
+    b0 = b[8]; b1 = b[9]; b2 = b[10]; b3 = b[11];
+    d[8]  = b0 * a00 + b1 * a10 + b2 * a20 + b3 * a30;
+    d[9]  = b0 * a01 + b1 * a11 + b2 * a21 + b3 * a31;
+    d[10] = b0 * a02 + b1 * a12 + b2 * a22 + b3 * a32;
+    d[11] = b0 * a03 + b1 * a13 + b2 * a23 + b3 * a33;
+
+    b0 = b[12]; b1 = b[13]; b2 = b[14]; b3 = b[15];
+    d[12] = b0 * a00 + b1 * a10 + b2 * a20 + b3 * a30;
+    d[13] = b0 * a01 + b1 * a11 + b2 * a21 + b3 * a31;
+    d[14] = b0 * a02 + b1 * a12 + b2 * a22 + b3 * a32;
+    d[15] = b0 * a03 + b1 * a13 + b2 * a23 + b3 * a33;
+  },
+  multiplyVec3: (d: Vec3, a: Mat4, b: Vec3) => {
+    const b0 = b[0]; const b1 = b[1]; const b2 = b[2];
+    const w = a[3] * b0 + a[7] * b1 + a[11] * b2 + a[15];
+    if (w) {
+      const l = 1 / w;
+      const x = a[0] * b0 + a[4] * b1 + a[8]  * b2 + a[12];
+      const y = a[1] * b0 + a[5] * b1 + a[9]  * b2 + a[13];
+      const z = a[2] * b0 + a[6] * b1 + a[10] * b2 + a[14];
+      d[0] = x * l; d[1] = y * l; d[2] = z * l;
+    } else {
+      d[0] = 0; d[1] = 0; d[2] = 0;
+    }
+  },
+  perspective: (d: Mat4, fov: number, aspect: number,
+                near: number, far?: number) => {
+    const f = 1 / Math.tan(fov / 2);
+    const g = f / aspect;
+    let x = 1;
+    let y = -2 * near;
+    if (far) {
+      const n = 1 / (far - near);
+      x = (far + near) * n;
+      y = -(far * near * 2) * n;
+    }
+    d[0]  = g; d[1]  = 0; d[2]  = 0; d[3]  = 0;
+    d[4]  = 0; d[5]  = f; d[6]  = 0; d[7]  = 0;
+    d[8]  = 0; d[9]  = 0; d[10] = x; d[11] = 1;
+    d[12] = 0; d[13] = 0; d[14] = y; d[15] = 0;
+  },
+  view: (d: Mat4, pos: Vec3, dir: Vec3) => {
+    // Assumes dir is already normalized.
+    // Assumes that "up" is (0, 1, 0).
+    const p0 = pos[0]; const p1 = pos[1]; const p2 = pos[2];
+    const z0 = dir[0]; const z1 = dir[1]; const z2 = dir[2];
+
+    // x = normalize(cross(up, z));
+    let x0 = z2; let x1 = 0; let x2 = -z0;
+    let xl = Math.hypot(x0, x1, x2);
+    if (xl) {
+      xl = 1 / xl;
+      x0 *= xl; x1 *= xl; x2 *= xl;
+    } else {
+      x0 = 0; x1 = 0; x2 = 0;
+    }
+
+    // y = normalize(cross(dir, x));
+    let y0 = z1 * x2 - z2 * x1;
+    let y1 = z2 * x0 - z0 * x2;;
+    let y2 = z0 * x1 - z1 * x0;;
+    let yl = Math.hypot(y0, y1, y2);
+    if (yl) {
+      yl = 1 / yl;
+      y0 *= yl; y1 *= yl; y2 *= yl;
+    } else {
+      y0 = 0; y1 = 0; y2 = 0;
+    }
+
+    d[0] = x0; d[1] = y0; d[2]  = z0; d[3]  = 0;
+    d[4] = x1; d[5] = y1; d[6]  = z1; d[7]  = 0;
+    d[8] = x2; d[9] = y2; d[10] = z2; d[11] = 0;
+    d[12] = -(x0 * p0 + x1 * p1 + x2 * p2);
+    d[13] = -(y0 * p0 + y1 * p1 + y2 * p2);
+    d[14] = -(z0 * p0 + z1 * p1 + z2 * p2);
+    d[15] = 1;
+  },
+};
+
 class Tensor3 {
   data: Uint32Array;
   shape: [int, int, int];
@@ -116,4 +229,4 @@ class Tensor3 {
 
 //////////////////////////////////////////////////////////////////////////////
 
-export {assert, drop, int, nonnull, Tensor3, Vec3};
+export {assert, drop, int, nonnull, Mat4, Tensor3, Vec3};

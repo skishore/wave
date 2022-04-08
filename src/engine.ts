@@ -1,6 +1,330 @@
-import {assert, drop, int, nonnull, Tensor3, Vec3} from './base.js';
-import {EntityComponentSystem} from './ecs.js';
-import {TerrainMesher} from './mesher.js';
+import {assert, drop, int, nonnull, Mat4, Tensor3, Vec3} from './base.js';
+
+//////////////////////////////////////////////////////////////////////////////
+// The graphics engine:
+
+class Camera {
+  heading: number; // In radians: [0, 2π)
+  pitch: number;   // In radians: (-π/2, π/2)
+  zoom: number;
+  direction: Vec3;
+  position: Vec3;
+
+  // Used to smooth out mouse inputs.
+  private last_dx: number;
+  private last_dy: number;
+
+  // transform = projection * view is the overall model-view-projection.
+  private transform: Mat4;
+  private projection: Mat4;
+  private view: Mat4;
+
+  constructor(width: int, height: int) {
+    this.pitch = 0;
+    this.heading = 0;
+    this.zoom = 0;
+    this.direction = Vec3.from(0, 0, 1);
+    this.position = Vec3.create();
+
+    this.last_dx = 0;
+    this.last_dy = 0;
+
+    this.transform = Mat4.create();
+    this.projection = Mat4.create();
+    this.view = Mat4.create();
+
+    const aspect = height ? width / height : 1;
+    Mat4.perspective(this.projection, Math.PI / 4, aspect, 0.1);
+  }
+
+  applyInputs(dx: number, dy: number, dscroll: number) {
+    // Smooth out large mouse-move inputs.
+    const jerkx = Math.abs(dx) > 400 && Math.abs(dx / (this.last_dx || 1)) > 4;
+    const jerky = Math.abs(dy) > 400 && Math.abs(dy / (this.last_dy || 1)) > 4;
+    if (jerkx || jerky) {
+      const saved_x = this.last_dx;
+      const saved_y = this.last_dy;
+      this.last_dx = (dx + this.last_dx) / 2;
+      this.last_dy = (dy + this.last_dy) / 2;
+      dx = saved_x;
+      dy = saved_y;
+    } else {
+      this.last_dx = dx;
+      this.last_dy = dy;
+    }
+
+    let pitch = this.pitch;
+    let heading = this.heading;
+
+    // Overwatch uses the same constant values to do this conversion.
+    const conversion = 0.0066 * Math.PI / 180;
+    dx = dx * Constants.CAMERA_SENSITIVITY * conversion;
+    dy = dy * Constants.CAMERA_SENSITIVITY * conversion;
+
+    heading += dx;
+    const T = 2 * Math.PI;
+    while (this.heading < 0) this.heading += T;
+    while (this.heading > T) this.heading -= T;
+
+    const U = Math.PI / 2 - 0.01;
+    this.pitch = Math.max(-U, Math.min(U, this.pitch + dy));
+    this.heading = heading;
+
+    const dir = this.direction;
+    Vec3.set(dir, 0, 0, 1);
+    Vec3.rotateX(dir, dir, this.pitch);
+    Vec3.rotateY(dir, dir, this.heading);
+
+    // Scrolling is trivial to apply: add and clamp.
+    if (dscroll === 0) return;
+    this.zoom = Math.max(0, Math.min(10, this.zoom + Math.sign(dscroll)));
+  }
+
+  getTransform(): Mat4 {
+    Mat4.view(this.view, this.position, this.direction);
+    Mat4.multiply(this.transform, this.projection, this.view);
+    return this.transform;
+  }
+
+  setTarget(x: number, y: number, z: number) {
+    Vec3.set(this.position, x, y, z);
+    Vec3.scaleAndAdd(this.position, this.position, this.direction, -this.zoom);
+  }
+};
+
+//////////////////////////////////////////////////////////////////////////////
+
+interface GL extends WebGL2RenderingContext {};
+
+class Shader {
+  gl: GL;
+  program: WebGLProgram;
+  uniforms: WebGLActiveInfo[];
+  attributes: WebGLActiveInfo[];
+
+  constructor(gl: GL, source: string) {
+    this.gl = gl;
+    const parts = source.split('#split');
+    const vertex = this.compile(parts[0], gl.VERTEX_SHADER);
+    const fragment = this.compile(parts[1], gl.FRAGMENT_SHADER);
+    this.program = this.link(vertex, fragment);
+    this.uniforms = [];
+    this.attributes = [];
+
+    const program = this.program;
+    const uniforms = gl.getProgramParameter(program, gl.ACTIVE_UNIFORMS);
+    for (let i = 0; i < uniforms; i++) {
+      const info = gl.getActiveUniform(program, i);
+      if (!info || this.builtin(info.name)) continue;
+      this.uniforms.push(info);
+    }
+    const attributes = gl.getProgramParameter(program, gl.ACTIVE_ATTRIBUTES);
+    for (let i = 0; i < attributes; i++) {
+      const info = gl.getActiveAttrib(program, i);
+      if (!info || this.builtin(info.name)) continue;
+      this.attributes.push(info);
+    }
+  }
+
+  private builtin(name: string): boolean {
+    return name.startsWith('gl_') || name.startsWith('webgl_');
+  }
+
+  private compile(source: string, type: number): WebGLShader {
+    const gl = this.gl;
+    const result = nonnull(gl.createShader(type));
+    gl.shaderSource(result, `#version 300 es\n${source}`);
+    gl.compileShader(result);
+    if (!gl.getShaderParameter(result, gl.COMPILE_STATUS)) {
+      const info = gl.getShaderInfoLog(result);
+      gl.deleteShader(result);
+      throw new Error(`Unable to compile shader: ${info}`);
+    }
+    return result;
+  }
+
+  private link(vertex: WebGLShader, fragment: WebGLShader): WebGLProgram {
+    const gl = this.gl;
+    const result = nonnull(gl.createProgram());
+    gl.attachShader(result, vertex);
+    gl.attachShader(result, fragment);
+    gl.linkProgram(result);
+    if (!gl.getProgramParameter(result, gl.LINK_STATUS)) {
+      const info = gl.getProgramInfoLog(result);
+      gl.deleteProgram(result);
+      throw new Error(`Unable to link program: ${info}`);
+    }
+    return result;
+  }
+};
+
+//////////////////////////////////////////////////////////////////////////////
+
+const kShader = `
+  uniform mat4 u_transform;
+  in vec3 a_position;
+  in vec3 a_color;
+  out vec3 v_color;
+
+  void main() {
+    v_color = a_color;
+    gl_Position = u_transform * vec4(a_position, 1.0);
+  }
+#split
+  precision highp float;
+
+  in vec3 v_color;
+  out vec4 o_color;
+
+  void main() {
+    o_color = vec4(v_color, 1);
+  }
+`;
+
+interface Geometry {
+  positions: Float32Array;
+  colors: Float32Array;
+  indices: Uint32Array;
+};
+
+class Mesh {
+  gl: GL;
+  geo: Geometry;
+  vao: WebGLVertexArrayObject | null;
+  indices: WebGLBuffer | null;
+  buffers: WebGLBuffer[];
+  shader: Shader;
+
+  constructor(gl: GL, geo: Geometry, shader: Shader) {
+    this.gl = gl;
+    this.geo = geo;
+    this.vao = null;
+    this.indices = null;
+    this.buffers = [];
+    this.shader = shader;
+  }
+
+  draw() {
+    this.prepare();
+    const gl = this.gl;
+    gl.bindVertexArray(this.vao);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indices);
+    gl.drawElements(gl.TRIANGLES, this.geo.indices.length, gl.UNSIGNED_INT, 0);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
+    gl.bindVertexArray(null);
+  }
+
+  dispose() {
+    const gl = this.gl;
+    gl.deleteVertexArray(this.vao);
+    gl.deleteBuffer(this.indices);
+    for (const buffer of this.buffers) gl.deleteBuffer(buffer);
+    this.vao = null;
+    this.indices = null;
+    this.buffers.length = 0;
+  }
+
+  private prepare() {
+    if (this.vao) return;
+    const gl = this.gl;
+    const program = this.shader.program;
+    this.vao = nonnull(gl.createVertexArray());
+    gl.bindVertexArray(this.vao);
+    this.prepareAttribute('a_position', this.geo.positions, 3);
+    this.prepareAttribute('a_color', this.geo.colors, 3);
+    this.prepareIndices(this.geo.indices);
+    gl.bindVertexArray(null);
+  }
+
+  private prepareAttribute(name: string, data: Float32Array, size: int) {
+    const gl = this.gl;
+    const buffer = nonnull(gl.createBuffer());
+    const location = gl.getAttribLocation(this.shader.program, name);
+    if (location < 0) return;
+
+    gl.enableVertexAttribArray(location);
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+    gl.vertexAttribPointer(location, size, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, null);
+
+    this.buffers.push(buffer);
+  }
+
+  private prepareIndices(data: Uint32Array) {
+    const gl = this.gl;
+    const buffer = nonnull(gl.createBuffer());
+
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buffer);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, data, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
+
+    this.indices = buffer;
+  }
+};
+
+//////////////////////////////////////////////////////////////////////////////
+
+class Renderer {
+  camera: Camera;
+  gl: WebGL2RenderingContext;
+  location: WebGLUniformLocation;
+  shader: Shader;
+  mesh: Mesh;
+
+  constructor(canvas: HTMLCanvasElement) {
+    canvas.width = canvas.clientWidth;
+    canvas.height = canvas.clientHeight;
+    this.camera = new Camera(canvas.width, canvas.height);
+
+    const gl = nonnull(canvas.getContext('webgl2'));
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
+    this.gl = gl;
+
+    const shader = new Shader(gl, kShader);
+    const program = shader.program;
+    this.location = nonnull(gl.getUniformLocation(program, 'u_transform'));
+    this.shader = shader;
+
+    const faces = 3;
+    const geo: Geometry = {
+      positions: new Float32Array(faces * 12),
+      colors: new Float32Array(faces * 12),
+      indices: new Uint32Array(faces * 6),
+    };
+
+    const root = Vec3.from(0.4, 0.3, 2);
+    const added = [0, 0, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0];
+    const indices = [0, 1, 2, 0, 2, 3];
+    for (let i = 0; i < faces; i++) {
+      for (let j = 0; j < 4; j++) {
+        for (let k = 0; k < 3; k++) {
+          const index = i * 12 + j * 3 + k;
+          geo.positions[index] = root[k] + 0.2 * added[j * 3 + ((i + k) % 3)];
+          geo.colors[index] = i === k ? 0.5 : 0;
+        }
+      }
+      for (let j = 0; j < 6; j++) {
+        geo.indices[i * 6 + j] = i * 4 + indices[j];
+      }
+    }
+
+    this.mesh = new Mesh(gl, geo, this.shader);
+  }
+
+  render() {
+    const transform = this.camera.getTransform();
+
+    const gl = this.gl;
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.useProgram(this.shader.program);
+    gl.uniformMatrix4fv(this.location, false, transform);
+    this.mesh.draw();
+  }
+};
 
 //////////////////////////////////////////////////////////////////////////////
 // The game engine:
@@ -84,271 +408,6 @@ class Container {
 
 //////////////////////////////////////////////////////////////////////////////
 
-type BlockId = int & {__type__: 'BlockId'};
-type MaterialId = int & {__type__: 'MaterialId'};
-
-type Color = [number, number, number];
-
-interface Material {
-  alpha: number,
-  color: Color,
-  texture: string | null,
-  textureAlpha: boolean,
-};
-
-const kBlack: Color = [0, 0, 0];
-const kWhite: Color = [1, 1, 1];
-
-const kNoMaterial = 0 as MaterialId;
-
-const kEmptyBlock = 0 as BlockId;
-const kUnknownBlock = 1 as BlockId;
-
-class Registry {
-  _opaque: boolean[];
-  _solid: boolean[];
-  _faces: MaterialId[];
-  _meshes: (BABYLON.Mesh | null)[];
-  _materials: Material[];
-  _ids: Map<string, MaterialId>;
-
-  constructor() {
-    this._opaque = [false, false];
-    this._solid = [false, true];
-    this._meshes = [null, null];
-    this._faces = []
-    for (let i = 0; i < 12; i++) {
-      this._faces.push(kNoMaterial);
-    }
-    this._materials = [];
-    this._ids = new Map();
-  }
-
-  addBlock(xs: string[], solid: boolean): BlockId {
-    type Materials = [string, string, string, string, string, string];
-    const materials = ((): Materials => {
-      switch (xs.length) {
-        // All faces for this block use same material.
-        case 1: return [xs[0], xs[0], xs[0], xs[0], xs[0], xs[0]];
-        // xs specifies [top/bottom, sides]
-        case 2: return [xs[1], xs[1], xs[0], xs[0], xs[1], xs[1]];
-        // xs specifies [top, bottom, sides]
-        case 3: return [xs[2], xs[2], xs[0], xs[1], xs[2], xs[2]];
-        // xs specifies [+x, -x, +y, -y, +z, -z]
-        case 6: return xs as Materials;
-        // Uninterpretable case.
-        default: throw new Error(`Unexpected materials: ${JSON.stringify(xs)}`);
-      }
-    })();
-
-    const result = this._opaque.length as BlockId;
-    this._opaque.push(solid);
-    this._solid.push(solid);
-    this._meshes.push(null);
-    materials.forEach(x => {
-      const material = this._ids.get(x);
-      if (material === undefined) throw new Error(`Unknown material: ${x}`);
-      this._faces.push(material + 1 as MaterialId);
-    });
-
-    return result;
-  }
-
-  addBlockSprite(mesh: BABYLON.Mesh, solid: boolean): BlockId {
-    const result = this._opaque.length as BlockId;
-    this._opaque.push(false);
-    this._solid.push(solid);
-    this._meshes.push(mesh);
-    for (let i = 0; i < 6; i++) this._faces.push(kNoMaterial);
-    mesh.setEnabled(false);
-    return result;
-  }
-
-  addMaterialOfColor(name: string, color: Color, alpha: number = 1.0) {
-    this.addMaterialHelper(name, alpha, color, null, false);
-  }
-
-  addMaterialOfTexture(name: string, texture: string,
-                       textureAlpha: boolean = false) {
-    this.addMaterialHelper(name, 1, kWhite, texture, textureAlpha);
-  }
-
-  // faces has 6 elements for each block type: [+x, -x, +y, -y, +z, -z]
-  getBlockFaceMaterial(id: BlockId, face: int): MaterialId {
-    return this._faces[id * 6 + face];
-  }
-
-  getMaterial(id: MaterialId): Material {
-    assert(0 < id && id <= this._materials.length);
-    return this._materials[id - 1];
-  }
-
-  private addMaterialHelper(name: string, alpha: number, color: Color,
-                            texture: string | null, textureAlpha: boolean) {
-    assert(name.length > 0, () => 'Empty material name!');
-    assert(!this._ids.has(name), () => `Duplicate material: ${name}`);
-    this._ids.set(name, this._materials.length as MaterialId);
-    this._materials.push({alpha, color, texture, textureAlpha});
-  }
-};
-
-//////////////////////////////////////////////////////////////////////////////
-
-const kTmpPos = Vec3.create();
-
-class Camera {
-  camera: BABYLON.FreeCamera;
-  holder: BABYLON.TransformNode;
-  direction: Vec3;
-  heading: number; // In radians: [0, 2π)
-  pitch: number;   // In radians: (-π/2, π/2)
-  zoom: number;
-  last_dx: number;
-  last_dy: number;
-
-  constructor(scene: BABYLON.Scene) {
-    const origin = new BABYLON.Vector3(0, 0, 0);
-    this.holder = new BABYLON.TransformNode('holder', scene);
-    this.camera = new BABYLON.FreeCamera('camera', origin, scene);
-    this.camera.parent = this.holder;
-    this.camera.minZ = 0.01;
-
-    this.pitch = 0;
-    this.heading = 0;
-    this.zoom = 0;
-    this.direction = Vec3.create();
-
-    this.last_dx = 0;
-    this.last_dy = 0;
-  }
-
-  applyInputs(dx: number, dy: number, dscroll: number) {
-    // Smooth out large mouse-move inputs.
-    const jerkx = Math.abs(dx) > 400 && Math.abs(dx / (this.last_dx || 1)) > 4;
-    const jerky = Math.abs(dy) > 400 && Math.abs(dy / (this.last_dy || 1)) > 4;
-    if (jerkx || jerky) {
-      const saved_x = this.last_dx;
-      const saved_y = this.last_dy;
-      this.last_dx = (dx + this.last_dx) / 2;
-      this.last_dy = (dy + this.last_dy) / 2;
-      dx = saved_x;
-      dy = saved_y;
-    } else {
-      this.last_dx = dx;
-      this.last_dy = dy;
-    }
-
-    let pitch = this.holder.rotation.x;
-    let heading = this.holder.rotation.y;
-
-    // Overwatch uses the same constant values to do this conversion.
-    const conversion = 0.0066 * Math.PI / 180;
-    dx = dx * Constants.CAMERA_SENSITIVITY * conversion;
-    dy = dy * Constants.CAMERA_SENSITIVITY * conversion;
-
-    this.heading += dx;
-    const T = 2 * Math.PI;
-    while (this.heading < 0) this.heading += T;
-    while (this.heading > T) this.heading -= T;
-
-    const U = Math.PI / 2 - 0.01;
-    this.pitch = Math.max(-U, Math.min(U, this.pitch + dy));
-
-    this.holder.rotation.x = this.pitch;
-    this.holder.rotation.y = this.heading;
-
-    const dir = this.direction;
-    Vec3.set(dir, 0, 0, 1);
-    Vec3.rotateX(dir, dir, this.pitch);
-    Vec3.rotateY(dir, dir, this.heading);
-
-    // Scrolling is trivial to apply: add and clamp.
-    if (dscroll === 0) return;
-    this.zoom = Math.max(0, Math.min(10, this.zoom + Math.sign(dscroll)));
-  }
-
-  setTarget(x: number, y: number, z: number) {
-    Vec3.set(kTmpPos, x, y, z);
-    Vec3.scaleAndAdd(kTmpPos, kTmpPos, this.direction, -this.zoom);
-    this.holder.position.copyFromFloats(kTmpPos[0], kTmpPos[1], kTmpPos[2]);
-  }
-};
-
-//////////////////////////////////////////////////////////////////////////////
-
-class Renderer {
-  camera: Camera;
-  engine: BABYLON.Engine;
-  scene: BABYLON.Scene;
-
-  constructor(container: Container) {
-    const antialias = true;
-    const options = {preserveDrawingBuffer: true};
-    this.engine = new BABYLON.Engine(container.canvas, antialias, options);
-    this.scene = new BABYLON.Scene(this.engine);
-
-    const source = new BABYLON.Vector3(0.1, 1.0, 0.3);
-    this.scene.clearColor = new BABYLON.Color4(0.8, 0.9, 1.0);
-    this.scene.ambientColor = new BABYLON.Color3(1, 1, 1);
-
-    const scene = this.scene;
-    scene.detachControl();
-    scene.skipPointerMovePicking = true;
-    this.camera = new Camera(scene);
-  }
-
-  makeSprite(url: string): BABYLON.Mesh {
-    const scene = this.scene;
-    const wrap = BABYLON.Texture.CLAMP_ADDRESSMODE;
-    const mode = BABYLON.Texture.NEAREST_NEAREST_MIPNEAREST;
-    const texture = new BABYLON.Texture(url, scene, false, true, mode);
-    texture.wrapU = texture.wrapV = wrap;
-    texture.hasAlpha = true;
-
-    const material = new BABYLON.StandardMaterial(`material-${url}`, scene);
-    material.emissiveColor.copyFromFloats(1, 1, 1);
-    material.backFaceCulling = false;
-    material.computeEffectOnlyOnce = true;
-    material.diffuseTexture = texture;
-    material.disableLighting = true;
-
-    const mesh = BABYLON.Mesh.CreatePlane(`block-${url}`, 1, scene);
-    mesh.cullingStrategy = BABYLON.AbstractMesh.CULLINGSTRATEGY_STANDARD;
-    mesh.material = material;
-    return mesh;
-  }
-
-  render() {
-    this.engine.beginFrame();
-    this.scene.render();
-    this.engine.endFrame();
-  }
-
-  startInstrumentation() {
-    const perf = new BABYLON.SceneInstrumentation(this.scene);
-    perf.captureActiveMeshesEvaluationTime = true;
-    perf.captureRenderTargetsRenderTime = true;
-    perf.captureCameraRenderTime = true;
-    perf.captureRenderTime = true;
-    let frame = 0;
-
-    this.scene.onAfterRenderObservable.add(() => {
-      frame = (frame + 1) % 60;
-      if (frame !== 0) return;
-
-      console.log(`
-activeMeshesEvaluationTime: ${perf.activeMeshesEvaluationTimeCounter.average}
-   renderTargetsRenderTime: ${perf.renderTargetsRenderTimeCounter.average}
-          cameraRenderTime: ${perf.cameraRenderTimeCounter.average}
-          drawCallsCounter: ${perf.drawCallsCounter.lastSecAverage}
-                renderTime: ${perf.renderTimeCounter.average}
-      `.trim());
-    });
-  }
-};
-
-//////////////////////////////////////////////////////////////////////////////
-
 class Timing {
   now: any;
   render: (dt: int, fraction: number) => void;
@@ -420,499 +479,15 @@ class Timing {
 
 //////////////////////////////////////////////////////////////////////////////
 
-interface TerrainSprite {
-  dirty: boolean;
-  mesh: BABYLON.Mesh;
-  buffer: Float32Array;
-  index: Map<int, int>;
-  capacity: int;
-  size: int;
-};
-
-const kMinCapacity = 4;
-const kSpriteRadius = 1 / 2 + 1 / 256;
-
-const kTmpBillboard = new Float32Array([
-  0, -kSpriteRadius, 0,
-  0, -kSpriteRadius, 0,
-  0,  kSpriteRadius, 0,
-  0,  kSpriteRadius, 0,
-]);
-
-const kTmpTransform = new Float32Array([
-  1, 0, 0, 0,
-  0, 1, 0, 0,
-  0, 0, 1, 0,
-  0, 0, 0, 1,
-]);
-
-const kSpriteKeyBits = 10;
-const kSpriteKeySize = 1 << kSpriteKeyBits;
-const kSpriteKeyMask = kSpriteKeySize - 1;
-
-class TerrainSprites {
-  renderer: Renderer;
-  kinds: Map<BlockId, TerrainSprite>;
-  root: BABYLON.TransformNode;
-  billboards: BABYLON.Mesh[];
-
-  constructor(renderer: Renderer) {
-    this.renderer = renderer;
-    this.kinds = new Map();
-    this.root = new BABYLON.TransformNode('sprites', renderer.scene);
-    this.root.position.copyFromFloats(0.5, 0.5, 0.5);
-    this.billboards = [];
-  }
-
-  add(x: int, y: int, z: int, block: BlockId, mesh: BABYLON.Mesh) {
-    let data = this.kinds.get(block);
-    if (!data) {
-      const capacity = kMinCapacity;
-      const buffer = new Float32Array(capacity * 16);
-      data = {dirty: false, mesh, buffer, index: new Map(), capacity, size: 0};
-      this.kinds.set(block, data);
-
-      mesh.parent = this.root;
-      mesh.position.setAll(0);
-      mesh.alwaysSelectAsActiveMesh = true;
-      mesh.doNotSyncBoundingInfo = true;
-      mesh.freezeWorldMatrix();
-      mesh.thinInstanceSetBuffer('matrix', buffer);
-      mesh.setVerticesData('position', kTmpBillboard, true);
-      if (mesh.material) mesh.material.freeze();
-    }
-
-    const key = this.key(x, y, z);
-    if (data.index.has(key)) return;
-
-    if (data.size === data.capacity) {
-      this.reallocate(data, data.capacity * 2);
-    }
-
-    kTmpTransform[12] = x;
-    kTmpTransform[13] = y;
-    kTmpTransform[14] = z;
-    this.copy(kTmpTransform, 0, data.buffer, data.size);
-    data.index.set(key, data.size);
-
-    data.size++;
-    data.dirty = true;
-  }
-
-  remove(x: int, y: int, z: int, block: BlockId) {
-    const data = this.kinds.get(block);
-    if (!data) return;
-
-    const buffer = data.buffer;
-    const key = this.key(x, y, z);
-    const index = data.index.get(key);
-    if (index === undefined) return;
-
-    const last = data.size - 1;
-    if (index !== last) {
-      const b = 16 * last + 12;
-      const other = this.key(buffer[b + 0], buffer[b + 1], buffer[b + 2]);
-      assert(data.index.get(other) === last);
-      this.copy(buffer, last, buffer, index);
-      data.index.set(other, index);
-    }
-    data.index.delete(key);
-
-    data.size--;
-    if (data.capacity > Math.max(kMinCapacity, 4 * data.size)) {
-      this.reallocate(data, data.capacity / 2);
-    }
-    data.dirty = true;
-  }
-
-  registerBillboard(mesh: BABYLON.Mesh) {
-    this.billboards.push(mesh);
-    mesh.setVerticesData('position', kTmpBillboard, true);
-  }
-
-  unregisterBillboard(mesh: BABYLON.Mesh) {
-    drop(this.billboards, mesh);
-  }
-
-  updateBillboards(heading: number) {
-    const cos = kSpriteRadius * Math.cos(heading);
-    const sin = kSpriteRadius * Math.sin(heading);
-
-    kTmpBillboard[0] = kTmpBillboard[9]  = -cos;
-    kTmpBillboard[2] = kTmpBillboard[11] = sin;
-    kTmpBillboard[3] = kTmpBillboard[6]  = cos;
-    kTmpBillboard[5] = kTmpBillboard[8]  = -sin;
-
-    for (const mesh of this.billboards) {
-      const geo = mesh.geometry;
-      if (geo) geo.updateVerticesDataDirectly('position', kTmpBillboard, 0);
-    }
-
-    for (const data of this.kinds.values()) {
-      if (data.size !== 0) {
-        const geo = data.mesh.geometry;
-        if (geo) geo.updateVerticesDataDirectly('position', kTmpBillboard, 0);
-      }
-      if (!data.dirty) continue;
-      data.mesh.thinInstanceCount = data.size;
-      data.mesh.thinInstanceBufferUpdated('matrix');
-      data.mesh.setEnabled(data.size > 0);
-      data.dirty = false;
-    }
-  }
-
-  private copy(src: Float32Array, srcOff: int, dst: Float32Array, dstOff: int) {
-    srcOff *= 16;
-    dstOff *= 16;
-    for (let i = 0; i < 16; i++) {
-      dst[dstOff + i] = src[srcOff + i];
-    }
-  }
-
-  private key(x: int, y: int, z: int): int {
-    return (x & kSpriteKeyMask) << (0 * kSpriteKeyBits) |
-           (y & kSpriteKeyMask) << (1 * kSpriteKeyBits) |
-           (z & kSpriteKeyMask) << (2 * kSpriteKeyBits);
-  }
-
-  private reallocate(data: TerrainSprite, capacity: int) {
-    data.capacity = capacity;
-    const buffer = new Float32Array(capacity * 16);
-    for (let i = 0; i < data.size * 16; i++) buffer[i] = data.buffer[i];
-    data.mesh.thinInstanceSetBuffer('matrix', buffer);
-    data.buffer = buffer;
-  }
-};
-
-//////////////////////////////////////////////////////////////////////////////
-
-const kChunkBits = 4;
-const kChunkSize = 1 << kChunkBits;
-const kChunkMask = kChunkSize - 1;
-
-const kChunkKeyBits = 8;
-const kChunkKeySize = 1 << kChunkKeyBits;
-const kChunkKeyMask = kChunkKeySize - 1;
-
-const kChunkRadius = 0;
-const kNeighbors = (kChunkRadius ? 6 : 0);
-
-const kNumChunksToLoadPerFrame = 1;
-const kNumChunksToMeshPerFrame = 1;
-
-// These conditions ensure that we'll dispose of a sprite before allocating
-// a new sprite at a key that collides with the old one.
-assert((1 << kSpriteKeyBits) > (kChunkSize * (2 * kChunkRadius + 1)));
-
-class Chunk {
-  world: World;
-  active: boolean;
-  enabled: boolean;
-  finished: boolean;
-  requested: boolean;
-  neighbors: int;
-  spritesDirty: boolean;
-  terrainDirty: boolean;
-  mesh: BABYLON.Mesh | null;
-  voxels: Tensor3 | null;
-  distance: number;
-  cx: int;
-  cy: int;
-  cz: int;
-
-  constructor(world: World, cx: int, cy: int, cz: int) {
-    this.world = world;
-    this.active = false;
-    this.enabled = false;
-    this.finished = false;
-    this.requested = false;
-    this.neighbors = kNeighbors;
-    this.spritesDirty = true;
-    this.terrainDirty = true;
-    this.mesh = null;
-    this.voxels = null;
-    this.distance = 0;
-    this.cx = cx;
-    this.cy = cy;
-    this.cz = cz;
-  }
-
-  disable() {
-    if (!this.enabled) return;
-    this.world.enabled.delete(this);
-
-    if (!this.spritesDirty) this.refreshSprites(false);
-    if (this.mesh) this.mesh.dispose();
-    this.mesh = null;
-
-    this.active = false;
-    this.enabled = false;
-    this.spritesDirty = true;
-    this.terrainDirty = true;
-  }
-
-  enable() {
-    this.world.enabled.add(this);
-    this.enabled = true;
-    this.active = this.checkActive();
-  }
-
-  init() {
-    assert(!this.voxels);
-    this.voxels = new Tensor3(kChunkSize, kChunkSize, kChunkSize);
-  }
-
-  finish() {
-    assert(!this.finished);
-    this.finished = true;
-
-    const {cx, cy, cz} = this;
-    const neighbor = (x: int, y: int, z: int) => {
-      const chunk = this.world.getChunk(x + cx, y + cy, z + cz, false);
-      if (!(chunk && chunk.finished)) return;
-      chunk.notifyNeighborFinished();
-      this.neighbors--;
-    };
-    neighbor(1, 0, 0); neighbor(-1, 0, 0);
-    neighbor(0, 1, 0); neighbor(0, -1, 0);
-    neighbor(0, 0, 1); neighbor(0, 0, -1);
-
-    if (!this.voxels) {
-      this.spritesDirty = false;
-      this.terrainDirty = false;
-    }
-
-    this.active = this.checkActive();
-  }
-
-  getBlock(x: int, y: int, z: int): BlockId {
-    const mask = kChunkMask;
-    if (!this.voxels) return kEmptyBlock;
-    return this.voxels.get(x & mask, y & mask, z & mask) as BlockId;
-  }
-
-  setBlock(x: int, y: int, z: int, block: BlockId) {
-    const xm = x & kChunkMask;
-    const ym = y & kChunkMask;
-    const zm = z & kChunkMask;
-    const voxels = nonnull(this.voxels);
-    const old = voxels.get(xm, ym, zm) as BlockId;
-    if (old === block) return;
-
-    const old_mesh = this.world.registry._meshes[old];
-    const new_mesh = this.world.registry._meshes[block];
-    if (!this.spritesDirty) {
-      if (old_mesh) this.world.sprites.remove(x, y, z, old);
-      if (new_mesh) this.world.sprites.add(x, y, z, block, new_mesh);
-    }
-
-    voxels.set(xm, ym, zm, block);
-    if (old_mesh && new_mesh) return;
-
-    this.terrainDirty = true;
-    const neighbor = (x: int, y: int, z: int) => {
-      const {cx, cy, cz} = this;
-      const chunk = this.world.getChunk(x + cx, y + cy, z + cz, false);
-      if (!(chunk && chunk.finished)) return;
-      chunk.terrainDirty = true;
-    };
-    if (xm === 0) neighbor(-1, 0, 0);
-    if (xm === kChunkMask) neighbor(1, 0, 0);
-    if (ym === 0) neighbor(0, -1, 0);
-    if (ym === kChunkMask) neighbor(0, 1, 0);
-    if (zm === 0) neighbor(0, 0, -1);
-    if (zm === kChunkMask) neighbor(0, 0, 1);
-  }
-
-  needsRemesh() {
-    return this.active && (this.spritesDirty || this.terrainDirty);
-  }
-
-  remesh() {
-    if (this.spritesDirty) {
-      this.refreshSprites(true);
-      this.spritesDirty = false;
-    }
-    if (this.terrainDirty) {
-      this.refreshTerrain();
-      this.terrainDirty = false;
-    }
-  }
-
-  private checkActive(): boolean {
-    return this.enabled && this.finished && this.neighbors === 0;
-  }
-
-  private notifyNeighborFinished() {
-    assert(this.neighbors > 0);
-    this.neighbors--;
-    this.active = this.checkActive();
-  }
-
-  private refreshSprites(enabled: boolean) {
-    if (!this.voxels) return;
-    const dx = this.cx << kChunkBits;
-    const dy = this.cy << kChunkBits;
-    const dz = this.cz << kChunkBits;
-
-    const sprites = this.world.sprites;
-    for (let x = 0; x < kChunkSize; x++) {
-      for (let y = 0; y < kChunkSize; y++) {
-        for (let z = 0; z < kChunkSize; z++) {
-          const cell = this.voxels.get(x, y, z) as BlockId;
-          const mesh = this.world.registry._meshes[cell];
-          if (!mesh) continue;
-          enabled ? sprites.add(x + dx, y + dy, z + dz, cell, mesh)
-                  : sprites.remove(x + dx, y + dy, z + dz, cell);
-        }
-      }
-    }
-  }
-
-  private refreshTerrain() {
-    if (this.mesh) this.mesh.dispose();
-    const {cx, cy, cz, voxels} = this;
-    const mesh = voxels ? this.world.mesher.mesh(voxels) : null;
-    if (mesh) {
-      mesh.position.copyFromFloats(
-        cx << kChunkBits, cy << kChunkBits, cz << kChunkBits);
-      mesh.position.addInPlaceFromFloats(1, 1, 1);
-      mesh.cullingStrategy = BABYLON.AbstractMesh.CULLINGSTRATEGY_STANDARD;
-      mesh.doNotSyncBoundingInfo = true;
-      mesh.freezeWorldMatrix();
-      mesh.freezeNormals();
-    }
-    this.mesh = mesh;
-  }
-};
-
-class World {
-  chunks: Map<int, Chunk>;
-  enabled: Set<Chunk>;
-  renderer: Renderer;
-  registry: Registry;
-  mesher: TerrainMesher;
-  sprites: TerrainSprites;
-
-  constructor(registry: Registry, renderer: Renderer) {
-    this.chunks = new Map();
-    this.enabled = new Set();
-    this.renderer = renderer;
-    this.registry = registry;
-    this.mesher = new TerrainMesher(registry, renderer.scene);
-    this.sprites = new TerrainSprites(renderer);
-  }
-
-  getBlock(x: int, y: int, z: int): BlockId {
-    const bits = kChunkBits;
-    const chunk = this.getChunk(x >> bits, y >> bits, z >> bits, false);
-    return chunk && chunk.finished ? chunk.getBlock(x, y, z) : kUnknownBlock;
-  }
-
-  setBlock(x: int, y: int, z: int, block: BlockId) {
-    const bits = kChunkBits;
-    const chunk = this.getChunk(x >> bits, y >> bits, z >> bits, false);
-    if (chunk && chunk.active) chunk.setBlock(x, y, z, block);
-  }
-
-  getChunk(cx: int, cy: int, cz: int, add: boolean): Chunk | null {
-    const key = (cx & kChunkKeyMask) << (0 * kChunkKeyBits) |
-                (cy & kChunkKeyMask) << (1 * kChunkKeyBits) |
-                (cz & kChunkKeyMask) << (2 * kChunkKeyBits);
-    const result = this.chunks.get(key);
-    if (result) return result;
-    if (!add) return null;
-    const chunk = new Chunk(this, cx, cy, cz);
-    this.chunks.set(key, chunk);
-    return chunk;
-  }
-
-  recenter(x: number, y: number, z: number): Chunk[] {
-    const dx = (x >> kChunkBits);
-    const dy = (y >> kChunkBits);
-    const dz = (z >> kChunkBits);
-
-    const lo = (kChunkRadius * kChunkRadius + 1) * kChunkSize * kChunkSize;
-    const hi = (kChunkRadius * kChunkRadius + 9) * kChunkSize * kChunkSize;
-    const limit = kChunkRadius + 1;
-
-    const disabled = [];
-    for (const chunk of this.enabled) {
-      const {cx, cy, cz} = chunk;
-      const ax = Math.abs(cx - dx);
-      const ay = Math.abs(cy - dy);
-      const az = Math.abs(cz - dz);
-      if (ax + ay + az <= 1) continue;
-      const disable = ax > limit || ay > limit || az > limit ||
-                      this.distance(cx, cy, cz, x, y, z) > hi;
-      if (disable) disabled.push(chunk);
-    }
-    for (const chunk of disabled) chunk.disable();
-
-    const requests = [];
-    for (let i = dx - kChunkRadius; i <= dx + kChunkRadius; i++) {
-      const ax = Math.abs(i - dx);
-      for (let j = dy - kChunkRadius; j <= dy + kChunkRadius; j++) {
-        const ay = Math.abs(j - dy);
-        for (let k = dz - kChunkRadius; k <= dz + kChunkRadius; k++) {
-          const az = Math.abs(k - dz);
-          const distance = this.distance(i, j, k, x, y, z);
-          if (ax + ay + az > 1 && distance > lo) continue;
-          const chunk = nonnull(this.getChunk(i, j, k, true));
-          if (!chunk.requested) requests.push(chunk);
-          chunk.distance = distance;
-          chunk.enable();
-        }
-      }
-    }
-
-    const n = kNumChunksToLoadPerFrame;
-    let result = requests;
-    if (requests.length > n) {
-      requests.sort((x, y) => x.distance - y.distance);
-      result = requests.slice(0, n);
-    }
-    result.forEach(x => x.requested = true);
-    return result;
-  }
-
-  remesh() {
-    const queued = [];
-    for (const chunk of this.chunks.values()) {
-      if (chunk.needsRemesh()) queued.push(chunk);
-    }
-    const n = kNumChunksToMeshPerFrame;
-    const m = Math.min(queued.length, kNumChunksToMeshPerFrame);
-    if (queued.length > n) queued.sort((x, y) => x.distance - y.distance);
-    for (let i = 0; i < m; i++) queued[i].remesh();
-  }
-
-  private distance(cx: int, cy: int, cz: int, x: number, y: number, z: number) {
-    const half = kChunkSize / 2;
-    const i = (cx << kChunkBits) + half - x;
-    const j = (cy << kChunkBits) + half - y;
-    const k = (cz << kChunkBits) + half - z;
-    return i * i + j * j + k * k;
-  }
-};
-
-//////////////////////////////////////////////////////////////////////////////
-
 class Env {
   container: Container;
-  entities: EntityComponentSystem;
-  registry: Registry;
   renderer: Renderer;
   timing: Timing;
-  world: World;
 
   constructor(id: string) {
     this.container = new Container(id);
-    this.entities = new EntityComponentSystem();
-    this.registry = new Registry();
-    this.renderer = new Renderer(this.container);
+    this.renderer = new Renderer(this.container.canvas);
     this.timing = new Timing(this.render.bind(this), this.update.bind(this));
-    this.world = new World(this.registry, this.renderer);
   }
 
   refresh() {
@@ -931,18 +506,21 @@ class Env {
     camera.applyInputs(deltas.x, deltas.y, deltas.scroll);
     deltas.x = deltas.y = deltas.scroll = 0;
 
-    this.world.sprites.updateBillboards(camera.heading);
-    this.entities.render(dt);
     this.renderer.render();
   }
 
   update(dt: int) {
     if (!this.container.inputs.pointer) return;
-    this.entities.update(dt);
-    this.world.remesh();
   }
 };
 
 //////////////////////////////////////////////////////////////////////////////
 
-export {Chunk, Env, kChunkBits, kChunkSize, kEmptyBlock};
+const main = () => {
+  const env = new Env('container');
+  env.renderer.render();
+}
+
+window.onload = main;
+
+export {};
