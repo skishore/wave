@@ -15,6 +15,8 @@ class Camera {
   private last_dy: number;
 
   // transform = projection * view is the overall model-view-projection.
+  private position_for: Vec3;
+  private transform_for: Mat4;
   private transform: Mat4;
   private projection: Mat4;
   private view: Mat4;
@@ -29,6 +31,8 @@ class Camera {
     this.last_dx = 0;
     this.last_dy = 0;
 
+    this.position_for = Vec3.create();
+    this.transform_for = Mat4.create();
     this.transform = Mat4.create();
     this.projection = Mat4.create();
     this.view = Mat4.create();
@@ -84,6 +88,13 @@ class Camera {
     Mat4.view(this.view, this.position, this.direction);
     Mat4.multiply(this.transform, this.projection, this.view);
     return this.transform;
+  }
+
+  getTransformFor(offset: Vec3): Mat4 {
+    Vec3.sub(this.position_for, this.position, offset);
+    Mat4.view(this.view, this.position_for, this.direction);
+    Mat4.multiply(this.transform_for, this.projection, this.view);
+    return this.transform_for;
   }
 
   setTarget(x: number, y: number, z: number) {
@@ -160,7 +171,7 @@ class Shader {
 
 //////////////////////////////////////////////////////////////////////////////
 
-const kShader = `
+const kFixedShader = `
   uniform mat4 u_transform;
   in vec3 a_position;
   in vec3 a_color;
@@ -181,27 +192,31 @@ const kShader = `
   }
 `;
 
-interface Geometry {
+interface FixedGeometry {
   positions: Float32Array;
+  normals: Float32Array;
   colors: Float32Array;
   indices: Uint32Array;
+  uvs: Float32Array;
 };
 
-class Mesh {
+class FixedMesh {
   gl: GL;
-  geo: Geometry;
+  shader: Shader;
+  geo: FixedGeometry;
   vao: WebGLVertexArrayObject | null;
   indices: WebGLBuffer | null;
   buffers: WebGLBuffer[];
-  shader: Shader;
+  position: Vec3;
 
-  constructor(gl: GL, geo: Geometry, shader: Shader) {
+  constructor(gl: GL, shader: Shader, geo: FixedGeometry) {
     this.gl = gl;
     this.geo = geo;
     this.vao = null;
     this.indices = null;
     this.buffers = [];
     this.shader = shader;
+    this.position = Vec3.create();
   }
 
   draw() {
@@ -222,6 +237,10 @@ class Mesh {
     this.vao = null;
     this.indices = null;
     this.buffers.length = 0;
+  }
+
+  setPosition(x: int, y: int, z: int) {
+    Vec3.set(this.position, x, y, z);
   }
 
   private prepare() {
@@ -265,12 +284,17 @@ class Mesh {
 
 //////////////////////////////////////////////////////////////////////////////
 
+interface Mesh {
+  dispose: () => void,
+  setPosition: (x: number, y: number, z: number) => void,
+};
+
 class Renderer {
   camera: Camera;
-  gl: WebGL2RenderingContext;
-  location: WebGLUniformLocation;
-  shader: Shader;
-  mesh: Mesh;
+  private gl: WebGL2RenderingContext;
+  private location: WebGLUniformLocation;
+  private shader: Shader;
+  private meshes: FixedMesh[];
 
   constructor(canvas: HTMLCanvasElement) {
     canvas.width = canvas.clientWidth;
@@ -283,49 +307,35 @@ class Renderer {
     gl.depthFunc(gl.LEQUAL);
     this.gl = gl;
 
-    const shader = new Shader(gl, kShader);
+    const shader = new Shader(gl, kFixedShader);
     const program = shader.program;
     this.location = nonnull(gl.getUniformLocation(program, 'u_transform'));
     this.shader = shader;
+    this.meshes = [];
+  }
 
-    const faces = 3;
-    const geo: Geometry = {
-      positions: new Float32Array(faces * 12),
-      colors: new Float32Array(faces * 12),
-      indices: new Uint32Array(faces * 6),
-    };
-
-    const root = Vec3.from(0.4, 0.3, 2);
-    const added = [0, 0, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0];
-    const indices = [0, 1, 2, 0, 2, 3];
-    for (let i = 0; i < faces; i++) {
-      for (let j = 0; j < 4; j++) {
-        for (let k = 0; k < 3; k++) {
-          const index = i * 12 + j * 3 + k;
-          geo.positions[index] = root[k] + 0.2 * added[j * 3 + ((i + k) % 3)];
-          geo.colors[index] = i === k ? 0.5 : 0;
-        }
-      }
-      for (let j = 0; j < 6; j++) {
-        geo.indices[i * 6 + j] = i * 4 + indices[j];
-      }
-    }
-
-    this.mesh = new Mesh(gl, geo, this.shader);
+  addFixedMesh(geo: FixedGeometry): Mesh {
+    const result = new FixedMesh(this.gl, this.shader, geo);
+    this.meshes.push(result);
+    return result;
   }
 
   render() {
-    const transform = this.camera.getTransform();
-
     const gl = this.gl;
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.useProgram(this.shader.program);
-    gl.uniformMatrix4fv(this.location, false, transform);
-    this.mesh.draw();
+
+    const camera = this.camera;
+    const location = this.location;
+    for (const mesh of this.meshes) {
+      const transform = camera.getTransformFor(mesh.position);
+      gl.uniformMatrix4fv(location, false, transform);
+      mesh.draw();
+    }
   }
 };
 
 //////////////////////////////////////////////////////////////////////////////
 
-export {Renderer};
+export {Mesh, Renderer};
