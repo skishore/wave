@@ -221,7 +221,7 @@ class TerrainMesher {
     }
 
     for (let i = 0; i < 4; i++) {
-      const color = i === 4 ? 1 : i === d ? 0.5 : 0;
+      const color = i === 3 ? 1 : i === d ? 0.5 : 0;
       colors[colors_offset + i + 0]  = color;
       colors[colors_offset + i + 4]  = color;
       colors[colors_offset + i + 8]  = color;

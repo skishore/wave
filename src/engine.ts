@@ -45,16 +45,16 @@ class Container {
     this.bindings.set(' '.charCodeAt(0), 'space');
 
     const element = this.element;
-    element.addEventListener('keydown', e => this.onKeyInput(e, true));
-    element.addEventListener('keyup', e => this.onKeyInput(e, false));
-
     element.addEventListener('click', () => element.requestPointerLock());
-    document.addEventListener('pointerlockchange', e => this.onPointerInput(e));
+    document.addEventListener('keydown', e => this.onKeyInput(e, true));
+    document.addEventListener('keyup', e => this.onKeyInput(e, false));
     document.addEventListener('mousemove', e => this.onMouseMove(e));
+    document.addEventListener('pointerlockchange', e => this.onPointerInput(e));
     document.addEventListener('wheel', e => this.onMouseWheel(e));
   }
 
   onKeyInput(e: Event, down: boolean) {
+    if (!this.inputs.pointer) return;
     const input = this.bindings.get((e as any).keyCode);
     if (input) this.onInput(e, input, down);
   }

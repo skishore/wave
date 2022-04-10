@@ -174,8 +174,8 @@ class Shader {
 const kFixedShader = `
   uniform mat4 u_transform;
   in vec3 a_position;
-  in vec3 a_color;
-  out vec3 v_color;
+  in vec4 a_color;
+  out vec4 v_color;
 
   void main() {
     v_color = a_color;
@@ -184,11 +184,11 @@ const kFixedShader = `
 #split
   precision highp float;
 
-  in vec3 v_color;
+  in vec4 v_color;
   out vec4 o_color;
 
   void main() {
-    o_color = vec4(v_color, 1);
+    o_color = v_color;
   }
 `;
 
@@ -250,7 +250,7 @@ class FixedMesh {
     this.vao = nonnull(gl.createVertexArray());
     gl.bindVertexArray(this.vao);
     this.prepareAttribute('a_position', this.geo.positions, 3);
-    this.prepareAttribute('a_color', this.geo.colors, 3);
+    this.prepareAttribute('a_color', this.geo.colors, 4);
     this.prepareIndices(this.geo.indices);
     gl.bindVertexArray(null);
   }
@@ -305,6 +305,10 @@ class Renderer {
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LEQUAL);
+    gl.enable(gl.CULL_FACE);
+    gl.cullFace(gl.BACK);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     this.gl = gl;
 
     const shader = new Shader(gl, kFixedShader);
@@ -322,8 +326,8 @@ class Renderer {
 
   render() {
     const gl = this.gl;
-    gl.clearColor(0, 0, 0, 0);
-    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.clearColor(0.8, 0.9, 1, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     gl.useProgram(this.shader.program);
 
     const camera = this.camera;

@@ -1,6 +1,8 @@
-type Point = [number, number, number];
+import {Vec3} from './base.js';
 
-type Check = (x: Point) => boolean;
+//////////////////////////////////////////////////////////////////////////////
+
+type Check = (x: Vec3) => boolean;
 
 const kSweepShift = 8;
 const kSweepResolution = 1 << kSweepShift;
@@ -8,9 +10,9 @@ const kSweepMask = kSweepResolution - 1;
 
 const kSpeeds = [0, 0, 0, 0];
 const kDistances = [0, 0, 0, kSweepResolution];
-const kVoxel: Point = [0, 0, 0];
+const kVoxel = Vec3.create();
 
-const sweep = (min: Point, max: Point, delta: Point, impacts: Point, check: Check) => {
+const sweep = (min: Vec3, max: Vec3, delta: Vec3, impacts: Vec3, check: Check) => {
   for (let i = 0; i < 3; i++) {
     min[i] = (min[i] * kSweepResolution) | 0;
     max[i] = (max[i] * kSweepResolution) | 0;
@@ -89,4 +91,6 @@ const sweep = (min: Point, max: Point, delta: Point, impacts: Point, check: Chec
   }
 };
 
-export {Point, sweep};
+//////////////////////////////////////////////////////////////////////////////
+
+export {sweep};
