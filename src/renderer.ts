@@ -190,6 +190,8 @@ class Shader {
 
 //////////////////////////////////////////////////////////////////////////////
 
+const kAtlas = WebGL2RenderingContext.TEXTURE_2D_ARRAY;
+
 class TextureAtlas {
   private gl: GL;
   private texture: WebGLTexture;
@@ -197,10 +199,10 @@ class TextureAtlas {
 
   constructor(gl: GL, url: string) {
     const texture = nonnull(gl.createTexture());
-    gl.bindTexture(gl.TEXTURE_2D, texture);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST_MIPMAP_NEAREST);
-    gl.bindTexture(gl.TEXTURE_2D, null);
+    gl.bindTexture(kAtlas, texture);
+    gl.texParameteri(kAtlas, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(kAtlas, gl.TEXTURE_MIN_FILTER, gl.NEAREST_MIPMAP_NEAREST);
+    gl.bindTexture(kAtlas, null);
 
     this.gl = gl;
     this.texture = texture;
@@ -211,15 +213,19 @@ class TextureAtlas {
 
   bind() {
     const {gl, texture} = this;
-    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.bindTexture(kAtlas, texture);
   }
 
   private loaded() {
     const {gl, image, texture} = this;
-    gl.bindTexture(gl.TEXTURE_2D, texture);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
-    gl.generateMipmap(gl.TEXTURE_2D);
-    gl.bindTexture(gl.TEXTURE_2D, null);
+    const size = image.width;
+    assert(image.height % size === 0);
+    const depth = image.height / size;
+    gl.bindTexture(kAtlas, texture);
+    gl.texImage3D(kAtlas, 0, gl.RGBA, size, size, depth, 0,
+                  gl.RGBA, gl.UNSIGNED_BYTE, image);
+    gl.generateMipmap(kAtlas);
+    gl.bindTexture(kAtlas, null);
   }
 };
 
@@ -229,25 +235,26 @@ const kFixedShader = `
   uniform mat4 u_transform;
   in vec3 a_position;
   in vec4 a_color;
-  in vec2 a_uv;
+  in vec3 a_uvw;
   out vec4 v_color;
-  out vec2 v_uv;
+  out vec3 v_uvw;
 
   void main() {
     v_color = a_color;
-    v_uv = a_uv;
+    v_uvw = a_uvw;
     gl_Position = u_transform * vec4(a_position, 1.0);
   }
 #split
   precision highp float;
+  precision highp sampler2DArray;
 
-  uniform sampler2D u_texture;
+  uniform sampler2DArray u_texture;
   in vec4 v_color;
-  in vec2 v_uv;
+  in vec3 v_uvw;
   out vec4 o_color;
 
   void main() {
-    o_color = v_color * texture(u_texture, v_uv);
+    o_color = v_color * texture(u_texture, v_uvw);
   }
 `;
 
@@ -256,7 +263,7 @@ interface FixedGeometry {
   normals: Float32Array;
   colors: Float32Array;
   indices: Uint32Array;
-  uvs: Float32Array;
+  uvws: Float32Array;
 };
 
 class FixedMesh {
@@ -317,7 +324,7 @@ class FixedMesh {
     gl.bindVertexArray(this.vao);
     this.prepareAttribute('a_position', this.geo.positions, 3);
     this.prepareAttribute('a_color', this.geo.colors, 4);
-    this.prepareAttribute('a_uv', this.geo.uvs, 2);
+    this.prepareAttribute('a_uvw', this.geo.uvws, 3);
     this.prepareIndices(this.geo.indices);
     gl.bindVertexArray(null);
   }

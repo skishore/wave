@@ -24,7 +24,7 @@ interface GeometryData {
   normals: number[];           // length: 12n (Vec3 for each vertex)
   indices: int[];              // length: 6n  (2 triangles - 6 indices)
   colors: number[];            // length: 16n (Color4 for each vertex)
-  uvs: number[];               // length: 8n  ((u, v) for each vertex)
+  uvws: number[];              // length: 12n ((u, v, w) for each vertex)
 };
 
 const kGeometryData: GeometryData = {
@@ -34,7 +34,7 @@ const kGeometryData: GeometryData = {
   normals: [],
   indices: [],
   colors: [],
-  uvs: [],
+  uvws: [],
 };
 
 const kTmpPos    = Vec3.create();
@@ -72,14 +72,14 @@ class TerrainMesher {
       normals   : new Float32Array(numQuads * 12),
       indices   : new   Uint32Array(numQuads * 6),
       colors    : new Float32Array(numQuads * 16),
-      uvs       : new Float32Array(numQuads * 8),
+      uvws      : new Float32Array(numQuads * 12),
     };
 
     this.copyFloats(geo.positions, data.positions);
     this.copyFloats(geo.normals,   data.normals);
     this.copyInt32s(geo.indices,   data.indices);
     this.copyFloats(geo.colors,    data.colors);
-    this.copyFloats(geo.uvs,       data.uvs);
+    this.copyFloats(geo.uvws,      data.uvws);
 
     return this.renderer.addFixedMesh(geo);
   }
@@ -185,13 +185,12 @@ class TerrainMesher {
   private addQuad(geo: GeometryData, d: int, w: int, h: int, mask: int,
                   pos: Vec3, du: Vec3, dv: Vec3, normal: Vec3) {
     const material = Math.abs(mask) as MaterialId;
-    const {numQuads, positions, normals, indices, colors, uvs} = geo;
+    const {numQuads, positions, normals, indices, colors, uvws} = geo;
     geo.numQuads++;
 
     const positions_offset = numQuads * 12;
     const indices_offset   = numQuads * 6;
     const colors_offset    = numQuads * 16;
-    const uvs_offset       = numQuads * 8;
     const base_index       = numQuads * 4;
 
     if (positions.length < positions_offset + 12) {
@@ -199,7 +198,7 @@ class TerrainMesher {
       for (let i = 0; i < 12; i++) normals.push(0);
       for (let i = 0; i < 6; i++)  indices.push(0);
       for (let i = 0; i < 16; i++) colors.push(0);
-      for (let i = 0; i < 8; i++)  uvs.push(0);
+      for (let i = 0; i < 12; i++)  uvws.push(0);
     }
 
     for (let i = 0; i < 3; i++) {
@@ -229,13 +228,17 @@ class TerrainMesher {
     }
 
     const dir = Math.sign(mask);
-    for (let i = 0; i < 8; i++) uvs[uvs_offset + i] = 0;
+    for (let i = 0; i < 12; i++) uvws[positions_offset + i] = 0;
     if (d === 2) {
-      uvs[uvs_offset + 1] = uvs[uvs_offset + 3] = h;
-      uvs[uvs_offset + 2] = uvs[uvs_offset + 4] = -dir * w;
+      uvws[positions_offset + 1] = uvws[positions_offset + 4] = h;
+      uvws[positions_offset + 3] = uvws[positions_offset + 6] = -dir * w;
     } else {
-      uvs[uvs_offset + 1] = uvs[uvs_offset + 7] = w;
-      uvs[uvs_offset + 4] = uvs[uvs_offset + 6] = dir * h;
+      uvws[positions_offset + 1] = uvws[positions_offset + 10] = w;
+      uvws[positions_offset + 6] = uvws[positions_offset + 9] = dir * h;
+    }
+    // TODO(skishore): Use the tile's material atlas index here.
+    for (let i = 0; i < 4; i++) {
+      uvws[positions_offset + i * 3 + 2] = d;
     }
   }
 
