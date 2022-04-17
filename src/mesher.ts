@@ -231,11 +231,11 @@ class TerrainMesher {
     const dir = Math.sign(mask);
     for (let i = 0; i < 8; i++) uvs[uvs_offset + i] = 0;
     if (d === 2) {
-      uvs[uvs_offset + 1] = uvs[uvs_offset + 3] = w;
-      uvs[uvs_offset + 2] = uvs[uvs_offset + 4] = -dir * h;
+      uvs[uvs_offset + 1] = uvs[uvs_offset + 3] = h;
+      uvs[uvs_offset + 2] = uvs[uvs_offset + 4] = -dir * w;
     } else {
-      uvs[uvs_offset + 1] = uvs[uvs_offset + 7] = h;
-      uvs[uvs_offset + 4] = uvs[uvs_offset + 6] = dir * w;
+      uvs[uvs_offset + 1] = uvs[uvs_offset + 7] = w;
+      uvs[uvs_offset + 4] = uvs[uvs_offset + 6] = dir * h;
     }
   }
 

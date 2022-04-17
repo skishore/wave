@@ -106,12 +106,14 @@ class Camera {
 //////////////////////////////////////////////////////////////////////////////
 
 interface GL extends WebGL2RenderingContext {};
+interface Uniform { info: WebGLActiveInfo, location: WebGLUniformLocation };
+interface Attribute { info: WebGLActiveInfo, location: number };
 
 class Shader {
-  gl: GL;
-  program: WebGLProgram;
-  uniforms: WebGLActiveInfo[];
-  attributes: WebGLActiveInfo[];
+  private gl: GL;
+  private program: WebGLProgram;
+  private uniforms: Map<string, Uniform>;
+  private attributes: Map<string, Attribute>;
 
   constructor(gl: GL, source: string) {
     this.gl = gl;
@@ -119,22 +121,39 @@ class Shader {
     const vertex = this.compile(parts[0], gl.VERTEX_SHADER);
     const fragment = this.compile(parts[1], gl.FRAGMENT_SHADER);
     this.program = this.link(vertex, fragment);
-    this.uniforms = [];
-    this.attributes = [];
+    this.uniforms = new Map();
+    this.attributes = new Map();
 
     const program = this.program;
     const uniforms = gl.getProgramParameter(program, gl.ACTIVE_UNIFORMS);
     for (let i = 0; i < uniforms; i++) {
       const info = gl.getActiveUniform(program, i);
       if (!info || this.builtin(info.name)) continue;
-      this.uniforms.push(info);
+      const location = nonnull(gl.getUniformLocation(program, info.name));
+      this.uniforms.set(info.name, {info, location});
     }
     const attributes = gl.getProgramParameter(program, gl.ACTIVE_ATTRIBUTES);
     for (let i = 0; i < attributes; i++) {
       const info = gl.getActiveAttrib(program, i);
       if (!info || this.builtin(info.name)) continue;
-      this.attributes.push(info);
+      const location = gl.getAttribLocation(program, info.name);
+      this.attributes.set(info.name, {info, location});
+      assert(location >= 0);
     }
+  }
+
+  bind() {
+    this.gl.useProgram(this.program);
+  }
+
+  getAttribLocation(name: string): number | null {
+    const attribute = this.attributes.get(name);
+    return attribute ? attribute.location : null;
+  }
+
+  getUniformLocation(name: string): WebGLUniformLocation | null {
+    const uniform = this.uniforms.get(name);
+    return uniform ? uniform.location : null;
   }
 
   private builtin(name: string): boolean {
@@ -171,24 +190,64 @@ class Shader {
 
 //////////////////////////////////////////////////////////////////////////////
 
+class TextureAtlas {
+  private gl: GL;
+  private texture: WebGLTexture;
+  private image: HTMLImageElement;
+
+  constructor(gl: GL, url: string) {
+    const texture = nonnull(gl.createTexture());
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST_MIPMAP_NEAREST);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+
+    this.gl = gl;
+    this.texture = texture;
+    this.image = new Image();
+    this.image.src = url;
+    this.image.addEventListener('load', this.loaded.bind(this));
+  }
+
+  bind() {
+    const {gl, texture} = this;
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+  }
+
+  private loaded() {
+    const {gl, image, texture} = this;
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+  }
+};
+
+//////////////////////////////////////////////////////////////////////////////
+
 const kFixedShader = `
   uniform mat4 u_transform;
   in vec3 a_position;
   in vec4 a_color;
+  in vec2 a_uv;
   out vec4 v_color;
+  out vec2 v_uv;
 
   void main() {
     v_color = a_color;
+    v_uv = a_uv;
     gl_Position = u_transform * vec4(a_position, 1.0);
   }
 #split
   precision highp float;
 
+  uniform sampler2D u_texture;
   in vec4 v_color;
+  in vec2 v_uv;
   out vec4 o_color;
 
   void main() {
-    o_color = v_color;
+    o_color = v_color * texture(u_texture, v_uv);
   }
 `;
 
@@ -201,26 +260,29 @@ interface FixedGeometry {
 };
 
 class FixedMesh {
-  gl: GL;
-  shader: Shader;
-  geo: FixedGeometry;
-  vao: WebGLVertexArrayObject | null;
-  indices: WebGLBuffer | null;
-  buffers: WebGLBuffer[];
-  position: Vec3;
+  private gl: GL;
+  private shader: Shader;
+  private atlas: TextureAtlas;
+  private geo: FixedGeometry;
+  private vao: WebGLVertexArrayObject | null;
+  private indices: WebGLBuffer | null;
+  private buffers: WebGLBuffer[];
+  private position: Vec3;
 
-  constructor(gl: GL, shader: Shader, geo: FixedGeometry) {
+  constructor(gl: GL, shader: Shader, atlas: TextureAtlas, geo: FixedGeometry) {
     this.gl = gl;
+    this.shader = shader;
+    this.atlas = atlas;
     this.geo = geo;
     this.vao = null;
     this.indices = null;
     this.buffers = [];
-    this.shader = shader;
     this.position = Vec3.create();
   }
 
   draw() {
     this.prepare();
+    this.atlas.bind();
     const gl = this.gl;
     gl.bindVertexArray(this.vao);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indices);
@@ -230,6 +292,7 @@ class FixedMesh {
   }
 
   dispose() {
+    // TODO(skishore): Remove this mesh from renderer.meshes.
     const gl = this.gl;
     gl.deleteVertexArray(this.vao);
     gl.deleteBuffer(this.indices);
@@ -239,6 +302,10 @@ class FixedMesh {
     this.buffers.length = 0;
   }
 
+  getPosition(): Vec3 {
+    return this.position;
+  }
+
   setPosition(x: int, y: int, z: int) {
     Vec3.set(this.position, x, y, z);
   }
@@ -246,11 +313,11 @@ class FixedMesh {
   private prepare() {
     if (this.vao) return;
     const gl = this.gl;
-    const program = this.shader.program;
     this.vao = nonnull(gl.createVertexArray());
     gl.bindVertexArray(this.vao);
     this.prepareAttribute('a_position', this.geo.positions, 3);
     this.prepareAttribute('a_color', this.geo.colors, 4);
+    this.prepareAttribute('a_uv', this.geo.uvs, 2);
     this.prepareIndices(this.geo.indices);
     gl.bindVertexArray(null);
   }
@@ -258,8 +325,8 @@ class FixedMesh {
   private prepareAttribute(name: string, data: Float32Array, size: int) {
     const gl = this.gl;
     const buffer = nonnull(gl.createBuffer());
-    const location = gl.getAttribLocation(this.shader.program, name);
-    if (location < 0) return;
+    const location = this.shader.getAttribLocation(name);
+    if (location === null) return;
 
     gl.enableVertexAttribArray(location);
     gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
@@ -292,6 +359,7 @@ interface Mesh {
 class Renderer {
   camera: Camera;
   private gl: WebGL2RenderingContext;
+  private atlas: TextureAtlas;
   private location: WebGLUniformLocation;
   private shader: Shader;
   private meshes: FixedMesh[];
@@ -312,14 +380,14 @@ class Renderer {
     this.gl = gl;
 
     const shader = new Shader(gl, kFixedShader);
-    const program = shader.program;
-    this.location = nonnull(gl.getUniformLocation(program, 'u_transform'));
+    this.atlas = new TextureAtlas(gl, 'images/test.png');
+    this.location = nonnull(shader.getUniformLocation('u_transform'));
     this.shader = shader;
     this.meshes = [];
   }
 
   addFixedMesh(geo: FixedGeometry): Mesh {
-    const result = new FixedMesh(this.gl, this.shader, geo);
+    const result = new FixedMesh(this.gl, this.shader, this.atlas, geo);
     this.meshes.push(result);
     return result;
   }
@@ -328,12 +396,12 @@ class Renderer {
     const gl = this.gl;
     gl.clearColor(0.8, 0.9, 1, 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-    gl.useProgram(this.shader.program);
+    this.shader.bind();
 
     const camera = this.camera;
     const location = this.location;
     for (const mesh of this.meshes) {
-      const transform = camera.getTransformFor(mesh.position);
+      const transform = camera.getTransformFor(mesh.getPosition());
       gl.uniformMatrix4fv(location, false, transform);
       mesh.draw();
     }
