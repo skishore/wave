@@ -105,18 +105,72 @@ class Camera {
 
 //////////////////////////////////////////////////////////////////////////////
 
-interface GL extends WebGL2RenderingContext {};
+const ARRAY_BUFFER         = WebGL2RenderingContext.ARRAY_BUFFER;
+const ELEMENT_ARRAY_BUFFER = WebGL2RenderingContext.ELEMENT_ARRAY_BUFFER;
+const TEXTURE_2D_ARRAY     = WebGL2RenderingContext.TEXTURE_2D_ARRAY;
+
+class Context {
+  gl: WebGL2RenderingContext;
+  private array_buffer: WebGLBuffer | null;
+  private element_array_buffer: WebGLBuffer | null;
+  private program: WebGLProgram | null;
+  private texture_2d_array: WebGLTexture | null;
+  private vertex_array: WebGLVertexArrayObject | null;
+
+  constructor(gl: WebGL2RenderingContext) {
+    this.gl = gl;
+    this.array_buffer = null;
+    this.element_array_buffer = null;
+    this.program = null;
+    this.texture_2d_array = null;
+    this.vertex_array = null;
+  }
+
+  bindArrayBuffer(buffer: WebGLBuffer | null) {
+    if (buffer === this.array_buffer) return;
+    this.gl.bindBuffer(ARRAY_BUFFER, buffer);
+    this.element_array_buffer = buffer;
+  }
+
+  bindElementArrayBuffer(buffer: WebGLBuffer | null) {
+    if (buffer === this.element_array_buffer) return;
+    this.gl.bindBuffer(ELEMENT_ARRAY_BUFFER, buffer);
+    this.element_array_buffer = buffer;
+  }
+
+  bindProgram(program: WebGLProgram | null) {
+    if (program === this.program) return;
+    this.gl.useProgram(program);
+    this.program = program;
+  }
+
+  bindTexture2DArray(texture: WebGLTexture | null) {
+    if (texture === this.texture_2d_array) return;
+    this.gl.bindTexture(TEXTURE_2D_ARRAY, texture);
+    this.texture_2d_array = texture;
+  }
+
+  bindVertexArray(vao: WebGLVertexArrayObject | null) {
+    if (vao === this.vertex_array) return;
+    this.gl.bindVertexArray(vao);
+    this.vertex_array = vao;
+  }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
 interface Uniform { info: WebGLActiveInfo, location: WebGLUniformLocation };
 interface Attribute { info: WebGLActiveInfo, location: number };
 
 class Shader {
-  private gl: GL;
+  private context: Context;
   private program: WebGLProgram;
   private uniforms: Map<string, Uniform>;
   private attributes: Map<string, Attribute>;
 
-  constructor(gl: GL, source: string) {
-    this.gl = gl;
+  constructor(context: Context, source: string) {
+    this.context = context;
+    const gl = context.gl;
     const parts = source.split('#split');
     const vertex = this.compile(parts[0], gl.VERTEX_SHADER);
     const fragment = this.compile(parts[1], gl.FRAGMENT_SHADER);
@@ -143,7 +197,7 @@ class Shader {
   }
 
   bind() {
-    this.gl.useProgram(this.program);
+    this.context.bindProgram(this.program);
   }
 
   getAttribLocation(name: string): number | null {
@@ -161,7 +215,7 @@ class Shader {
   }
 
   private compile(source: string, type: number): WebGLShader {
-    const gl = this.gl;
+    const gl = this.context.gl;
     const result = nonnull(gl.createShader(type));
     gl.shaderSource(result, `#version 300 es\n${source}`);
     gl.compileShader(result);
@@ -174,7 +228,7 @@ class Shader {
   }
 
   private link(vertex: WebGLShader, fragment: WebGLShader): WebGLProgram {
-    const gl = this.gl;
+    const gl = this.context.gl;
     const result = nonnull(gl.createProgram());
     gl.attachShader(result, vertex);
     gl.attachShader(result, fragment);
@@ -190,42 +244,41 @@ class Shader {
 
 //////////////////////////////////////////////////////////////////////////////
 
-const kAtlas = WebGL2RenderingContext.TEXTURE_2D_ARRAY;
-
 class TextureAtlas {
-  private gl: GL;
+  private context: Context;
   private texture: WebGLTexture;
   private image: HTMLImageElement;
 
-  constructor(gl: GL, url: string) {
+  constructor(context: Context, url: string) {
+    const gl = context.gl;
     const texture = nonnull(gl.createTexture());
-    gl.bindTexture(kAtlas, texture);
-    gl.texParameteri(kAtlas, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    gl.texParameteri(kAtlas, gl.TEXTURE_MIN_FILTER, gl.NEAREST_MIPMAP_NEAREST);
-    gl.bindTexture(kAtlas, null);
-
-    this.gl = gl;
+    this.context = context;
     this.texture = texture;
+
+    this.bind();
+    const id = TEXTURE_2D_ARRAY;
+    gl.texParameteri(id, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(id, gl.TEXTURE_MIN_FILTER, gl.NEAREST_MIPMAP_NEAREST);
+
     this.image = new Image();
     this.image.src = url;
     this.image.addEventListener('load', this.loaded.bind(this));
   }
 
   bind() {
-    const {gl, texture} = this;
-    gl.bindTexture(kAtlas, texture);
+    this.context.bindTexture2DArray(this.texture);
   }
 
   private loaded() {
-    const {gl, image, texture} = this;
+    const {image, texture} = this;
+    const gl = this.context.gl;
     const size = image.width;
     assert(image.height % size === 0);
     const depth = image.height / size;
-    gl.bindTexture(kAtlas, texture);
-    gl.texImage3D(kAtlas, 0, gl.RGBA, size, size, depth, 0,
+    this.bind();
+    gl.texImage3D(TEXTURE_2D_ARRAY, 0, gl.RGBA, size, size, depth, 0,
                   gl.RGBA, gl.UNSIGNED_BYTE, image);
-    gl.generateMipmap(kAtlas);
-    gl.bindTexture(kAtlas, null);
+    gl.generateMipmap(TEXTURE_2D_ARRAY);
   }
 };
 
@@ -267,40 +320,47 @@ interface FixedGeometry {
 };
 
 class FixedMesh {
-  private gl: GL;
+  private context: Context;
   private shader: Shader;
   private atlas: TextureAtlas;
   private geo: FixedGeometry;
   private vao: WebGLVertexArrayObject | null;
+  private uniform: WebGLUniformLocation | null;
   private indices: WebGLBuffer | null;
   private buffers: WebGLBuffer[];
   private position: Vec3;
 
-  constructor(gl: GL, shader: Shader, atlas: TextureAtlas, geo: FixedGeometry) {
-    this.gl = gl;
+  constructor(context: Context, shader: Shader,
+              atlas: TextureAtlas, geo: FixedGeometry) {
+    this.context = context;
     this.shader = shader;
     this.atlas = atlas;
     this.geo = geo;
     this.vao = null;
+    this.uniform = shader.getUniformLocation('u_transform');
     this.indices = null;
     this.buffers = [];
     this.position = Vec3.create();
   }
 
-  draw() {
+  draw(camera: Camera) {
     this.prepare();
     this.atlas.bind();
-    const gl = this.gl;
-    gl.bindVertexArray(this.vao);
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indices);
+    this.shader.bind();
+
+    const context = this.context;
+    context.bindVertexArray(this.vao);
+    context.bindElementArrayBuffer(this.indices);
+
+    const gl = context.gl;
+    const transform = camera.getTransformFor(this.position);
+    gl.uniformMatrix4fv(this.uniform, false, transform);
     gl.drawElements(gl.TRIANGLES, this.geo.indices.length, gl.UNSIGNED_INT, 0);
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
-    gl.bindVertexArray(null);
   }
 
   dispose() {
     // TODO(skishore): Remove this mesh from renderer.meshes.
-    const gl = this.gl;
+    const gl = this.context.gl;
     gl.deleteVertexArray(this.vao);
     gl.deleteBuffer(this.indices);
     for (const buffer of this.buffers) gl.deleteBuffer(buffer);
@@ -319,39 +379,33 @@ class FixedMesh {
 
   private prepare() {
     if (this.vao) return;
-    const gl = this.gl;
+    const gl = this.context.gl;
     this.vao = nonnull(gl.createVertexArray());
-    gl.bindVertexArray(this.vao);
+    this.context.bindVertexArray(this.vao);
     this.prepareAttribute('a_position', this.geo.positions, 3);
     this.prepareAttribute('a_color', this.geo.colors, 4);
     this.prepareAttribute('a_uvw', this.geo.uvws, 3);
     this.prepareIndices(this.geo.indices);
-    gl.bindVertexArray(null);
   }
 
   private prepareAttribute(name: string, data: Float32Array, size: int) {
-    const gl = this.gl;
+    const gl = this.context.gl;
     const buffer = nonnull(gl.createBuffer());
     const location = this.shader.getAttribLocation(name);
     if (location === null) return;
 
     gl.enableVertexAttribArray(location);
-    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+    this.context.bindArrayBuffer(buffer);
+    gl.bufferData(ARRAY_BUFFER, data, gl.STATIC_DRAW);
     gl.vertexAttribPointer(location, size, gl.FLOAT, false, 0, 0);
-    gl.bindBuffer(gl.ARRAY_BUFFER, null);
-
     this.buffers.push(buffer);
   }
 
   private prepareIndices(data: Uint32Array) {
-    const gl = this.gl;
+    const gl = this.context.gl;
     const buffer = nonnull(gl.createBuffer());
-
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buffer);
-    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, data, gl.STATIC_DRAW);
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
-
+    this.context.bindElementArrayBuffer(buffer);
+    gl.bufferData(ELEMENT_ARRAY_BUFFER, data, gl.STATIC_DRAW);
     this.indices = buffer;
   }
 };
@@ -365,9 +419,8 @@ interface Mesh {
 
 class Renderer {
   camera: Camera;
-  private gl: WebGL2RenderingContext;
+  private context: Context;
   private atlas: TextureAtlas;
-  private location: WebGLUniformLocation;
   private shader: Shader;
   private meshes: FixedMesh[];
 
@@ -384,34 +437,27 @@ class Renderer {
     gl.cullFace(gl.BACK);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-    this.gl = gl;
 
-    const shader = new Shader(gl, kFixedShader);
-    this.atlas = new TextureAtlas(gl, 'images/test.png');
-    this.location = nonnull(shader.getUniformLocation('u_transform'));
-    this.shader = shader;
+    const context = new Context(gl);
+    this.context = context;
+    this.atlas = new TextureAtlas(context, 'images/test.png');
+    this.shader = new Shader(context, kFixedShader);
     this.meshes = [];
   }
 
   addFixedMesh(geo: FixedGeometry): Mesh {
-    const result = new FixedMesh(this.gl, this.shader, this.atlas, geo);
+    const result = new FixedMesh(this.context, this.shader, this.atlas, geo);
     this.meshes.push(result);
     return result;
   }
 
   render() {
-    const gl = this.gl;
+    const gl = this.context.gl;
     gl.clearColor(0.8, 0.9, 1, 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-    this.shader.bind();
 
     const camera = this.camera;
-    const location = this.location;
-    for (const mesh of this.meshes) {
-      const transform = camera.getTransformFor(mesh.getPosition());
-      gl.uniformMatrix4fv(location, false, transform);
-      mesh.draw();
-    }
+    for (const mesh of this.meshes) mesh.draw(camera);
   }
 };
 
