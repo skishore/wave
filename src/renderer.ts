@@ -247,37 +247,83 @@ class Shader {
 class TextureAtlas {
   private context: Context;
   private texture: WebGLTexture;
-  private image: HTMLImageElement;
+  private images: HTMLImageElement[];
+  private canvas: CanvasRenderingContext2D | null;
+  private data: Uint8Array;
+  private last: int;
 
-  constructor(context: Context, url: string) {
+  constructor(context: Context) {
     const gl = context.gl;
     const texture = nonnull(gl.createTexture());
     this.context = context;
     this.texture = texture;
+    this.images = [];
+    this.canvas = null;
+    this.data = new Uint8Array();
+    this.last = -1;
 
     this.bind();
     const id = TEXTURE_2D_ARRAY;
     gl.texParameteri(id, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     gl.texParameteri(id, gl.TEXTURE_MIN_FILTER, gl.NEAREST_MIPMAP_NEAREST);
+  }
 
-    this.image = new Image();
-    this.image.src = url;
-    this.image.addEventListener('load', this.loaded.bind(this));
+  addImage(url: string): int {
+    const result = this.images.length;
+    const image = new Image();
+    image.addEventListener('load', () => this.loaded(result, image));
+    image.src = url;
+    this.images.push(image);
+    return result;
   }
 
   bind() {
     this.context.bindTexture2DArray(this.texture);
   }
 
-  private loaded() {
-    const {image, texture} = this;
-    const gl = this.context.gl;
-    const size = image.width;
-    assert(image.height % size === 0);
-    const depth = image.height / size;
+  private loaded(index: int, image: HTMLImageElement) {
+    if (this.canvas === null) {
+      const size = image.width;
+      const element = document.createElement('canvas');
+      element.width = element.height = size;
+      const canvas = nonnull(element.getContext('2d'));
+      this.canvas = canvas;
+    }
+
+    const canvas = this.canvas;
+    const size = canvas.canvas.width;
+    if (size !== image.width || size !== image.height) {
+      const {width, height, src} = image;
+      throw new Error(`Mismatch: ${size} vs. ${src}: (${width} x ${height})`);
+    }
+
+    canvas.clearRect(0, 0, size, size);
+    canvas.drawImage(image, 0, 0);
+    const length = size * size * 4;
+    const offset = length * index;
+    const pixels = canvas.getImageData(0, 0, size, size).data;
+    assert(pixels.length === length);
+
+    const capacity = this.data ? this.data.length : 0;
+    const required = length + offset;
+    const allocate = capacity < required;
+
+    if (allocate) {
+      const data = new Uint8Array(Math.max(2 * capacity, required));
+      for (let i = 0; i < this.data.length; i++) data[i] = this.data[i];
+      this.data = data;
+    }
+
+    const data = this.data;
+    for (let i = 0; i < length; i++) {
+      data[i + offset] = pixels[i];
+    }
+    this.last = Math.max(this.last, index);
+
     this.bind();
-    gl.texImage3D(TEXTURE_2D_ARRAY, 0, gl.RGBA, size, size, depth, 0,
-                  gl.RGBA, gl.UNSIGNED_BYTE, image);
+    const gl = this.context.gl;
+    gl.texImage3D(TEXTURE_2D_ARRAY, 0, gl.RGBA, size, size, this.last + 1,
+                  0, gl.RGBA, gl.UNSIGNED_BYTE, this.data);
     gl.generateMipmap(TEXTURE_2D_ARRAY);
   }
 };
@@ -307,7 +353,9 @@ const kFixedShader = `
   out vec4 o_color;
 
   void main() {
-    o_color = v_color * texture(u_texture, v_uvw);
+    //o_color = v_color * texture(u_texture, v_uvw);
+    o_color = texture(u_texture, v_uvw);
+    if (o_color[3] < 0.5) discard;
   }
 `;
 
@@ -440,7 +488,13 @@ class Renderer {
 
     const context = new Context(gl);
     this.context = context;
-    this.atlas = new TextureAtlas(context, 'images/test.png');
+
+    const atlas = new TextureAtlas(context);
+    atlas.addImage('images/dirt.png');
+    atlas.addImage('images/rock.png');
+    atlas.addImage('images/wall.png');
+    this.atlas = atlas;
+
     this.shader = new Shader(context, kFixedShader);
     this.meshes = [];
   }
