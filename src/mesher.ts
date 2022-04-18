@@ -111,8 +111,7 @@ class TerrainMesher {
       const dir = d * 2;
       const u = (d + 1) % 3;
       const v = (d + 2) % 3;
-      // Make ld "shape[d] - 2" to avoid duplicating faces at chunk edges.
-      const ld = shape[d] - 1,  lu = shape[u] - 2,  lv = shape[v] - 2;
+      const ld = shape[d] - 2,  lu = shape[u] - 2,  lv = shape[v] - 2;
       const sd = stride[d], su = stride[u], sv = stride[v];
       const base = su + sv;
 

@@ -377,8 +377,6 @@ const perlin2D = () => {
 
 const main = () => {
   const env = new TypedEnv('container');
-  //env.renderer.startInstrumentation();
-
   const player = env.entities.addEntity();
   const position = env.position.add(player);
   position.x = 2;
@@ -405,19 +403,7 @@ const main = () => {
   const noise = perlin2D();
 
   loadChunkData = (chunk: Chunk) => {
-    if (chunk.cx || chunk.cy || chunk.cz) return;
-    chunk.init();
-    for (let x = 1; x < kChunkSize - 1; x++) {
-      for (let z = 1; z < kChunkSize - 1; z++) {
-        if (4 <= x && x < 12 && 4 <= z && z < 12) continue;
-        chunk.setBlock(x, 1, z, wall);
-        chunk.setBlock(x, 2, z, dirt);
-        chunk.setBlock(x, 3, z, grass);
-      }
-    }
-    return;
-
-    if (chunk.cy > 0) return;
+    if (!(-1 <= chunk.cy && chunk.cy <= 0)) return;
 
     chunk.init();
 

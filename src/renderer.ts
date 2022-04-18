@@ -375,26 +375,32 @@ interface FixedGeometry {
 
 class FixedMesh {
   private context: Context;
-  private shader: Shader;
   private atlas: TextureAtlas;
+  private shader: Shader;
+  private meshes: FixedMesh[];
   private geo: FixedGeometry;
   private vao: WebGLVertexArrayObject | null;
   private uniform: WebGLUniformLocation | null;
   private indices: WebGLBuffer | null;
   private buffers: WebGLBuffer[];
   private position: Vec3;
+  private index: int;
 
-  constructor(context: Context, shader: Shader,
-              atlas: TextureAtlas, geo: FixedGeometry) {
+  constructor(context: Context, atlas: TextureAtlas, shader: Shader,
+              meshes: FixedMesh[], geo: FixedGeometry) {
+    this.index = 0;
     this.context = context;
-    this.shader = shader;
     this.atlas = atlas;
+    this.shader = shader;
+    this.meshes = meshes;
     this.geo = geo;
     this.vao = null;
     this.uniform = shader.getUniformLocation('u_transform');
     this.indices = null;
     this.buffers = [];
     this.position = Vec3.create();
+    this.index = this.meshes.length;
+    this.meshes.push(this);
   }
 
   draw(camera: Camera) {
@@ -413,7 +419,6 @@ class FixedMesh {
   }
 
   dispose() {
-    // TODO(skishore): Remove this mesh from renderer.meshes.
     const gl = this.context.gl;
     gl.deleteVertexArray(this.vao);
     gl.deleteBuffer(this.indices);
@@ -421,10 +426,15 @@ class FixedMesh {
     this.vao = null;
     this.indices = null;
     this.buffers.length = 0;
-  }
 
-  getPosition(): Vec3 {
-    return this.position;
+    assert(this === this.meshes[this.index]);
+    const last = this.meshes.length - 1;
+    if (this.index !== last) {
+      const swap = this.meshes[last];
+      this.meshes[this.index] = swap;
+      swap.index = this.index;
+    }
+    this.meshes.pop();
   }
 
   setPosition(x: int, y: int, z: int) {
@@ -499,9 +509,8 @@ class Renderer {
   }
 
   addFixedMesh(geo: FixedGeometry): Mesh {
-    const result = new FixedMesh(this.context, this.shader, this.atlas, geo);
-    this.meshes.push(result);
-    return result;
+    const {context, atlas, meshes, shader} = this;
+    return new FixedMesh(context, atlas, shader, meshes, geo);
   }
 
   render() {

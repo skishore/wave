@@ -264,7 +264,7 @@ class Timing {
 
 //////////////////////////////////////////////////////////////////////////////
 
-const kChunkBits = 4;
+const kChunkBits = 6;
 const kChunkSize = 1 << kChunkBits;
 const kChunkMask = kChunkSize - 1;
 
@@ -272,7 +272,7 @@ const kChunkKeyBits = 8;
 const kChunkKeySize = 1 << kChunkKeyBits;
 const kChunkKeyMask = kChunkKeySize - 1;
 
-const kChunkRadius = 0;
+const kChunkRadius = 4;
 const kNeighbors = (kChunkRadius ? 6 : 0);
 
 const kNumChunksToLoadPerFrame = 1;
@@ -285,6 +285,23 @@ const kSpriteKeyMask = kSpriteKeySize - 1;
 // These conditions ensure that we'll dispose of a sprite before allocating
 // a new sprite at a key that collides with the old one.
 assert((1 << kSpriteKeyBits) > (kChunkSize * (2 * kChunkRadius + 1)));
+
+// List of neighboring chunks to include when meshing.
+type Point = [number, number, number];
+const kNeighborOffsets = ((): [Point, Point, Point, Point][] => {
+  const S = kChunkSize;
+  const L = S - 1;
+  const N = S + 1;
+  return [
+    [[ 0,  0,  0], [1, 1, 1], [0, 0, 0], [S, S, S]],
+    [[-1,  0,  0], [0, 1, 1], [L, 0, 0], [1, S, S]],
+    [[ 1,  0,  0], [N, 1, 1], [0, 0, 0], [1, S, S]],
+    [[ 0, -1,  0], [1, 0, 1], [0, L, 0], [S, 1, S]],
+    [[ 0,  1,  0], [1, N, 1], [0, 0, 0], [S, 1, S]],
+    [[ 0,  0, -1], [1, 1, 0], [0, 0, L], [S, S, 1]],
+    [[ 0,  0,  1], [1, 1, N], [0, 0, 0], [S, S, 1]],
+  ];
+})();
 
 class Chunk {
   world: World;
@@ -396,8 +413,7 @@ class Chunk {
     const neighbor = (x: int, y: int, z: int) => {
       const {cx, cy, cz} = this;
       const chunk = this.world.getChunk(x + cx, y + cy, z + cz, false);
-      if (!(chunk && chunk.finished)) return;
-      chunk.terrainDirty = true;
+      if (chunk) chunk.terrainDirty = true;
     };
     if (xm === 0) neighbor(-1, 0, 0);
     if (xm === kChunkMask) neighbor(1, 0, 0);
@@ -456,9 +472,36 @@ class Chunk {
   private refreshTerrain() {
     if (this.mesh) this.mesh.dispose();
     const {cx, cy, cz, voxels} = this;
-    const mesh = voxels ? this.world.mesher.mesh(voxels) : null;
-    if (mesh) mesh.setPosition(1, 1, 1);
+    const size = kChunkSize + 2;
+    const expanded = new Tensor3(size, size, size);
+    for (const offset of kNeighborOffsets) {
+      const [c, dstPos, srcPos, size] = offset;
+      const chunk = this.world.getChunk(cx + c[0], cy + c[1], cz + c[2], false);
+      if (!(chunk && chunk.voxels)) continue;
+      this.copyVoxels(expanded, dstPos, chunk.voxels, srcPos, size);
+    }
+    const dx = cx << kChunkBits;
+    const dy = cy << kChunkBits;
+    const dz = cz << kChunkBits;
+    const mesh = voxels ? this.world.mesher.mesh(expanded) : null;
+    if (mesh) mesh.setPosition(dx, dy, dz);
     this.mesh = mesh;
+  }
+
+  private copyVoxels(dst: Tensor3, dstPos: [number, number, number],
+                     src: Tensor3, srcPos: [number, number, number],
+                     size: [number, number, number]) {
+    const ni = size[0], nj = size[1], nk = size[2];
+    const di = dstPos[0], dj = dstPos[1], dk = dstPos[2];
+    const si = srcPos[0], sj = srcPos[1], sk = srcPos[2];
+    for (let i = 0; i < ni; i++) {
+      for (let j = 0; j < nj; j++) {
+        for (let k = 0; k < nk; k++) {
+          const tile = src.get(si + i, sj + j, sk + k);
+          dst.set(di + i, dj + j, dk + k, tile);
+        }
+      }
+    }
   }
 };
 
