@@ -9,10 +9,17 @@ type MaterialId = int & {__type__: 'MaterialId'};
 const kNoMaterial = 0 as MaterialId;
 const kEmptyBlock = 0 as BlockId;
 
+interface Material {
+  color: [number, number, number, number],
+  texture: string | null,
+  textureIndex: int,
+};
+
 interface Registry {
   _solid: boolean[];
   _opaque: boolean[];
   getBlockFaceMaterial(id: BlockId, face: int): MaterialId;
+  getMaterialData(id: MaterialId): Material;
 };
 
 //////////////////////////////////////////////////////////////////////////////
@@ -53,12 +60,14 @@ class TerrainMesher {
   solid: boolean[];
   opaque: boolean[];
   getBlockFaceMaterial: (id: BlockId, face: int) => MaterialId;
+  getMaterialData: (id: MaterialId) => Material;
   renderer: Renderer;
 
   constructor(registry: Registry, renderer: Renderer) {
     this.solid = registry._solid;
     this.opaque = registry._opaque;
     this.getBlockFaceMaterial = registry.getBlockFaceMaterial.bind(registry);
+    this.getMaterialData = registry.getMaterialData.bind(registry);
     this.renderer = renderer;
   }
 
@@ -184,7 +193,6 @@ class TerrainMesher {
 
   private addQuad(geo: GeometryData, d: int, w: int, h: int, mask: int,
                   pos: Vec3, du: Vec3, dv: Vec3, normal: Vec3) {
-    const material = Math.abs(mask) as MaterialId;
     const {numQuads, positions, normals, indices, colors, uvws} = geo;
     geo.numQuads++;
 
@@ -219,8 +227,15 @@ class TerrainMesher {
       indices[indices_offset + i] = base_index + offsets[i];
     }
 
+    const material = this.getMaterialData(Math.abs(mask) as MaterialId);
+    let textureIndex = material.textureIndex;
+    if (textureIndex === 0 && material.texture) {
+      textureIndex = this.renderer.atlas.addImage(material.texture);
+      material.textureIndex = textureIndex;
+    }
+
     for (let i = 0; i < 4; i++) {
-      const color = i === 3 ? 1 : i === d ? 0.5 : 0;
+      const color = material.color[i];
       colors[colors_offset + i + 0]  = color;
       colors[colors_offset + i + 4]  = color;
       colors[colors_offset + i + 8]  = color;
@@ -236,9 +251,8 @@ class TerrainMesher {
       uvws[positions_offset + 1] = uvws[positions_offset + 10] = w;
       uvws[positions_offset + 6] = uvws[positions_offset + 9] = dir * h;
     }
-    // TODO(skishore): Use the tile's material atlas index here.
     for (let i = 0; i < 4; i++) {
-      uvws[positions_offset + i * 3 + 2] = d;
+      uvws[positions_offset + i * 3 + 2] = textureIndex;
     }
   }
 

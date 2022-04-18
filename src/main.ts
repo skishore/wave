@@ -411,7 +411,8 @@ const main = () => {
       for (let z = 1; z < kChunkSize - 1; z++) {
         if (4 <= x && x < 12 && 4 <= z && z < 12) continue;
         chunk.setBlock(x, 1, z, wall);
-        chunk.setBlock(x, 2, z, wall);
+        chunk.setBlock(x, 2, z, dirt);
+        chunk.setBlock(x, 3, z, grass);
       }
     }
     return;

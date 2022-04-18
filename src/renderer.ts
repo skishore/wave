@@ -247,20 +247,22 @@ class Shader {
 class TextureAtlas {
   private context: Context;
   private texture: WebGLTexture;
-  private images: HTMLImageElement[];
   private canvas: CanvasRenderingContext2D | null;
+  private urls: Map<string, int>;
   private data: Uint8Array;
-  private last: int;
+  private lastLoaded: int;
+  private nextResult: int;
 
   constructor(context: Context) {
     const gl = context.gl;
     const texture = nonnull(gl.createTexture());
     this.context = context;
     this.texture = texture;
-    this.images = [];
     this.canvas = null;
+    this.urls = new Map();
     this.data = new Uint8Array();
-    this.last = -1;
+    this.lastLoaded = 0;
+    this.nextResult = 0;
 
     this.bind();
     const id = TEXTURE_2D_ARRAY;
@@ -269,11 +271,14 @@ class TextureAtlas {
   }
 
   addImage(url: string): int {
-    const result = this.images.length;
+    const existing = this.urls.get(url);
+    if (existing !== undefined) return existing;
+
+    const result = ++this.nextResult;
+    this.urls.set(url, result);
     const image = new Image();
     image.addEventListener('load', () => this.loaded(result, image));
     image.src = url;
-    this.images.push(image);
     return result;
   }
 
@@ -310,7 +315,8 @@ class TextureAtlas {
 
     if (allocate) {
       const data = new Uint8Array(Math.max(2 * capacity, required));
-      for (let i = 0; i < this.data.length; i++) data[i] = this.data[i];
+      for (let i = 0; i < length; i++) data[i] = 255;
+      for (let i = length; i < this.data.length; i++) data[i] = this.data[i];
       this.data = data;
     }
 
@@ -318,12 +324,13 @@ class TextureAtlas {
     for (let i = 0; i < length; i++) {
       data[i + offset] = pixels[i];
     }
-    this.last = Math.max(this.last, index);
+    this.lastLoaded = Math.max(this.lastLoaded, index);
+    const depth = this.lastLoaded + 1;
 
     this.bind();
     const gl = this.context.gl;
-    gl.texImage3D(TEXTURE_2D_ARRAY, 0, gl.RGBA, size, size, this.last + 1,
-                  0, gl.RGBA, gl.UNSIGNED_BYTE, this.data);
+    gl.texImage3D(TEXTURE_2D_ARRAY, 0, gl.RGBA, size, size, depth, 0,
+                  gl.RGBA, gl.UNSIGNED_BYTE, this.data);
     gl.generateMipmap(TEXTURE_2D_ARRAY);
   }
 };
@@ -353,8 +360,7 @@ const kFixedShader = `
   out vec4 o_color;
 
   void main() {
-    //o_color = v_color * texture(u_texture, v_uvw);
-    o_color = texture(u_texture, v_uvw);
+    o_color = v_color * texture(u_texture, v_uvw);
     if (o_color[3] < 0.5) discard;
   }
 `;
@@ -467,8 +473,8 @@ interface Mesh {
 
 class Renderer {
   camera: Camera;
+  atlas: TextureAtlas;
   private context: Context;
-  private atlas: TextureAtlas;
   private shader: Shader;
   private meshes: FixedMesh[];
 
@@ -486,16 +492,9 @@ class Renderer {
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
-    const context = new Context(gl);
-    this.context = context;
-
-    const atlas = new TextureAtlas(context);
-    atlas.addImage('images/dirt.png');
-    atlas.addImage('images/rock.png');
-    atlas.addImage('images/wall.png');
-    this.atlas = atlas;
-
-    this.shader = new Shader(context, kFixedShader);
+    this.context = new Context(gl);
+    this.atlas = new TextureAtlas(this.context);
+    this.shader = new Shader(this.context, kFixedShader);
     this.meshes = [];
   }
 

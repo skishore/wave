@@ -87,19 +87,18 @@ class Container {
 type BlockId = int & {__type__: 'BlockId'};
 type MaterialId = int & {__type__: 'MaterialId'};
 
-type Color = [number, number, number];
+type Color = [number, number, number, number];
 
 type SpriteMesh = never;
 
 interface Material {
-  alpha: number,
   color: Color,
   texture: string | null,
-  textureAlpha: boolean,
+  textureIndex: int,
 };
 
-const kBlack: Color = [0, 0, 0];
-const kWhite: Color = [1, 1, 1];
+const kBlack: Color = [0, 0, 0, 1];
+const kWhite: Color = [1, 1, 1, 1];
 
 const kNoMaterial = 0 as MaterialId;
 
@@ -165,13 +164,12 @@ class Registry {
     return result;
   }
 
-  addMaterialOfColor(name: string, color: Color, alpha: number = 1.0) {
-    this.addMaterialHelper(name, alpha, color, null, false);
+  addMaterialOfColor(name: string, color: Color) {
+    this.addMaterialHelper(name, color, null);
   }
 
-  addMaterialOfTexture(name: string, texture: string,
-                       textureAlpha: boolean = false) {
-    this.addMaterialHelper(name, 1, kWhite, texture, textureAlpha);
+  addMaterialOfTexture(name: string, texture: string) {
+    this.addMaterialHelper(name, kWhite, texture);
   }
 
   // faces has 6 elements for each block type: [+x, -x, +y, -y, +z, -z]
@@ -179,17 +177,17 @@ class Registry {
     return this._faces[id * 6 + face];
   }
 
-  getMaterial(id: MaterialId): Material {
+  getMaterialData(id: MaterialId): Material {
     assert(0 < id && id <= this._materials.length);
     return this._materials[id - 1];
   }
 
-  private addMaterialHelper(name: string, alpha: number, color: Color,
-                            texture: string | null, textureAlpha: boolean) {
+  private addMaterialHelper(
+      name: string, color: Color, texture: string | null) {
     assert(name.length > 0, () => 'Empty material name!');
     assert(!this._ids.has(name), () => `Duplicate material: ${name}`);
     this._ids.set(name, this._materials.length as MaterialId);
-    this._materials.push({alpha, color, texture, textureAlpha});
+    this._materials.push({color, texture, textureIndex: 0});
   }
 };
 
