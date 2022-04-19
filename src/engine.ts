@@ -410,6 +410,8 @@ class Chunk {
     if (old_mesh && new_mesh) return;
 
     this.terrainDirty = true;
+    if (!this.finished) return;
+
     const neighbor = (x: int, y: int, z: int) => {
       const {cx, cy, cz} = this;
       const chunk = this.world.getChunk(x + cx, y + cy, z + cz, false);
