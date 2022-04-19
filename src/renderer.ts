@@ -250,7 +250,6 @@ class TextureAtlas {
   private canvas: CanvasRenderingContext2D | null;
   private urls: Map<string, int>;
   private data: Uint8Array;
-  private lastLoaded: int;
   private nextResult: int;
 
   constructor(context: Context) {
@@ -261,7 +260,6 @@ class TextureAtlas {
     this.canvas = null;
     this.urls = new Map();
     this.data = new Uint8Array();
-    this.lastLoaded = 0;
     this.nextResult = 0;
 
     this.bind();
@@ -324,13 +322,18 @@ class TextureAtlas {
     for (let i = 0; i < length; i++) {
       data[i + offset] = pixels[i];
     }
-    this.lastLoaded = Math.max(this.lastLoaded, index);
-    const depth = this.lastLoaded + 1;
 
     this.bind();
     const gl = this.context.gl;
-    gl.texImage3D(TEXTURE_2D_ARRAY, 0, gl.RGBA, size, size, depth, 0,
-                  gl.RGBA, gl.UNSIGNED_BYTE, this.data);
+    if (allocate) {
+      assert(this.data.length % length === 0);
+      const depth = this.data.length / length;
+      gl.texImage3D(TEXTURE_2D_ARRAY, 0, gl.RGBA, size, size, depth, 0,
+                    gl.RGBA, gl.UNSIGNED_BYTE, this.data);
+    } else {
+      gl.texSubImage3D(TEXTURE_2D_ARRAY, 0, 0, 0, index, size, size, 1,
+                       gl.RGBA, gl.UNSIGNED_BYTE, this.data, offset);
+    }
     gl.generateMipmap(TEXTURE_2D_ARRAY);
   }
 };
