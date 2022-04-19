@@ -50,8 +50,10 @@ const kTmpDV     = Vec3.create();
 const kTmpNormal = Vec3.create();
 
 const kIndexOffsets = {
-  backward: [0, 1, 2, 0, 2, 3],
-  forwards: [0, 2, 1, 0, 3, 2],
+  A: [0, 1, 2, 0, 2, 3],
+  B: [1, 2, 3, 0, 1, 3],
+  C: [0, 2, 1, 0, 3, 2],
+  D: [3, 1, 0, 3, 2, 1],
 };
 
 let kMaskData = new Int16Array();
@@ -133,14 +135,21 @@ class TerrainMesher {
             // mask[n] is the face between (id, iu, iv) and (id + 1, iu, iv).
             // Its value is the MaterialId to use, times -1, if it is in the
             // direction opposite `dir`.
+            //
+            // When we enable ambient occlusion, we shift these masks left by
+            // 8 bits and pack AO values for each vertex into the lower byte.
             const block0 = data[index] as BlockId;
             const block1 = data[index + sd] as BlockId;
             const facing = this.getFaceDir(block0, block1, dir);
 
             if (facing === 0) continue;
-            kMaskData[n] = facing > 0
+            const mask = facing > 0
               ?  this.getBlockFaceMaterial(block0, dir)
               : -this.getBlockFaceMaterial(block1, dir + 1);
+            const ao = facing > 0
+              ? this.packAOMask(data, index + sd, index, su, sv)
+              : this.packAOMask(data, index, index + sd, su, sv)
+            kMaskData[n] = (mask << 8) | ao;
           }
         }
 
@@ -221,24 +230,29 @@ class TerrainMesher {
       normals[positions_offset + i + 9] = x;
     }
 
-    const offsets = mask > 0 ? kIndexOffsets.forwards : kIndexOffsets.backward;
+    const triangleHint = this.getTriangleHint(mask);
+    const offsets = mask > 0
+      ? (triangleHint ? kIndexOffsets.C : kIndexOffsets.D)
+      : (triangleHint ? kIndexOffsets.A : kIndexOffsets.B);
     for (let i = 0; i < 6; i++) {
       indices[indices_offset + i] = base_index + offsets[i];
     }
 
-    const material = this.getMaterialData(Math.abs(mask) as MaterialId);
+    const id = Math.abs(mask >> 8) as MaterialId;
+    const material = this.getMaterialData(id);
     let textureIndex = material.textureIndex;
     if (textureIndex === 0 && material.texture) {
       textureIndex = this.renderer.atlas.addImage(material.texture);
       material.textureIndex = textureIndex;
     }
 
+    const color = material.color;
     for (let i = 0; i < 4; i++) {
-      const color = material.color[i];
-      colors[colors_offset + i + 0]  = color;
-      colors[colors_offset + i + 4]  = color;
-      colors[colors_offset + i + 8]  = color;
-      colors[colors_offset + i + 12] = color;
+      const ao = 1 - 0.3 * (mask >> (2 * i) & 3);
+      colors[colors_offset + 4 * i + 0] = color[0] * ao;
+      colors[colors_offset + 4 * i + 1] = color[1] * ao;
+      colors[colors_offset + 4 * i + 2] = color[2] * ao;
+      colors[colors_offset + 4 * i + 3] = color[3];
     }
 
     const dir = Math.sign(mask);
@@ -268,6 +282,32 @@ class TerrainMesher {
     if (material0 === kNoMaterial) return -1;
     if (material1 === kNoMaterial) return 1;
     return 0;
+  }
+
+  private getTriangleHint(mask: int): boolean {
+    const a00 = (mask >> 0) & 3;
+    const a10 = (mask >> 2) & 3;
+    const a11 = (mask >> 4) & 3;
+    const a01 = (mask >> 6) & 3;
+    if (a00 === a11) return (a10 === a01) ? a10 === 3 : true;
+    return (a10 === a01) ? false : (a00 + a11 > a10 + a01);
+  }
+
+  private packAOMask(data: Uint32Array, ipos: int, ineg: int,
+                     dj: int, dk: int): int {
+    let a00 = 0; let a01 = 0; let a10 = 0; let a11 = 0;
+    if (this.solid[data[ipos + dj]]) { a10++; a11++; }
+    if (this.solid[data[ipos - dj]]) { a00++; a01++; }
+    if (this.solid[data[ipos + dk]]) { a01++; a11++; }
+    if (this.solid[data[ipos - dk]]) { a00++; a10++; }
+
+    if (a00 === 0 && this.solid[data[ipos - dj - dk]]) a00++;
+    if (a01 === 0 && this.solid[data[ipos - dj + dk]]) a01++;
+    if (a10 === 0 && this.solid[data[ipos + dj - dk]]) a10++;
+    if (a11 === 0 && this.solid[data[ipos + dj + dk]]) a11++;
+
+    // Order here matches the order in which we push vertices in addQuad.
+    return (a01 << 6) | (a11 << 4) | (a10 << 2) | a00;
   }
 };
 
