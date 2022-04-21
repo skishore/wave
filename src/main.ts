@@ -382,8 +382,8 @@ const main = () => {
   position.x = 2;
   position.y = 12;
   position.z = 2;
-  position.w = 0.6;
-  position.h = 0.8;
+  position.w = 0.8;
+  position.h = 1.6;
 
   env.physics.add(player);
   env.movement.add(player);
@@ -400,7 +400,23 @@ const main = () => {
   const grass = registry.addBlock(['grass', 'dirt', 'dirt'], true);
   const ground = registry.addBlock(['ground', 'dirt', 'dirt'], true);
 
-  const noise = perlin2D();
+  const noise = (() => {
+    const radius = 8;
+    const amplitude = 2;
+    const epsilon = Math.pow(2, 1);
+    const components = new Array(6).fill(null).map(perlin2D);
+    return (x: int, y: int): number => {
+      let result = 0;
+      let r = radius;
+      let a = amplitude;
+      for (const component of components) {
+        result += a * component(x / r, y / r);
+        a *= epsilon;
+        r *= 2;
+      }
+      return result;
+    };
+  })();
 
   loadChunkData = (chunk: Chunk) => {
     if (!(-1 <= chunk.cy && chunk.cy <= 0)) return;
@@ -416,9 +432,7 @@ const main = () => {
 
     for (let x = 0; x < size; x++) {
       for (let z = 0; z < size; z++) {
-        const fx = (x + dx) / 32;
-        const fz = (z + dz) / 32;
-        const height = 8 * noise(fx, fz);
+        const height = noise(x + dx, z + dz);
         const edge = (x === 0) || (z === 0);
         for (let y = 0; y < Math.min(height - dy, size); y++) {
           const h = y + dy;
