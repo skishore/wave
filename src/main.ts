@@ -1,5 +1,5 @@
 import {int, Tensor3, Vec3} from './base.js';
-import {Chunk, Env, kChunkBits, kChunkSize, kEmptyBlock} from './engine.js';
+import {Chunk, Env, kChunkWidth, kChunkHeight, kEmptyBlock} from './engine.js';
 import {Component, ComponentState, ComponentStore, EntityId, kNoEntity} from './ecs.js';
 import {sweep} from './sweep.js';
 
@@ -379,9 +379,9 @@ const main = () => {
   const env = new TypedEnv('container');
   const player = env.entities.addEntity();
   const position = env.position.add(player);
-  position.x = 2;
-  position.y = 12;
-  position.z = 2;
+  position.x = 0;
+  position.y = kChunkHeight;
+  position.z = 0;
   position.w = 0.8;
   position.h = 1.6;
 
@@ -419,25 +419,21 @@ const main = () => {
   })();
 
   loadChunkData = (chunk: Chunk) => {
-    if (!(-1 <= chunk.cy && chunk.cy <= 0)) return;
-
     chunk.init();
+    const W = kChunkWidth;
+    const H = kChunkHeight;
+    const dx = chunk.cx * W;
+    const dz = chunk.cz * W;
 
-    const size = kChunkSize;
-    const pl = size / 4;
-    const pr = 3 * size / 4;
-    const dx = chunk.cx << kChunkBits;
-    const dy = chunk.cy << kChunkBits;
-    const dz = chunk.cz << kChunkBits;
-
-    for (let x = 0; x < size; x++) {
-      for (let z = 0; z < size; z++) {
-        const height = noise(x + dx, z + dz);
+    for (let x = 0; x < W; x++) {
+      for (let z = 0; z < W; z++) {
+        const target = Math.round(noise(x + dx, z + dz) + H / 2);
+        const height = Math.min(Math.max(target, 0), H)
         const edge = (x === 0) || (z === 0);
-        for (let y = 0; y < Math.min(height - dy, size); y++) {
-          const h = y + dy;
+        for (let y = 0; y < height; y++) {
+          const h = y - H / 2;
           const tile = h < -1 ? wall : h < 0 ? dirt : h < 1 ? ground : grass;
-          chunk.setBlock(x + dx, y + dy, z + dz, tile);
+          chunk.setBlock(x + dx, y, z + dz, tile);
         }
       }
     }
