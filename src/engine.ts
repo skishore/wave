@@ -11,6 +11,7 @@ type Input = 'up' | 'left' | 'down' | 'right' | 'space' | 'pointer';
 class Container {
   element: Element;
   canvas: HTMLCanvasElement;
+  stats: Element;
   bindings: Map<int, Input>;
   inputs: Record<Input, boolean>;
   deltas: {x: int, y: int, scroll: int};
@@ -18,6 +19,7 @@ class Container {
   constructor(id: string) {
     this.element = nonnull(document.getElementById(id), () => id);
     this.canvas = nonnull(this.element.querySelector('canvas'));
+    this.stats = nonnull(this.element.querySelector('#stats'));
     this.inputs = {
       up: false,
       left: false,
@@ -42,6 +44,10 @@ class Container {
     document.addEventListener('mousemove', e => this.onMouseMove(e));
     document.addEventListener('pointerlockchange', e => this.onPointerInput(e));
     document.addEventListener('wheel', e => this.onMouseWheel(e));
+  }
+
+  displayStats(stats: string) {
+    this.stats.textContent = stats;
   }
 
   onKeyInput(e: Event, down: boolean) {
@@ -184,6 +190,46 @@ class Registry {
 
 //////////////////////////////////////////////////////////////////////////////
 
+class Performance {
+  private now: any;
+  private index: int;
+  private ticks: int[];
+  private last: number;
+  private sum: int;
+
+  constructor(now: any, samples: int) {
+    assert(samples > 0);
+    this.now = now;
+    this.index = 0;
+    this.ticks = new Array(samples).fill(0);
+    this.last = 0;
+    this.sum = 0;
+  }
+
+  begin() {
+    this.last = this.now.now();
+  }
+
+  end() {
+    const index = this.index;
+    const next_index = index + 1;
+    this.index = next_index < this.ticks.length ? next_index : 0;
+    const tick = Math.round(1000 * (performance.now() - this.last));
+    this.sum += tick - this.ticks[index];
+    this.ticks[index] = tick;
+  }
+
+  max(): number {
+    return Math.max.apply(null, this.ticks);
+  }
+
+  mean(): number {
+    return this.sum / this.ticks.length;
+  }
+};
+
+//////////////////////////////////////////////////////////////////////////////
+
 const kTickResolution = 4;
 const kTicksPerFrame = 4;
 const kTicksPerSecond = 30;
@@ -197,6 +243,8 @@ class Timing {
   updateLimit: number;
   lastRender: int;
   lastUpdate: int;
+  renderPerf: Performance;
+  updatePerf: Performance;
 
   constructor(render: (dt: int, fraction: number) => void,
               update: (dt: int) => void) {
@@ -215,6 +263,9 @@ class Timing {
     this.updateLimit = this.updateDelay * kTicksPerFrame;
     const updateInterval = this.updateDelay / kTickResolution;
     setInterval(this.updateHandler.bind(this), updateInterval);
+
+    this.renderPerf = new Performance(this.now, 60);
+    this.updatePerf = new Performance(this.now, 60);
   }
 
   renderHandler() {
@@ -227,7 +278,9 @@ class Timing {
 
     const fraction = (now - this.lastUpdate) / this.updateDelay;
     try {
+      this.renderPerf.begin();
       this.render(dt, fraction);
+      this.renderPerf.end();
     } catch (e) {
       this.render = () => {};
       console.error(e);
@@ -241,7 +294,9 @@ class Timing {
 
     while (this.lastUpdate + delay < now) {
       try {
+        this.updatePerf.begin();
         this.update(delay);
+        this.updatePerf.end();
       } catch (e) {
         this.update = () => {};
         console.error(e);
@@ -629,12 +684,22 @@ class Env {
     //this.world.sprites.updateBillboards(camera.heading);
     this.entities.render(dt);
     this.renderer.render();
+
+    const timing = this.timing;
+    const stats = `Update: ${this.formatStat(timing.updatePerf)}\r\n` +
+                  `Render: ${this.formatStat(timing.renderPerf)}`;
+    this.container.displayStats(stats);
   }
 
   update(dt: int) {
     if (!this.container.inputs.pointer) return;
     this.entities.update(dt);
     this.world.remesh();
+  }
+
+  private formatStat(perf: Performance): string {
+    const format = (x: number) => (x / 1000).toFixed(2);
+    return `${format(perf.mean())}ms / ${format(perf.max())}ms`;
   }
 };
 
