@@ -1,5 +1,5 @@
 import {int, Tensor3, Vec3} from './base.js';
-import {Chunk, Env, kChunkWidth, kChunkHeight, kEmptyBlock} from './engine.js';
+import {BlockId, Column, Env, kWorldHeight} from './engine.js';
 import {Component, ComponentState, ComponentStore, EntityId, kNoEntity} from './ecs.js';
 import {sweep} from './sweep.js';
 
@@ -11,7 +11,6 @@ class TypedEnv extends Env {
   movement: ComponentStore<MovementState>;
   physics: ComponentStore<PhysicsState>;
   target: ComponentStore;
-  center: ComponentStore;
 
   constructor(id: string) {
     super(id);
@@ -20,7 +19,6 @@ class TypedEnv extends Env {
     this.movement = ents.registerComponent('movement', Movement(this));
     this.physics = ents.registerComponent('physics', Physics(this));
     this.target = ents.registerComponent('camera-target', CameraTarget(this));
-    this.center= ents.registerComponent('recenter-world', RecenterWorld(this));
   }
 };
 
@@ -289,22 +287,7 @@ const CameraTarget = (env: TypedEnv): Component => ({
     for (const state of states) {
       const {x, y, z, h} = env.position.getX(state.id);
       env.renderer.camera.setTarget(x, y + h / 3, z);
-    }
-  },
-});
-
-// RecenterWorld signifies that we'll load the world around an entity.
-
-let loadChunkData = (chunk: Chunk) => {};
-
-const RecenterWorld = (env: TypedEnv): Component => ({
-  init: () => ({id: kNoEntity, index: 0}),
-  onUpdate: (dt: int, states: ComponentState[]) => {
-    for (const state of states) {
-      const position = env.position.getX(state.id);
-      const chunks = env.world.recenter(position.x, position.y, position.z);
-      chunks.forEach(x => { loadChunkData(x); x.finish(); });
-      break;
+      env.world.recenter(x, y, z);
     }
   },
 });
@@ -380,7 +363,7 @@ const main = () => {
   const player = env.entities.addEntity();
   const position = env.position.add(player);
   position.x = 0;
-  position.y = kChunkHeight;
+  position.y = kWorldHeight;
   position.z = 0;
   position.w = 0.8;
   position.h = 1.6;
@@ -388,7 +371,6 @@ const main = () => {
   env.physics.add(player);
   env.movement.add(player);
   env.target.add(player);
-  env.center.add(player);
 
   const registry = env.registry;
   const textures = ['dirt', 'grass', 'ground', 'wall'];
@@ -418,26 +400,21 @@ const main = () => {
     };
   })();
 
-  loadChunkData = (chunk: Chunk) => {
-    chunk.init();
-    const W = kChunkWidth;
-    const H = kChunkHeight;
-    const dx = chunk.cx * W;
-    const dz = chunk.cz * W;
+  const H = kWorldHeight;
+  const S = Math.floor(kWorldHeight / 2);
+  const tiles: [BlockId, int][] =
+    [[wall, S - 1], [dirt, S], [ground, S + 1], [grass, H]];
 
-    for (let x = 0; x < W; x++) {
-      for (let z = 0; z < W; z++) {
-        const target = Math.round(noise(x + dx, z + dz) + H / 2);
-        const height = Math.min(Math.max(target, 0), H)
-        const edge = (x === 0) || (z === 0);
-        for (let y = 0; y < height; y++) {
-          const h = y - H / 2;
-          const tile = h < -1 ? wall : h < 0 ? dirt : h < 1 ? ground : grass;
-          chunk.setBlock(x + dx, y, z + dz, tile);
-        }
-      }
+  const loader = (x: int, z: int, column: Column) => {
+    let last = 0;
+    const target = Math.round(noise(x, z) + H / 2);
+    for (const [tile, height] of tiles) {
+      if (height >= target) return column.push(tile, target - last);
+      column.push(tile, height - last);
+      last = height;
     }
   };
+  env.world.setLoader(loader);
 
   env.refresh();
 };

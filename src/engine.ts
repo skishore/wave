@@ -314,10 +314,54 @@ class Timing {
 
 //////////////////////////////////////////////////////////////////////////////
 
+type Loader = (x: int, z: int, column: Column) => void;
+
+class Column {
+  private data: Uint16Array;
+  private last: int;
+  private size: int;
+
+  constructor() {
+    this.data = new Uint16Array(2 * kWorldHeight);
+    this.last = 0;
+    this.size = 0;
+  }
+
+  clear() {
+    this.last = 0;
+    this.size = 0;
+  }
+
+  fill(x: int, z: int, chunk: Chunk) {
+    let last = 0;
+    for (let i = 0; i < this.size; i++) {
+      const offset = 2 * i;
+      const block = this.data[offset + 0] as BlockId;
+      const level = this.data[offset + 1];
+      for (let y = last; y < level; y++) {
+        chunk.setBlock(x, y, z, block);
+      }
+      last = level;
+    }
+  }
+
+  push(block: BlockId, count: int) {
+    if (count <= 0) return;
+    const offset = 2 * this.size;
+    const last = Math.min(this.last + count, kWorldHeight);
+    this.data[offset + 0] = block;
+    this.data[offset + 1] = last;
+    this.last = last;
+    this.size++;
+  }
+};
+
+//////////////////////////////////////////////////////////////////////////////
+
 const kChunkBits = 4;
 const kChunkWidth = 1 << kChunkBits;
 const kChunkMask = kChunkWidth - 1;
-const kChunkHeight = 256;
+const kWorldHeight = 256;
 
 const kChunkKeyBits = 16;
 const kChunkKeySize = 1 << kChunkKeyBits;
@@ -333,7 +377,7 @@ const kNumChunksToMeshPerFrame = 1;
 type Point = [number, number, number];
 const kNeighborOffsets = ((): [Point, Point, Point, Point][] => {
   const W = kChunkWidth;
-  const H = kChunkHeight;
+  const H = kWorldHeight;
   const L = W - 1;
   const N = W + 1;
   return [
@@ -396,9 +440,23 @@ class Chunk {
     this.active = this.checkActive();
   }
 
-  init() {
+  load(loader: Loader) {
     assert(!this.voxels);
-    this.voxels = new Tensor3(kChunkWidth, kChunkHeight, kChunkWidth);
+    this.voxels = new Tensor3(kChunkWidth, kWorldHeight, kChunkWidth);
+
+    const {cx, cz} = this;
+    const dx = cx << kChunkBits;
+    const dz = cz << kChunkBits;
+    const column = new Column();
+    for (let x = 0; x < kChunkWidth; x++) {
+      for (let z = 0; z < kChunkWidth; z++) {
+        loader(x + dx, z + dz, column);
+        column.fill(x + dx, z + dz, this);
+        column.clear();
+      }
+    }
+
+    this.finish();
   }
 
   finish() {
@@ -425,14 +483,14 @@ class Chunk {
 
   getBlock(x: int, y: int, z: int): BlockId {
     if (!this.voxels) return kEmptyBlock;
-    if (!(0 <= y && y < kChunkHeight)) return kEmptyBlock;
+    if (!(0 <= y && y < kWorldHeight)) return kEmptyBlock;
     const mask = kChunkMask;
     return this.voxels.get(x & mask, y, z & mask) as BlockId;
   }
 
   setBlock(x: int, y: int, z: int, block: BlockId) {
     if (!this.voxels) return;
-    if (!(0 <= y && y < kChunkHeight)) return;
+    if (!(0 <= y && y < kWorldHeight)) return;
     const xm = x & kChunkMask;
     const zm = z & kChunkMask;
     const voxels = nonnull(this.voxels);
@@ -497,7 +555,7 @@ class Chunk {
     // TODO(skishore): Restore TerrainSprites.
     //const sprites = this.world.sprites;
     //for (let x = 0; x < kChunkWidth; x++) {
-    //  for (let y = 0; y < kChunkHeight; y++) {
+    //  for (let y = 0; y < kWorldHeight; y++) {
     //    for (let z = 0; z < kChunkWidth; z++) {
     //      const cell = this.voxels.get(x, y, z) as BlockId;
     //      const mesh = this.world.registry._meshes[cell];
@@ -513,7 +571,7 @@ class Chunk {
     if (this.mesh) this.mesh.dispose();
     const {cx, cz, voxels} = this;
     const w = kChunkWidth + 2;
-    const h = kChunkHeight + 2;
+    const h = kWorldHeight + 2;
     const expanded = new Tensor3(w, h, w);
     for (const offset of kNeighborOffsets) {
       const [c, dstPos, srcPos, size] = offset;
@@ -551,6 +609,7 @@ class World {
   renderer: Renderer;
   registry: Registry;
   mesher: TerrainMesher;
+  loader: Loader | null;
 
   constructor(registry: Registry, renderer: Renderer) {
     this.chunks = new Map();
@@ -558,6 +617,7 @@ class World {
     this.renderer = renderer;
     this.registry = registry;
     this.mesher = new TerrainMesher(registry, renderer);
+    this.loader = null;
   }
 
   getBlock(x: int, y: int, z: int): BlockId {
@@ -582,7 +642,11 @@ class World {
     return chunk;
   }
 
-  recenter(x: number, y: number, z: number): Chunk[] {
+  setLoader(loader: Loader | null) {
+    this.loader = loader;
+  }
+
+  recenter(x: number, y: number, z: number) {
     const dx = (x >> kChunkBits);
     const dz = (z >> kChunkBits);
 
@@ -602,6 +666,9 @@ class World {
       if (disable) chunk.disable();
     }
 
+    const loader = this.loader;
+    if (!loader) return;
+
     const requests = [];
     for (let i = dx - kChunkRadius; i <= dx + kChunkRadius; i++) {
       const ax = Math.abs(i - dx);
@@ -617,13 +684,15 @@ class World {
     }
 
     const n = kNumChunksToLoadPerFrame;
-    let result = requests;
+    const m = Math.min(requests.length, n);
     if (requests.length > n) {
       requests.sort((x, y) => x.distance - y.distance);
-      result = requests.slice(0, n);
     }
-    result.forEach(x => x.requested = true);
-    return result;
+    for (let i = 0; i < m; i++) {
+      const chunk = requests[i];
+      chunk.requested = true;
+      chunk.load(loader);
+    }
   }
 
   remesh() {
@@ -705,4 +774,4 @@ class Env {
 
 //////////////////////////////////////////////////////////////////////////////
 
-export {Chunk, Env, kChunkWidth, kChunkHeight, kEmptyBlock};
+export {BlockId, MaterialId, Column, Env, kWorldHeight};
