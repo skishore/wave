@@ -86,8 +86,6 @@ type MaterialId = int & {__type__: 'MaterialId'};
 
 type Color = [number, number, number, number];
 
-type SpriteMesh = never;
-
 interface Material {
   color: Color,
   texture: string | null,
@@ -106,14 +104,12 @@ class Registry {
   _opaque: boolean[];
   _solid: boolean[];
   _faces: MaterialId[];
-  _meshes: (SpriteMesh | null)[];
   _materials: Material[];
   _ids: Map<string, MaterialId>;
 
   constructor() {
     this._opaque = [false, false];
     this._solid = [false, true];
-    this._meshes = [null, null];
     this._faces = []
     for (let i = 0; i < 12; i++) {
       this._faces.push(kNoMaterial);
@@ -142,22 +138,12 @@ class Registry {
     const result = this._opaque.length as BlockId;
     this._opaque.push(solid);
     this._solid.push(solid);
-    this._meshes.push(null);
     materials.forEach(x => {
       const material = this._ids.get(x);
       if (material === undefined) throw new Error(`Unknown material: ${x}`);
       this._faces.push(material + 1 as MaterialId);
     });
 
-    return result;
-  }
-
-  addBlockSprite(mesh: SpriteMesh, solid: boolean): BlockId {
-    const result = this._opaque.length as BlockId;
-    this._opaque.push(false);
-    this._solid.push(solid);
-    this._meshes.push(mesh);
-    for (let i = 0; i < 6; i++) this._faces.push(kNoMaterial);
     return result;
   }
 
@@ -390,48 +376,44 @@ const kNeighborOffsets = ((): [Point, Point, Point, Point][] => {
 })();
 
 class Chunk {
+  cx: int;
+  cz: int;
   world: World;
   active: boolean;
   enabled: boolean;
   finished: boolean;
   requested: boolean;
-  neighbors: int;
-  spritesDirty: boolean;
-  terrainDirty: boolean;
-  mesh: Mesh | null;
-  voxels: Tensor3 | null;
   distance: number;
-  cx: int;
-  cz: int;
+  private neighbors: int;
+  private dirty: boolean;
+  private mesh: Mesh | null;
+  private voxels: Tensor3 | null;
 
   constructor(world: World, cx: int, cz: int) {
+    this.cx = cx;
+    this.cz = cz;
     this.world = world;
     this.active = false;
     this.enabled = false;
     this.finished = false;
     this.requested = false;
+    this.distance = 0;
     this.neighbors = kNeighbors;
-    this.spritesDirty = true;
-    this.terrainDirty = true;
+    this.dirty = true;
     this.mesh = null;
     this.voxels = null;
-    this.distance = 0;
-    this.cx = cx;
-    this.cz = cz;
   }
 
   disable() {
     if (!this.enabled) return;
     this.world.enabled.delete(this);
 
-    if (!this.spritesDirty) this.refreshSprites(false);
     if (this.mesh) this.mesh.dispose();
     this.mesh = null;
 
     this.active = false;
     this.enabled = false;
-    this.spritesDirty = true;
-    this.terrainDirty = true;
+    this.dirty = true;
   }
 
   enable() {
@@ -473,12 +455,8 @@ class Chunk {
     neighbor(1, 0); neighbor(-1, 0);
     neighbor(0, 1); neighbor(0, -1);
 
-    if (!this.voxels) {
-      this.spritesDirty = false;
-      this.terrainDirty = false;
-    }
-
     this.active = this.checkActive();
+    this.dirty = !!this.voxels;
   }
 
   getBlock(x: int, y: int, z: int): BlockId {
@@ -497,24 +475,15 @@ class Chunk {
     const old = voxels.get(xm, y, zm) as BlockId;
     if (old === block) return;
 
-    const old_mesh = this.world.registry._meshes[old];
-    const new_mesh = this.world.registry._meshes[block];
-    if (!this.spritesDirty) {
-      // TODO(skishore): Restore TerrainSprites.
-      //if (old_mesh) this.world.sprites.remove(x, y, z, old);
-      //if (new_mesh) this.world.sprites.add(x, y, z, block, new_mesh);
-    }
-
     voxels.set(xm, y, zm, block);
-    if (old_mesh && new_mesh) return;
 
-    this.terrainDirty = true;
+    this.dirty = true;
     if (!this.finished) return;
 
     const neighbor = (x: int, y: int, z: int) => {
       const {cx, cz} = this;
       const chunk = this.world.getChunk(x + cx, z + cz, false);
-      if (chunk) chunk.terrainDirty = true;
+      if (chunk) chunk.dirty = true;
     };
     if (xm === 0) neighbor(-1, 0, 0);
     if (xm === kChunkMask) neighbor(1, 0, 0);
@@ -523,18 +492,13 @@ class Chunk {
   }
 
   needsRemesh() {
-    return this.active && (this.spritesDirty || this.terrainDirty);
+    return this.active && this.dirty;
   }
 
   remesh() {
-    if (this.spritesDirty) {
-      this.refreshSprites(true);
-      this.spritesDirty = false;
-    }
-    if (this.terrainDirty) {
-      this.refreshTerrain();
-      this.terrainDirty = false;
-    }
+    assert(this.dirty);
+    this.refreshTerrain();
+    this.dirty = false;
   }
 
   private checkActive(): boolean {
@@ -545,26 +509,6 @@ class Chunk {
     assert(this.neighbors > 0);
     this.neighbors--;
     this.active = this.checkActive();
-  }
-
-  private refreshSprites(enabled: boolean) {
-    if (!this.voxels) return;
-    const dx = this.cx << kChunkBits;
-    const dz = this.cz << kChunkBits;
-
-    // TODO(skishore): Restore TerrainSprites.
-    //const sprites = this.world.sprites;
-    //for (let x = 0; x < kChunkWidth; x++) {
-    //  for (let y = 0; y < kWorldHeight; y++) {
-    //    for (let z = 0; z < kChunkWidth; z++) {
-    //      const cell = this.voxels.get(x, y, z) as BlockId;
-    //      const mesh = this.world.registry._meshes[cell];
-    //      if (!mesh) continue;
-    //      enabled ? sprites.add(x + dx, y, z + dz, cell, mesh)
-    //              : sprites.remove(x + dx, y, z + dz, cell);
-    //    }
-    //  }
-    //}
   }
 
   private refreshTerrain() {
@@ -749,8 +693,6 @@ class Env {
     camera.applyInputs(deltas.x, deltas.y, deltas.scroll);
     deltas.x = deltas.y = deltas.scroll = 0;
 
-    // TODO(skishore): Restore TerrainSprites.
-    //this.world.sprites.updateBillboards(camera.heading);
     this.entities.render(dt);
     this.renderer.render();
 
