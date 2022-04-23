@@ -356,6 +356,23 @@ const perlin2D = () => {
   return noise;
 };
 
+const fractalPerlin2D = (
+    amplitude: number, radius: number, growth: number, count: int) => {
+  const factor = Math.pow(2, growth);
+  const components = new Array(count).fill(null).map(perlin2D);
+  return (x: int, y: int): number => {
+    let result = 0;
+    let r = radius;
+    let a = amplitude;
+    for (const component of components) {
+      result += a * component(x / r, y / r);
+      a *= factor;
+      r *= 2;
+    }
+    return result;
+  };
+};
+
 // Putting it all together:
 
 const main = () => {
@@ -382,29 +399,12 @@ const main = () => {
   const grass = registry.addBlock(['grass', 'dirt', 'dirt'], true);
   const ground = registry.addBlock(['ground', 'dirt', 'dirt'], true);
 
-  const noise = (() => {
-    const radius = 8;
-    const amplitude = 2;
-    const epsilon = Math.pow(2, 1);
-    const components = new Array(6).fill(null).map(perlin2D);
-    return (x: int, y: int): number => {
-      let result = 0;
-      let r = radius;
-      let a = amplitude;
-      for (const component of components) {
-        result += a * component(x / r, y / r);
-        a *= epsilon;
-        r *= 2;
-      }
-      return result;
-    };
-  })();
-
   const H = kWorldHeight;
   const S = Math.floor(kWorldHeight / 2);
   const tiles: [BlockId, int][] =
     [[wall, S - 1], [dirt, S], [ground, S + 1], [grass, H]];
 
+  const noise = fractalPerlin2D(2, 8, 1.0, 6);
   const loader = (x: int, z: int, column: Column) => {
     let last = 0;
     const target = Math.round(noise(x, z) + H / 2);
