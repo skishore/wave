@@ -419,6 +419,27 @@ const main = () => {
   env.refresh();
 };
 
-window.onload = main;
+const wrapper = async () => {
+  const path = 'rust/target/wasm32-unknown-unknown/debug/voxels.wasm';
+  const data = await (await fetch(path)).arrayBuffer();
+  const module = await WebAssembly.compile(data);
+
+  const show_vec_u32 = (data: int, size: int) => {
+    const memory = (instance.exports as any).memory as WebAssembly.Memory;
+    const array = new Uint32Array(memory.buffer, data, size);
+    console.log(Array.from(array));
+  };
+
+  const imports = {env: {show_vec_u32}};
+  const instance = await WebAssembly.instantiate(module, imports);
+  (instance.exports as any).range(1);
+  (instance.exports as any).range(2);
+  (instance.exports as any).range(4);
+  (instance.exports as any).range(1);
+  (instance.exports as any).range(2);
+  (instance.exports as any).range(4);
+};
+
+window.onload = wrapper;
 
 export {};

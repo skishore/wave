@@ -1,0 +1,8 @@
+[package]
+name = "voxels"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/exports.rs"
+crate-type = ["cdylib"]
