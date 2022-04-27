@@ -496,7 +496,7 @@ class Renderer {
     canvas.height = canvas.clientHeight;
     this.camera = new Camera(canvas.width, canvas.height);
 
-    const gl = nonnull(canvas.getContext('webgl2'));
+    const gl = nonnull(canvas.getContext('webgl2', {alpha: false}));
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LEQUAL);

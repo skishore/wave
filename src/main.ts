@@ -287,6 +287,11 @@ const CameraTarget = (env: TypedEnv): Component => ({
     for (const state of states) {
       const {x, y, z, h} = env.position.getX(state.id);
       env.renderer.camera.setTarget(x, y + h / 3, z);
+    }
+  },
+  onUpdate: (dt: int, states: ComponentState[]) => {
+    for (const state of states) {
+      const {x, y, z} = env.position.getX(state.id);
       env.world.recenter(x, y, z);
     }
   },
