@@ -140,9 +140,10 @@ class TerrainMesher {
             // 8 bits and pack AO values for each vertex into the lower byte.
             const block0 = data[index] as BlockId;
             const block1 = data[index + sd] as BlockId;
+            if (block0 === block1) continue;
             const facing = this.getFaceDir(block0, block1, dir);
-
             if (facing === 0) continue;
+
             const mask = facing > 0
               ?  this.getBlockFaceMaterial(block0, dir)
               : -this.getBlockFaceMaterial(block1, dir + 1);
