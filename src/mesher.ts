@@ -278,7 +278,7 @@ class TerrainMesher {
     if (opaque1) return -1;
 
     const material0 = this.getBlockFaceMaterial(block0, dir);
-    const material1 = this.getBlockFaceMaterial(block0, dir + 1);
+    const material1 = this.getBlockFaceMaterial(block1, dir + 1);
     if (material0 === material1) return 0;
     if (material0 === kNoMaterial) return -1;
     if (material1 === kNoMaterial) return 1;
