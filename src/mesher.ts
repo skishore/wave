@@ -103,6 +103,89 @@ class TerrainMesher {
     for (let i = 0; i < dst.length; i++) dst[i] = src[i];
   }
 
+  countQuads(voxels: Tensor3): int {
+    const {data, shape, stride} = voxels;
+    let result = 0;
+
+    for (let d = 0; d < 3; d++) {
+      const dir = d * 2;
+      const u = (d + 1) % 3;
+      const v = (d + 2) % 3;
+      const ld = shape[d] - 2,  lu = shape[u] - 2,  lv = shape[v] - 2;
+      const sd = stride[d], su = stride[u], sv = stride[v];
+      const base = su + sv;
+
+      const area = lu * lv;
+      if (kMaskData.length < area) {
+        kMaskData = new Int16Array(area);
+      }
+
+      for (let id = 0; id < ld; id++) {
+        let n = 0;
+        for (let iu = 0; iu < lu; iu++) {
+          let index = base + id * sd + iu * su;
+          for (let iv = 0; iv < lv; iv++, index += sv, n += 1) {
+            // mask[n] is the face between (id, iu, iv) and (id + 1, iu, iv).
+            // Its value is the MaterialId to use, times -1, if it is in the
+            // direction opposite `dir`.
+            //
+            // When we enable ambient occlusion, we shift these masks left by
+            // 8 bits and pack AO values for each vertex into the lower byte.
+            const block0 = data[index] as BlockId;
+            const block1 = data[index + sd] as BlockId;
+            if (block0 === block1) continue;
+            const facing = this.getFaceDir(block0, block1, dir);
+            if (facing === 0) continue;
+
+            const mask = facing > 0
+              ?  this.getBlockFaceMaterial(block0, dir)
+              : -this.getBlockFaceMaterial(block1, dir + 1);
+            const ao = facing > 0
+              ? this.packAOMask(data, index + sd, index, su, sv)
+              : this.packAOMask(data, index, index + sd, su, sv)
+            kMaskData[n] = (mask << 8) | ao;
+          }
+        }
+
+        n = 0;
+
+        for (let iu = 0; iu < lu; iu++) {
+          let h = 1;
+          for (let iv = 0; iv < lv; iv += h, n += h) {
+            const mask = kMaskData[n];
+            if (mask === 0) {
+              h = 1;
+              continue;
+            }
+
+            for (h = 1; h < lv - iv; h++) {
+              if (mask != kMaskData[n + h]) break;
+            }
+
+            let w = 1, nw = n + lv;
+            OUTER:
+            for (; w < lu - iu; w++, nw += lv) {
+              for (let x = 0; x < h; x++) {
+                if (mask != kMaskData[nw + x]) break OUTER;
+              }
+            }
+
+            result++;
+
+            nw = n;
+            for (let wx = 0; wx < w; wx++, nw += lv) {
+              for (let hx = 0; hx < h; hx++) {
+                kMaskData[nw + hx] = 0;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return result;
+  }
+
   private computeGeometryData(voxels: Tensor3): GeometryData {
     const result = kGeometryData;
     result.numQuads = 0;

@@ -1,5 +1,5 @@
 import {int, Tensor3, Vec3} from './base.js';
-import {BlockId, Column, Env, kWorldHeight} from './engine.js';
+import {BlockId, Column, Env, RustHelper, kWorldHeight} from './engine.js';
 import {Component, ComponentState, ComponentStore, EntityId, kNoEntity} from './ecs.js';
 import {sweep} from './sweep.js';
 
@@ -12,8 +12,8 @@ class TypedEnv extends Env {
   physics: ComponentStore<PhysicsState>;
   target: ComponentStore;
 
-  constructor(id: string) {
-    super(id);
+  constructor(id: string, rust: RustHelper) {
+    super(id, rust);
     const ents = this.entities;
     this.position = ents.registerComponent('position', Position);
     this.movement = ents.registerComponent('movement', Movement(this));
@@ -375,8 +375,8 @@ const fractalPerlin2D = (
 
 // Putting it all together:
 
-const main = () => {
-  const env = new TypedEnv('container');
+const main = (rust: RustHelper) => {
+  const env = new TypedEnv('container', rust);
   const player = env.entities.addEntity();
   const position = env.position.add(player);
   position.x = 0;
@@ -420,24 +420,14 @@ const main = () => {
 };
 
 const wrapper = async () => {
-  const path = 'rust/target/wasm32-unknown-unknown/debug/voxels.wasm';
+  const path = 'rust/target/wasm32-unknown-unknown/release/voxels.wasm';
   const data = await (await fetch(path)).arrayBuffer();
   const module = await WebAssembly.compile(data);
 
-  const show_vec_u32 = (data: int, size: int) => {
-    const memory = (instance.exports as any).memory as WebAssembly.Memory;
-    const array = new Uint32Array(memory.buffer, data, size);
-    console.log(Array.from(array));
-  };
-
-  const imports = {env: {show_vec_u32}};
+  const console_log = (x: int) => { console.log(x); };
+  const imports = {env: {console_log}};
   const instance = await WebAssembly.instantiate(module, imports);
-  (instance.exports as any).range(1);
-  (instance.exports as any).range(2);
-  (instance.exports as any).range(4);
-  (instance.exports as any).range(1);
-  (instance.exports as any).range(2);
-  (instance.exports as any).range(4);
+  main(instance.exports as any as RustHelper);
 };
 
 window.onload = wrapper;
