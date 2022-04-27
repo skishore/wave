@@ -469,16 +469,16 @@ class Chunk {
   setBlock(x: int, y: int, z: int, block: BlockId) {
     if (!this.voxels) return;
     if (!(0 <= y && y < kWorldHeight)) return;
+
     const xm = x & kChunkMask;
     const zm = z & kChunkMask;
     const voxels = nonnull(this.voxels);
+    if (!this.finished) return voxels.set(xm, y, zm, block);
+
     const old = voxels.get(xm, y, zm) as BlockId;
     if (old === block) return;
-
     voxels.set(xm, y, zm, block);
-
     this.dirty = true;
-    if (!this.finished) return;
 
     const neighbor = (x: int, y: int, z: int) => {
       const {cx, cz} = this;
@@ -533,14 +533,18 @@ class Chunk {
   private copyVoxels(dst: Tensor3, dstPos: [number, number, number],
                      src: Tensor3, srcPos: [number, number, number],
                      size: [number, number, number]) {
-    const ni = size[0], nj = size[1], nk = size[2];
-    const di = dstPos[0], dj = dstPos[1], dk = dstPos[2];
-    const si = srcPos[0], sj = srcPos[1], sk = srcPos[2];
+    const [ni, nj, nk] = size;
+    const [di, dj, dk] = dstPos;
+    const [si, sj, sk] = srcPos;
+    const dsj = dst.stride[1];
+    const ssj = src.stride[1];
     for (let i = 0; i < ni; i++) {
-      for (let j = 0; j < nj; j++) {
-        for (let k = 0; k < nk; k++) {
-          const tile = src.get(si + i, sj + j, sk + k);
-          dst.set(di + i, dj + j, dk + k, tile);
+      for (let k = 0; k < nk; k++) {
+        // Unroll along the y-axis, since it's the longest chunk dimension.
+        let sindex = src.index(si + i, sj, sk + k);
+        let dindex = dst.index(di + i, dj, dk + k);
+        for (let j = 0; j < nj; j++, dindex += dsj, sindex += ssj) {
+          dst.data[dindex] = src.data[sindex];
         }
       }
     }
