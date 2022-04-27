@@ -148,15 +148,15 @@ fn mesh_impl(mask_data: &mut Vec<i32>, registry: &Registry, voxels: &Tensor3) ->
           //
           // When we enable ambient occlusion, we shift these masks left by
           // 8 bits and pack AO values for each vertex into the lower byte.
-          let block0 = data[index] as usize;
-          let block1 = data[index + sd] as usize;
+          let block0 = *get(data, index) as usize;
+          let block1 = *get(data, index + sd) as usize;
           let facing = get_face_dir(registry, block0, block1, dir);
 
           if facing == 0 { continue; }
           let mask = if facing > 0 {
-            (registry.blocks[block0].facets[dir]) as i32
+            *get(&get(&registry.blocks, block0).facets, dir) as i32
           } else {
-            -(registry.blocks[block1].facets[dir + 1] as i32)
+            -(*get(&get(&registry.blocks, block1).facets, dir + 1) as i32)
           };
           let ao = if facing > 0 {
             pack_ao_mask(registry, data, index + sd, su, sv)
@@ -174,7 +174,7 @@ fn mesh_impl(mask_data: &mut Vec<i32>, registry: &Registry, voxels: &Tensor3) ->
         let mut iv = 0;
         while iv < lv {
           let n = n_counter;
-          let mask = mask_data[n];
+          let mask = *get(mask_data, n);
           if mask == 0 {
             iv += 1;
             n_counter += 1;
@@ -183,7 +183,7 @@ fn mesh_impl(mask_data: &mut Vec<i32>, registry: &Registry, voxels: &Tensor3) ->
 
           let mut h = 1;
           while h < lv - iv {
-            if mask != mask_data[n + h] { break; }
+            if mask != *get(mask_data, n + h) { break; }
             h += 1;
           }
 
@@ -191,7 +191,7 @@ fn mesh_impl(mask_data: &mut Vec<i32>, registry: &Registry, voxels: &Tensor3) ->
           'outer:
           while w < lu - iu {
             for x in 0..h {
-              if mask != mask_data[nw + x] { break 'outer; }
+              if mask != *get(mask_data, nw + x) { break 'outer; }
             }
             w += 1;
             nw += lv;
@@ -223,16 +223,21 @@ fn mesh_impl(mask_data: &mut Vec<i32>, registry: &Registry, voxels: &Tensor3) ->
 }
 
 #[inline(always)]
+fn get<T>(vec: &[T], index: usize) -> &T {
+  unsafe { &*vec.as_ptr().offset(index as isize) }
+}
+
+#[inline(always)]
 fn get_face_dir(registry: &Registry, block0: usize, block1: usize, dir: usize) -> i32 {
   if block0 == block1 { return 0; }
-  let opaque0 = registry.blocks[block0].opaque;
-  let opaque1 = registry.blocks[block1].opaque;
+  let opaque0 = get(&registry.blocks, block0).opaque;
+  let opaque1 = get(&registry.blocks, block1).opaque;
   if opaque0 && opaque1 { return 0; }
   if opaque0 { return 1; }
   if opaque1 { return -1; }
 
-  let material0 = registry.blocks[block0].facets[dir];
-  let material1 = registry.blocks[block1].facets[dir + 1];
+  let material0 = *get(&get(&registry.blocks, block0).facets, dir);
+  let material1 = *get(&get(&registry.blocks, block1).facets, dir + 1);
   if material0 == material1 { return 0; }
   if material0 == NO_MATERIAL { return -1; }
   if material1 == NO_MATERIAL { return 1; }
@@ -241,16 +246,20 @@ fn get_face_dir(registry: &Registry, block0: usize, block1: usize, dir: usize) -
 
 #[inline(always)]
 fn pack_ao_mask(registry: &Registry, data: &Vec<u32>, ipos: usize, dj: usize, dk: usize) -> i32 {
+  let solid = |i: usize| {
+    let block = *get(data, i) as usize;
+    registry.blocks[block].solid
+  };
   let mut a00 = 0; let mut a01 = 0; let mut a10 = 0; let mut a11 = 0;
-  if registry.blocks[data[ipos + dj] as usize].solid { a10 += 1; a11 += 1; }
-  if registry.blocks[data[ipos - dj] as usize].solid { a00 += 1; a01 += 1; }
-  if registry.blocks[data[ipos + dk] as usize].solid { a01 += 1; a11 += 1; }
-  if registry.blocks[data[ipos - dk] as usize].solid { a00 += 1; a10 += 1; }
+  if solid(ipos + dj) { a10 += 1; a11 += 1; }
+  if solid(ipos - dj) { a00 += 1; a01 += 1; }
+  if solid(ipos + dk) { a01 += 1; a11 += 1; }
+  if solid(ipos - dk) { a00 += 1; a10 += 1; }
 
-  if a00 == 0 && registry.blocks[data[ipos - dj - dk] as usize].solid { a00 += 1; }
-  if a01 == 0 && registry.blocks[data[ipos - dj + dk] as usize].solid { a01 += 1; }
-  if a10 == 0 && registry.blocks[data[ipos + dj - dk] as usize].solid { a10 += 1; }
-  if a11 == 0 && registry.blocks[data[ipos + dj + dk] as usize].solid { a11 += 1; }
+  if a00 == 0 && solid(ipos - dj - dk) { a00 += 1; }
+  if a01 == 0 && solid(ipos - dj + dk) { a01 += 1; }
+  if a10 == 0 && solid(ipos + dj - dk) { a10 += 1; }
+  if a11 == 0 && solid(ipos + dj + dk) { a11 += 1; }
 
   // Order here matches the order in which we push vertices in addQuad.
   return (a01 << 6) | (a11 << 4) | (a10 << 2) | a00;
