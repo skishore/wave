@@ -1,5 +1,5 @@
 import {int, Tensor3, Vec3} from './base.js';
-import {Mesh, Renderer} from './renderer.js';
+import {FixedGeometry, Mesh, Renderer} from './renderer.js';
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -26,22 +26,18 @@ interface Registry {
 
 interface GeometryData {
   numQuads: int;
-  quadMaterials: MaterialId[]; // length: n = numQuads
-  positions: number[];         // length: 12n (Vec3 for each vertex)
-  normals: number[];           // length: 12n (Vec3 for each vertex)
-  indices: int[];              // length: 6n  (2 triangles - 6 indices)
-  colors: number[];            // length: 16n (Color4 for each vertex)
-  uvws: number[];              // length: 12n ((u, v, w) for each vertex)
+  geo: FixedGeometry;
 };
 
 const kGeometryData: GeometryData = {
   numQuads: 0,
-  quadMaterials: [],
-  positions: [],
-  normals: [],
-  indices: [],
-  colors: [],
-  uvws: [],
+  geo: {
+    positions: new Float32Array(),
+    normals: new Float32Array(),
+    colors: new Float32Array(),
+    indices: new Uint32Array(),
+    uvws: new Float32Array(),
+  },
 };
 
 const kTmpPos = Vec3.create();
@@ -74,29 +70,27 @@ class TerrainMesher {
     const numQuads = data.numQuads;
     if (data.numQuads === 0) return null;
 
+    const {positions, normals, indices, colors, uvws} = data.geo;
     const geo = {
-      positions : new Float32Array(numQuads * 12),
-      normals   : new Float32Array(numQuads * 12),
-      indices   : new   Uint32Array(numQuads * 6),
-      colors    : new Float32Array(numQuads * 16),
-      uvws      : new Float32Array(numQuads * 12),
+      positions : positions.slice(0, numQuads * 12),
+      normals   : normals.slice(0, numQuads * 12),
+      indices   : indices.slice(0, numQuads * 6),
+      colors    : colors.slice(0, numQuads * 16),
+      uvws      : uvws.slice(0, numQuads * 12),
     };
-
-    this.copyFloats(geo.positions, data.positions);
-    this.copyFloats(geo.normals,   data.normals);
-    this.copyInt32s(geo.indices,   data.indices);
-    this.copyFloats(geo.colors,    data.colors);
-    this.copyFloats(geo.uvws,      data.uvws);
-
     return this.renderer.addFixedMesh(geo);
   }
 
-  private copyInt32s(dst: Uint32Array, src: number[]) {
-    for (let i = 0; i < dst.length; i++) dst[i] = src[i];
+  private resizeInt32s(src: Uint32Array, n: number): Uint32Array {
+    const result = new Uint32Array(n);
+    for (let i = 0; i < src.length; i++) result[i] = src[i];
+    return result;
   }
 
-  private copyFloats(dst: Float32Array, src: number[]) {
-    for (let i = 0; i < dst.length; i++) dst[i] = src[i];
+  private resizeFloats(src: Float32Array, n: number): Float32Array {
+    const result = new Float32Array(n);
+    for (let i = 0; i < src.length; i++) result[i] = src[i];
+    return result;
   }
 
   private computeGeometryData(voxels: Tensor3): GeometryData {
@@ -189,25 +183,28 @@ class TerrainMesher {
     return result;
   }
 
-  private addQuad(geo: GeometryData, d: int, u: int, v: int,
+  private addQuad(data: GeometryData, d: int, u: int, v: int,
                   w: int, h: int, mask: int, pos: Vec3) {
-    const {numQuads, positions, normals, indices, colors, uvws} = geo;
-    geo.numQuads++;
+    const {numQuads, geo} = data;
+    data.numQuads++;
 
     const positions_offset = numQuads * 12;
     const indices_offset   = numQuads * 6;
     const colors_offset    = numQuads * 16;
     const base_index       = numQuads * 4;
 
-    if (positions.length < positions_offset + 12) {
-      for (let i = 0; i < 12; i++) positions.push(0);
-      for (let i = 0; i < 12; i++) normals.push(0);
-      for (let i = 0; i < 6; i++)  indices.push(0);
-      for (let i = 0; i < 16; i++) colors.push(0);
-      for (let i = 0; i < 12; i++)  uvws.push(0);
+    if (geo.positions.length < positions_offset + 12) {
+      const n = (numQuads + 1) * 2;
+      geo.positions = this.resizeFloats(geo.positions, 12 * n);
+      geo.normals = this.resizeFloats(geo.normals, 12 * n);
+      geo.colors = this.resizeFloats(geo.colors, 16 * n);
+      geo.indices = this.resizeInt32s(geo.indices, 6 * n);
+      geo.uvws = this.resizeFloats(geo.uvws, 12 * n);
     }
 
     const dir = Math.sign(mask);
+    const {positions, normals, colors, indices, uvws} = geo;
+
     for (let i = 0; i < 3; i++) {
       const p = pos[i];
       positions[positions_offset + i + 0] = p;
