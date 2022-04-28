@@ -44,10 +44,8 @@ const kGeometryData: GeometryData = {
   uvws: [],
 };
 
-const kTmpPos    = Vec3.create();
-const kTmpDU     = Vec3.create();
-const kTmpDV     = Vec3.create();
-const kTmpNormal = Vec3.create();
+const kTmpPos = Vec3.create();
+let kMaskData = new Int16Array();
 
 const kIndexOffsets = {
   A: [0, 1, 2, 0, 2, 3],
@@ -55,8 +53,6 @@ const kIndexOffsets = {
   C: [0, 2, 1, 0, 3, 2],
   D: [3, 1, 0, 3, 2, 1],
 };
-
-let kMaskData = new Int16Array();
 
 class TerrainMesher {
   solid: boolean[];
@@ -118,9 +114,6 @@ class TerrainMesher {
       const base = su + sv;
 
       Vec3.set(kTmpPos,    0, 0, 0);
-      Vec3.set(kTmpDU,     0, 0, 0);
-      Vec3.set(kTmpDV,     0, 0, 0);
-      Vec3.set(kTmpNormal, 0, 0, 0);
 
       const area = lu * lv;
       if (kMaskData.length < area) {
@@ -180,11 +173,7 @@ class TerrainMesher {
 
             kTmpPos[u] = iu;
             kTmpPos[v] = iv;
-            kTmpDU[u] = w;
-            kTmpDV[v] = h;
-            kTmpNormal[d] = Math.sign(mask);
-            this.addQuad(result, d, w, h, mask,
-                         kTmpPos, kTmpDU, kTmpDV, kTmpNormal);
+            this.addQuad(result, d, u, v, w, h, mask, kTmpPos);
 
             nw = n;
             for (let wx = 0; wx < w; wx++, nw += lv) {
@@ -200,8 +189,8 @@ class TerrainMesher {
     return result;
   }
 
-  private addQuad(geo: GeometryData, d: int, w: int, h: int, mask: int,
-                  pos: Vec3, du: Vec3, dv: Vec3, normal: Vec3) {
+  private addQuad(geo: GeometryData, d: int, u: int, v: int,
+                  w: int, h: int, mask: int, pos: Vec3) {
     const {numQuads, positions, normals, indices, colors, uvws} = geo;
     geo.numQuads++;
 
@@ -218,18 +207,24 @@ class TerrainMesher {
       for (let i = 0; i < 12; i++)  uvws.push(0);
     }
 
+    const dir = Math.sign(mask);
     for (let i = 0; i < 3; i++) {
-      positions[positions_offset + i + 0] = pos[i];
-      positions[positions_offset + i + 3] = pos[i] + du[i];
-      positions[positions_offset + i + 6] = pos[i] + du[i] + dv[i];
-      positions[positions_offset + i + 9] = pos[i] + dv[i];
+      const p = pos[i];
+      positions[positions_offset + i + 0] = p;
+      positions[positions_offset + i + 3] = p;
+      positions[positions_offset + i + 6] = p;
+      positions[positions_offset + i + 9] = p;
 
-      const x = normal[i];
+      const x = i === d ? dir : 0;
       normals[positions_offset + i + 0] = x;
       normals[positions_offset + i + 3] = x;
       normals[positions_offset + i + 6] = x;
       normals[positions_offset + i + 9] = x;
     }
+    positions[positions_offset + u + 3] += w;
+    positions[positions_offset + u + 6] += w;
+    positions[positions_offset + v + 6] += h;
+    positions[positions_offset + v + 9] += h;
 
     const triangleHint = this.getTriangleHint(mask);
     const offsets = mask > 0
@@ -256,7 +251,6 @@ class TerrainMesher {
       colors[colors_offset + 4 * i + 3] = color[3];
     }
 
-    const dir = Math.sign(mask);
     for (let i = 0; i < 12; i++) uvws[positions_offset + i] = 0;
     if (d === 2) {
       uvws[positions_offset + 1] = uvws[positions_offset + 4] = h;
