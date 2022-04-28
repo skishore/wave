@@ -364,7 +364,8 @@ const kChunkKeyBits = 16;
 const kChunkKeySize = 1 << kChunkKeyBits;
 const kChunkKeyMask = kChunkKeySize - 1;
 
-const kChunkRadius = 12;
+const kChunkRadius = 8;
+const kFrontierLOD = 4;
 const kFrontierRadius = 4;
 const kNeighbors = (kChunkRadius ? 4 : 0);
 
@@ -651,10 +652,12 @@ class Frontier {
     if (min_x > max_x || min_z > max_z) return;
 
     const r = kFrontierRadius;
-    const middle = kChunkWidth / 2;
+    const lod = kFrontierLOD;
+    const mid = kFrontierLOD / 2;
+    const per = kChunkWidth / kFrontierLOD;
 
-    const ax = min_x - r, bx = max_x + r + 1, sx = bx - ax;
-    const az = min_z - r, bz = max_z + r + 1, sz = bz - az;
+    const ax = min_x - r, bx = max_x + r + 1, sx = (bx - ax) * per;
+    const az = min_z - r, bz = max_z + r + 1, sz = (bz - az) * per;
     const heightmap = new Uint32Array(sx * sz * 2);
 
     const column = new Column();
@@ -663,19 +666,25 @@ class Frontier {
         const chunk = this.world.getChunk(cx, cz, false);
         if (chunk && chunk.hasMesh()) continue;
 
-        const x = (cx << kChunkBits) + middle;
-        const z = (cz << kChunkBits) + middle;
-        loader(x, z, column);
+        for (let i = 0; i < per; i++) {
+          for (let j = 0; j < per; j++) {
+            const x = (cx << kChunkBits) + i * lod + mid;
+            const z = (cz << kChunkBits) + j * lod + mid;
+            loader(x, z, column);
 
-        const offset = 2 * ((cx - ax) + (cz - az) * sx);
-        heightmap[offset + 0] = column.top(bedrock);
-        heightmap[offset + 1] = column.height();
-        column.clear();
+            const ox = (cx - ax) * per + i;
+            const oz = (cz - az) * per + j;
+            const offset = 2 * (ox + oz * sx);
+            heightmap[offset + 0] = column.top(bedrock);
+            heightmap[offset + 1] = column.height();
+            column.clear();
+          }
+        }
       }
     }
 
     const mesh = this.world.mesher.meshFrontier(
-        heightmap, sx, sz, kChunkWidth, this.mesh);
+        heightmap, sx, sz, kFrontierLOD, this.mesh);
     if (mesh) mesh.setPosition(ax << kChunkBits, 0, az << kChunkBits);
     this.mesh = mesh;
   }
