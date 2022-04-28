@@ -37,6 +37,13 @@ const kIndexOffsets = {
   D: [3, 1, 0, 3, 2, 1],
 };
 
+const kHeightmapSides: [int, int, int, int, int, int][] = [
+  [0, 1, 2,  1,  0, 0x82],
+  [0, 1, 2, -1,  0, 0x82],
+  [2, 0, 1,  0,  1, 0x06],
+  [2, 0, 1,  0, -1, 0x06],
+];
+
 class TerrainMesher {
   solid: boolean[];
   opaque: boolean[];
@@ -61,6 +68,13 @@ class TerrainMesher {
       this.buildMesh(solid_geo, solid, true),
       this.buildMesh(water_geo, water, false),
     ];
+  }
+
+  meshFrontier(heightmap: Uint32Array, sx: int, sz: int,
+               w: int, old: Mesh | null): Mesh | null {
+    const geo = old ? old.getGeometry() : kCachedGeometryA;
+    this.computeFrontierGeometry(geo, heightmap, sx, sz, w);
+    return this.buildMesh(geo, old, true);
   }
 
   private buildMesh(
@@ -161,6 +175,52 @@ class TerrainMesher {
               }
             }
           }
+        }
+      }
+    }
+  }
+
+  private computeFrontierGeometry(
+      geo: Geometry, heightmap: Uint32Array, sx: int, sz: int, w: int): void {
+    geo.clear();
+
+    for (let x = 0; x < sx; x++) {
+      for (let z = 0; z < sz; z++) {
+        const offset = 2 * (x + z * sx);
+        const block  = heightmap[offset + 0] as BlockId;
+        const height = heightmap[offset + 1];
+        if (block === kEmptyBlock) continue;
+
+        const d = 1;
+        const dir = 2 * d;
+        const id = this.getBlockFaceMaterial(block, dir);
+        const material = this.getMaterialData(id);
+        const mask = id << 8;
+
+        Vec3.set(kTmpPos, x * w, height, z * w);
+        this.addQuad(geo, material, 1, 2, 0, w, w, mask, kTmpPos);
+
+        for (const [d, u, v, dx, dz, ao] of kHeightmapSides) {
+          const ax = x + dx, az = z + dz;
+          if (!(0 <= ax && ax < sx)) continue;
+          if (!(0 <= az && az < sz)) continue;
+          const neighbor = heightmap[offset + 2 * (dx + dz * sx) + 1];
+          if (neighbor >= height) continue;
+
+          const sign = Math.sign(dx + dz);
+          const dir = 2 * d + ((1 - sign) >> 1);
+          const id = this.getBlockFaceMaterial(block, dir);
+          const material = this.getMaterialData(id);
+          if (material.color[3] < 1) continue;
+
+          const px = Math.max(x, ax) * w;
+          const pz = Math.max(z, az) * w;
+          Vec3.set(kTmpPos, px, neighbor, pz);
+
+          const wi = d === 0 ? height - neighbor : w;
+          const hi = d === 0 ? w : height - neighbor;
+          const mask = ((sign * id) << 8) | ao;
+          this.addQuad(geo, material, d, u, v, wi, hi, mask, kTmpPos);
         }
       }
     }

@@ -315,12 +315,12 @@ class Column {
     this.size = 0;
   }
 
-  clear() {
+  clear(): void {
     this.last = 0;
     this.size = 0;
   }
 
-  fillChunk(x: int, z: int, chunk: Chunk) {
+  fillChunk(x: int, z: int, chunk: Chunk): void {
     let last = 0;
     for (let i = 0; i < this.size; i++) {
       const offset = 2 * i;
@@ -333,7 +333,7 @@ class Column {
     }
   }
 
-  push(block: BlockId, count: int) {
+  push(block: BlockId, count: int): void {
     if (count <= 0) return;
     const offset = 2 * this.size;
     const last = Math.min(this.last + count, kWorldHeight);
@@ -341,6 +341,15 @@ class Column {
     this.data[offset + 1] = last;
     this.last = last;
     this.size++;
+  }
+
+  height(): int {
+    return this.last;
+  }
+
+  top(bedrock: BlockId): BlockId {
+    if (this.size === 0) return bedrock;
+    return this.data[2 * this.size - 2] as BlockId;
   }
 };
 
@@ -356,6 +365,7 @@ const kChunkKeySize = 1 << kChunkKeyBits;
 const kChunkKeyMask = kChunkKeySize - 1;
 
 const kChunkRadius = 12;
+const kFrontierRadius = 4;
 const kNeighbors = (kChunkRadius ? 4 : 0);
 
 const kNumChunksToLoadPerFrame = 1;
@@ -494,7 +504,11 @@ class Chunk {
     if (zm === kChunkMask) neighbor(0, 0, 1);
   }
 
-  needsRemesh() {
+  hasMesh(): boolean {
+    return !!(this.solid || this.water);
+  }
+
+  needsRemesh(): boolean {
     return this.active && this.dirty;
   }
 
@@ -571,11 +585,108 @@ class Chunk {
   }
 };
 
+class Counters {
+  private values: Map<int, int>;
+
+  constructor() {
+    this.values = new Map();
+  }
+
+  bounds(): [int, int] {
+    let min = Infinity, max = -Infinity;
+    for (const value of this.values.keys()) {
+      if (value < min) min = value;
+      if (value > max) max = value;
+    }
+    return [min, max];
+  }
+
+  dec(value: int): void {
+    const count = this.values.get(value) || 0;
+    if (count > 1) {
+      this.values.set(value, count - 1);
+    } else {
+      assert(count === 1);
+      this.values.delete(value);
+    }
+  }
+
+  inc(value: int): void {
+    const count = this.values.get(value) || 0;
+    this.values.set(value, count + 1);
+  }
+}
+
+class Frontier {
+  private xs: Counters;
+  private zs: Counters;
+  private world: World;
+  private mesh: Mesh | null;
+
+  constructor(world: World) {
+    this.xs = new Counters();
+    this.zs = new Counters();
+    this.world = world;
+    this.mesh = null;
+  }
+
+  chunkHidden(chunk: Chunk) {
+    if (!chunk.hasMesh()) return;
+    this.xs.dec(chunk.cx);
+    this.zs.dec(chunk.cz);
+  }
+
+  chunkShown(chunk: Chunk) {
+    if (chunk.hasMesh()) return;
+    this.xs.inc(chunk.cx);
+    this.zs.inc(chunk.cz);
+  }
+
+  refreshFrontier() {
+    const {bedrock, loader} = this.world;
+    if (!loader) return;
+
+    const [min_x, max_x] = this.xs.bounds();
+    const [min_z, max_z] = this.zs.bounds();
+    if (min_x > max_x || min_z > max_z) return;
+
+    const r = kFrontierRadius;
+    const middle = kChunkWidth / 2;
+
+    const ax = min_x - r, bx = max_x + r + 1, sx = bx - ax;
+    const az = min_z - r, bz = max_z + r + 1, sz = bz - az;
+    const heightmap = new Uint32Array(sx * sz * 2);
+
+    const column = new Column();
+    for (let cx = ax; cx < bx; cx++) {
+      for (let cz = az; cz < bz; cz++) {
+        const chunk = this.world.getChunk(cx, cz, false);
+        if (chunk && chunk.hasMesh()) continue;
+
+        const x = (cx << kChunkBits) + middle;
+        const z = (cz << kChunkBits) + middle;
+        loader(x, z, column);
+
+        const offset = 2 * ((cx - ax) + (cz - az) * sx);
+        heightmap[offset + 0] = column.top(bedrock);
+        heightmap[offset + 1] = column.height();
+        column.clear();
+      }
+    }
+
+    const mesh = this.world.mesher.meshFrontier(
+        heightmap, sx, sz, kChunkWidth, this.mesh);
+    if (mesh) mesh.setPosition(ax << kChunkBits, 0, az << kChunkBits);
+    this.mesh = mesh;
+  }
+};
+
 class World {
   chunks: Map<int, Chunk>;
   enabled: Set<Chunk>;
   renderer: Renderer;
   registry: Registry;
+  frontier: Frontier;
   mesher: TerrainMesher;
   bedrock: BlockId;
   loader: Loader | null;
@@ -586,6 +697,7 @@ class World {
     this.enabled = new Set();
     this.renderer = renderer;
     this.registry = registry;
+    this.frontier = new Frontier(this);
     this.mesher = new TerrainMesher(registry, renderer);
     this.loader = null;
     this.bedrock = kEmptyBlock;
@@ -641,6 +753,7 @@ class World {
     const lo = (base + 1) * area;
     const hi = (base + 9) * area;
     const limit = kChunkRadius + 1;
+    const frontier = this.frontier;
 
     for (const chunk of this.enabled) {
       const {cx, cz} = chunk;
@@ -649,7 +762,9 @@ class World {
       if (ax + az <= 1) continue;
       const disable = ax > limit || az > limit ||
                       this.distance(cx, cz, x, z) > hi;
-      if (disable) chunk.disable();
+      if (!disable) continue;
+      frontier.chunkHidden(chunk);
+      chunk.disable();
     }
 
     const loader = this.loader;
@@ -689,7 +804,15 @@ class World {
     const n = kNumChunksToMeshPerFrame;
     const m = Math.min(queued.length, kNumChunksToMeshPerFrame);
     if (queued.length > n) queued.sort((x, y) => x.distance - y.distance);
-    for (let i = 0; i < m; i++) queued[i].remesh();
+
+    const frontier = this.frontier;
+    for (let i = 0; i < m; i++) {
+      const chunk = queued[i];
+      frontier.chunkShown(chunk);
+      chunk.remesh();
+    }
+
+    frontier.refreshFrontier();
   }
 
   private distance(cx: int, cz: int, x: number, z: number) {
