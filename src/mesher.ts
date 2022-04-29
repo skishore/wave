@@ -1,4 +1,4 @@
-import {int, Tensor3, Vec3} from './base.js';
+import {assert, int, Tensor3, Vec3} from './base.js';
 import {FixedGeometry, Mesh, Renderer} from './renderer.js';
 
 //////////////////////////////////////////////////////////////////////////////
@@ -31,13 +31,7 @@ interface GeometryData {
 
 const kGeometryData: GeometryData = {
   numQuads: 0,
-  geo: {
-    positions: new Float32Array(),
-    normals: new Float32Array(),
-    colors: new Float32Array(),
-    indices: new Uint32Array(),
-    uvws: new Float32Array(),
-  },
+  geo: FixedGeometry.empty(),
 };
 
 const kTmpPos = Vec3.create();
@@ -67,35 +61,15 @@ class TerrainMesher {
 
   mesh(voxels: Tensor3): Mesh | null {
     const data = this.computeGeometryData(voxels);
-    const numQuads = data.numQuads;
     if (data.numQuads === 0) return null;
-
-    const {positions, normals, indices, colors, uvws} = data.geo;
-    const geo = {
-      positions : positions.slice(0, numQuads * 12),
-      normals   : normals.slice(0, numQuads * 12),
-      indices   : indices.slice(0, numQuads * 6),
-      colors    : colors.slice(0, numQuads * 16),
-      uvws      : uvws.slice(0, numQuads * 12),
-    };
+    const geo = FixedGeometry.clone(data.geo);
     return this.renderer.addFixedMesh(geo);
-  }
-
-  private resizeInt32s(src: Uint32Array, n: number): Uint32Array {
-    const result = new Uint32Array(n);
-    for (let i = 0; i < src.length; i++) result[i] = src[i];
-    return result;
-  }
-
-  private resizeFloats(src: Float32Array, n: number): Float32Array {
-    const result = new Float32Array(n);
-    for (let i = 0; i < src.length; i++) result[i] = src[i];
-    return result;
   }
 
   private computeGeometryData(voxels: Tensor3): GeometryData {
     const result = kGeometryData;
     result.numQuads = 0;
+    result.geo.clear();
 
     const {data, shape, stride} = voxels;
 
@@ -188,47 +162,44 @@ class TerrainMesher {
     const {numQuads, geo} = data;
     data.numQuads++;
 
-    const positions_offset = numQuads * 12;
-    const indices_offset   = numQuads * 6;
-    const colors_offset    = numQuads * 16;
-    const base_index       = numQuads * 4;
-
-    if (geo.positions.length < positions_offset + 12) {
-      const n = (numQuads + 1) * 2;
-      geo.positions = this.resizeFloats(geo.positions, 12 * n);
-      geo.normals = this.resizeFloats(geo.normals, 12 * n);
-      geo.colors = this.resizeFloats(geo.colors, 16 * n);
-      geo.indices = this.resizeInt32s(geo.indices, 6 * n);
-      geo.uvws = this.resizeFloats(geo.uvws, 12 * n);
-    }
+    const {num_indices, num_vertices} = geo;
+    geo.allocateVertices(num_vertices + 4);
+    geo.allocateIndices(num_indices + 6);
 
     const dir = Math.sign(mask);
-    const {positions, normals, colors, indices, uvws} = geo;
+    const {indices, vertices} = geo;
+
+    const Stride = FixedGeometry.Stride;
+    const base = Stride * num_vertices;
+    const positions_offset = base + FixedGeometry.PositionsOffset;
+    const normals_offset   = base + FixedGeometry.NormalsOffset;
+    const colors_offset    = base + FixedGeometry.ColorsOffset;
+    const uvws_offset      = base + FixedGeometry.UVWsOffset;
 
     for (let i = 0; i < 3; i++) {
       const p = pos[i];
-      positions[positions_offset + i + 0] = p;
-      positions[positions_offset + i + 3] = p;
-      positions[positions_offset + i + 6] = p;
-      positions[positions_offset + i + 9] = p;
+      vertices[positions_offset + Stride * 0 + i] = p;
+      vertices[positions_offset + Stride * 1 + i] = p;
+      vertices[positions_offset + Stride * 2 + i] = p;
+      vertices[positions_offset + Stride * 3 + i] = p;
 
       const x = i === d ? dir : 0;
-      normals[positions_offset + i + 0] = x;
-      normals[positions_offset + i + 3] = x;
-      normals[positions_offset + i + 6] = x;
-      normals[positions_offset + i + 9] = x;
+      vertices[normals_offset + Stride * 0 + i] = x;
+      vertices[normals_offset + Stride * 1 + i] = x;
+      vertices[normals_offset + Stride * 2 + i] = x;
+      vertices[normals_offset + Stride * 3 + i] = x;
     }
-    positions[positions_offset + u + 3] += w;
-    positions[positions_offset + u + 6] += w;
-    positions[positions_offset + v + 6] += h;
-    positions[positions_offset + v + 9] += h;
+    vertices[positions_offset + Stride * 1 + u] += w;
+    vertices[positions_offset + Stride * 2 + u] += w;
+    vertices[positions_offset + Stride * 2 + v] += h;
+    vertices[positions_offset + Stride * 3 + v] += h;
 
     const triangleHint = this.getTriangleHint(mask);
     const offsets = mask > 0
       ? (triangleHint ? kIndexOffsets.C : kIndexOffsets.D)
       : (triangleHint ? kIndexOffsets.A : kIndexOffsets.B);
     for (let i = 0; i < 6; i++) {
-      indices[indices_offset + i] = base_index + offsets[i];
+      indices[num_indices + i] = num_vertices + offsets[i];
     }
 
     const id = Math.abs(mask >> 8) as MaterialId;
@@ -242,22 +213,29 @@ class TerrainMesher {
     const color = material.color;
     for (let i = 0; i < 4; i++) {
       const ao = 1 - 0.3 * (mask >> (2 * i) & 3);
-      colors[colors_offset + 4 * i + 0] = color[0] * ao;
-      colors[colors_offset + 4 * i + 1] = color[1] * ao;
-      colors[colors_offset + 4 * i + 2] = color[2] * ao;
-      colors[colors_offset + 4 * i + 3] = color[3];
+      vertices[colors_offset + Stride * i + 0] = color[0] * ao;
+      vertices[colors_offset + Stride * i + 1] = color[1] * ao;
+      vertices[colors_offset + Stride * i + 2] = color[2] * ao;
+      vertices[colors_offset + Stride * i + 3] = color[3];
     }
 
-    for (let i = 0; i < 12; i++) uvws[positions_offset + i] = 0;
-    if (d === 2) {
-      uvws[positions_offset + 1] = uvws[positions_offset + 4] = h;
-      uvws[positions_offset + 3] = uvws[positions_offset + 6] = -dir * w;
-    } else {
-      uvws[positions_offset + 1] = uvws[positions_offset + 10] = w;
-      uvws[positions_offset + 6] = uvws[positions_offset + 9] = dir * h;
-    }
     for (let i = 0; i < 4; i++) {
-      uvws[positions_offset + i * 3 + 2] = textureIndex;
+      vertices[uvws_offset + Stride * i + 0] = 0;
+      vertices[uvws_offset + Stride * i + 1] = 0;
+      vertices[uvws_offset + Stride * i + 2] = textureIndex;
+    }
+    if (d === 2) {
+      const wd = -dir * w;
+      vertices[uvws_offset + Stride * 0 + 1] = h;
+      vertices[uvws_offset + Stride * 1 + 1] = h;
+      vertices[uvws_offset + Stride * 1 + 0] = wd;
+      vertices[uvws_offset + Stride * 2 + 0] = wd;
+    } else {
+      const hd = dir * h;
+      vertices[uvws_offset + Stride * 0 + 1] = w;
+      vertices[uvws_offset + Stride * 3 + 1] = w;
+      vertices[uvws_offset + Stride * 2 + 0] = hd;
+      vertices[uvws_offset + Stride * 3 + 0] = hd;
     }
   }
 

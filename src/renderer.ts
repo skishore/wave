@@ -340,6 +340,65 @@ class TextureAtlas {
 
 //////////////////////////////////////////////////////////////////////////////
 
+class FixedGeometry {
+  static PositionsOffset: int = 0;
+  static NormalsOffset: int = 3;
+  static ColorsOffset: int = 6;
+  static UVWsOffset: int = 10;
+  static Stride: int = 16;
+
+  indices: Uint32Array;
+  vertices: Float32Array;
+  num_indices: int;
+  num_vertices: int;
+
+  constructor(indices: Uint32Array, vertices: Float32Array,
+              num_indices: int, num_vertices: int) {
+    this.indices = indices;
+    this.vertices = vertices;
+    this.num_indices = num_indices;
+    this.num_vertices = num_vertices;
+  }
+
+  clear() {
+    this.num_indices = 0;
+    this.num_vertices = 0;
+  }
+
+  allocateIndices(n: int) {
+    this.num_indices = n;
+    const needed = n;
+    const length = this.indices.length;
+    if (length >= needed) return;
+    const expanded = new Uint32Array(Math.max(length * 2, needed));
+    for (let i = 0; i < length; i++) expanded[i] = this.indices[i];
+    this.indices = expanded;
+  }
+
+  allocateVertices(n: int) {
+    this.num_vertices = n;
+    const needed = n * FixedGeometry.Stride;
+    const length = this.vertices.length;
+    if (length >= needed) return;
+    const expanded = new Float32Array(Math.max(length * 2, needed));
+    for (let i = 0; i < length; i++) expanded[i] = this.vertices[i];
+    this.vertices = expanded;
+  }
+
+  static clone(geo: FixedGeometry): FixedGeometry {
+    const {num_indices, num_vertices} = geo;
+    const indices = geo.indices.slice(0, num_indices);
+    const vertices = geo.vertices.slice(0, num_vertices * FixedGeometry.Stride);
+    return new FixedGeometry(indices, vertices, num_indices, num_vertices);
+  }
+
+  static empty(): FixedGeometry {
+    return new FixedGeometry(new Uint32Array(), new Float32Array(), 0, 0);
+  }
+};
+
+//////////////////////////////////////////////////////////////////////////////
+
 const kFixedShader = `
   uniform mat4 u_transform;
   in vec3 a_position;
@@ -367,14 +426,6 @@ const kFixedShader = `
     if (o_color[3] < 0.5) discard;
   }
 `;
-
-interface FixedGeometry {
-  positions: Float32Array;
-  normals: Float32Array;
-  colors: Float32Array;
-  indices: Uint32Array;
-  uvws: Float32Array;
-};
 
 class FixedMesh {
   private context: Context;
@@ -418,7 +469,7 @@ class FixedMesh {
     const gl = context.gl;
     const transform = camera.getTransformFor(this.position);
     gl.uniformMatrix4fv(this.uniform, false, transform);
-    gl.drawElements(gl.TRIANGLES, this.geo.indices.length, gl.UNSIGNED_INT, 0);
+    gl.drawElements(gl.TRIANGLES, this.geo.num_indices, gl.UNSIGNED_INT, 0);
   }
 
   dispose() {
@@ -449,22 +500,27 @@ class FixedMesh {
     const gl = this.context.gl;
     this.vao = nonnull(gl.createVertexArray());
     this.context.bindVertexArray(this.vao);
-    this.prepareAttribute('a_position', this.geo.positions, 3);
-    this.prepareAttribute('a_color', this.geo.colors, 4);
-    this.prepareAttribute('a_uvw', this.geo.uvws, 3);
+    const data = this.geo.vertices;
+    this.prepareAttribute('a_position', data, 3, FixedGeometry.PositionsOffset);
+    this.prepareAttribute('a_color', data, 4, FixedGeometry.ColorsOffset);
+    this.prepareAttribute('a_uvw', data, 3, FixedGeometry.UVWsOffset);
     this.prepareIndices(this.geo.indices);
   }
 
-  private prepareAttribute(name: string, data: Float32Array, size: int) {
+  private prepareAttribute(
+      name: string, data: Float32Array, size: int, offset_in_floats: int) {
     const gl = this.context.gl;
     const buffer = nonnull(gl.createBuffer());
     const location = this.shader.getAttribLocation(name);
     if (location === null) return;
 
+    const offset = 4 * offset_in_floats;
+    const stride = 4 * FixedGeometry.Stride;
+
     gl.enableVertexAttribArray(location);
     this.context.bindArrayBuffer(buffer);
     gl.bufferData(ARRAY_BUFFER, data, gl.STATIC_DRAW);
-    gl.vertexAttribPointer(location, size, gl.FLOAT, false, 0, 0);
+    gl.vertexAttribPointer(location, size, gl.FLOAT, false, stride, offset);
     this.buffers.push(buffer);
   }
 
