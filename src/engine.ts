@@ -512,7 +512,6 @@ class Chunk {
   }
 
   private refreshTerrain() {
-    if (this.mesh) this.mesh.dispose();
     const {cx, cz, voxels} = this;
     const w = kChunkWidth + 2;
     const h = kWorldHeight + 2;
@@ -525,7 +524,8 @@ class Chunk {
     }
     const dx = cx << kChunkBits;
     const dz = cz << kChunkBits;
-    const mesh = voxels ? this.world.mesher.mesh(expanded) : null;
+    if (this.mesh) this.mesh.dispose();
+    const mesh = this.world.mesher.meshChunk(expanded);
     if (mesh) mesh.setPosition(dx, 0, dz);
     this.mesh = mesh;
   }

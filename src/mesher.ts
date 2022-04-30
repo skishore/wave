@@ -1,5 +1,5 @@
 import {assert, int, Tensor3, Vec3} from './base.js';
-import {FixedGeometry, Mesh, Renderer} from './renderer.js';
+import {Geometry, Mesh, Renderer} from './renderer.js';
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -24,15 +24,7 @@ interface Registry {
 
 //////////////////////////////////////////////////////////////////////////////
 
-interface GeometryData {
-  numQuads: int;
-  geo: FixedGeometry;
-};
-
-const kGeometryData: GeometryData = {
-  numQuads: 0,
-  geo: FixedGeometry.empty(),
-};
+const kCachedGeometry: Geometry = Geometry.empty();
 
 const kTmpPos = Vec3.create();
 let kMaskData = new Int16Array();
@@ -59,19 +51,16 @@ class TerrainMesher {
     this.renderer = renderer;
   }
 
-  mesh(voxels: Tensor3): Mesh | null {
-    const data = this.computeGeometryData(voxels);
-    if (data.numQuads === 0) return null;
-    const geo = FixedGeometry.clone(data.geo);
-    return this.renderer.addFixedMesh(geo);
+  meshChunk(voxels: Tensor3): Mesh | null {
+    const geo = kCachedGeometry;
+    this.computeChunkGeometry(geo, voxels);
+    if (geo.num_indices === 0) return null;
+    return this.renderer.addFixedMesh(Geometry.clone(geo));
   }
 
-  private computeGeometryData(voxels: Tensor3): GeometryData {
-    const result = kGeometryData;
-    result.numQuads = 0;
-    result.geo.clear();
-
+  private computeChunkGeometry(geo: Geometry, voxels: Tensor3): void {
     const {data, shape, stride} = voxels;
+    geo.clear();
 
     for (let d = 0; d < 3; d++) {
       const dir = d * 2;
@@ -141,7 +130,7 @@ class TerrainMesher {
 
             kTmpPos[u] = iu;
             kTmpPos[v] = iv;
-            this.addQuad(result, d, u, v, w, h, mask, kTmpPos);
+            this.addQuad(geo, d, u, v, w, h, mask, kTmpPos);
 
             nw = n;
             for (let wx = 0; wx < w; wx++, nw += lv) {
@@ -153,15 +142,10 @@ class TerrainMesher {
         }
       }
     }
-
-    return result;
   }
 
-  private addQuad(data: GeometryData, d: int, u: int, v: int,
+  private addQuad(geo: Geometry, d: int, u: int, v: int,
                   w: int, h: int, mask: int, pos: Vec3) {
-    const {numQuads, geo} = data;
-    data.numQuads++;
-
     const {num_indices, num_vertices} = geo;
     geo.allocateVertices(num_vertices + 4);
     geo.allocateIndices(num_indices + 6);
@@ -169,12 +153,12 @@ class TerrainMesher {
     const dir = Math.sign(mask);
     const {indices, vertices} = geo;
 
-    const Stride = FixedGeometry.Stride;
+    const Stride = Geometry.Stride;
     const base = Stride * num_vertices;
-    const positions_offset = base + FixedGeometry.PositionsOffset;
-    const normals_offset   = base + FixedGeometry.NormalsOffset;
-    const colors_offset    = base + FixedGeometry.ColorsOffset;
-    const uvws_offset      = base + FixedGeometry.UVWsOffset;
+    const positions_offset = base + Geometry.PositionsOffset;
+    const normals_offset   = base + Geometry.NormalsOffset;
+    const colors_offset    = base + Geometry.ColorsOffset;
+    const uvws_offset      = base + Geometry.UVWsOffset;
 
     for (let i = 0; i < 3; i++) {
       const p = pos[i];

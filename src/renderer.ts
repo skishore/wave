@@ -340,7 +340,7 @@ class TextureAtlas {
 
 //////////////////////////////////////////////////////////////////////////////
 
-class FixedGeometry {
+class Geometry {
   static PositionsOffset: int = 0;
   static NormalsOffset: int = 3;
   static ColorsOffset: int = 6;
@@ -377,7 +377,7 @@ class FixedGeometry {
 
   allocateVertices(n: int) {
     this.num_vertices = n;
-    const needed = n * FixedGeometry.Stride;
+    const needed = n * Geometry.Stride;
     const length = this.vertices.length;
     if (length >= needed) return;
     const expanded = new Float32Array(Math.max(length * 2, needed));
@@ -385,15 +385,15 @@ class FixedGeometry {
     this.vertices = expanded;
   }
 
-  static clone(geo: FixedGeometry): FixedGeometry {
+  static clone(geo: Geometry): Geometry {
     const {num_indices, num_vertices} = geo;
     const indices = geo.indices.slice(0, num_indices);
-    const vertices = geo.vertices.slice(0, num_vertices * FixedGeometry.Stride);
-    return new FixedGeometry(indices, vertices, num_indices, num_vertices);
+    const vertices = geo.vertices.slice(0, num_vertices * Geometry.Stride);
+    return new Geometry(indices, vertices, num_indices, num_vertices);
   }
 
-  static empty(): FixedGeometry {
-    return new FixedGeometry(new Uint32Array(), new Float32Array(), 0, 0);
+  static empty(): Geometry {
+    return new Geometry(new Uint32Array(), new Float32Array(), 0, 0);
   }
 };
 
@@ -432,7 +432,7 @@ class FixedMesh {
   private atlas: TextureAtlas;
   private shader: Shader;
   private meshes: FixedMesh[];
-  private geo: FixedGeometry;
+  private geo: Geometry;
   private vao: WebGLVertexArrayObject | null;
   private uniform: WebGLUniformLocation | null;
   private indices: WebGLBuffer | null;
@@ -441,7 +441,7 @@ class FixedMesh {
   private index: int;
 
   constructor(context: Context, atlas: TextureAtlas, shader: Shader,
-              meshes: FixedMesh[], geo: FixedGeometry) {
+              meshes: FixedMesh[], geo: Geometry) {
     this.index = 0;
     this.context = context;
     this.atlas = atlas;
@@ -501,9 +501,9 @@ class FixedMesh {
     this.vao = nonnull(gl.createVertexArray());
     this.context.bindVertexArray(this.vao);
     const data = this.geo.vertices;
-    this.prepareAttribute('a_position', data, 3, FixedGeometry.PositionsOffset);
-    this.prepareAttribute('a_color', data, 4, FixedGeometry.ColorsOffset);
-    this.prepareAttribute('a_uvw', data, 3, FixedGeometry.UVWsOffset);
+    this.prepareAttribute('a_position', data, 3, Geometry.PositionsOffset);
+    this.prepareAttribute('a_color', data, 4, Geometry.ColorsOffset);
+    this.prepareAttribute('a_uvw', data, 3, Geometry.UVWsOffset);
     this.prepareIndices(this.geo.indices);
   }
 
@@ -515,7 +515,7 @@ class FixedMesh {
     if (location === null) return;
 
     const offset = 4 * offset_in_floats;
-    const stride = 4 * FixedGeometry.Stride;
+    const stride = 4 * Geometry.Stride;
 
     gl.enableVertexAttribArray(location);
     this.context.bindArrayBuffer(buffer);
@@ -567,7 +567,7 @@ class Renderer {
     this.meshes = [];
   }
 
-  addFixedMesh(geo: FixedGeometry): Mesh {
+  addFixedMesh(geo: Geometry): Mesh {
     const {context, atlas, meshes, shader} = this;
     return new FixedMesh(context, atlas, shader, meshes, geo);
   }
@@ -584,4 +584,4 @@ class Renderer {
 
 //////////////////////////////////////////////////////////////////////////////
 
-export {FixedGeometry, Mesh, Renderer};
+export {Geometry, Mesh, Renderer};
