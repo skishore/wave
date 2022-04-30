@@ -696,11 +696,12 @@ class Env {
     deltas.x = deltas.y = deltas.scroll = 0;
 
     this.entities.render(dt);
-    this.renderer.render();
+    const renderer_stats = this.renderer.render();
 
     const timing = this.timing;
     const stats = `Update: ${this.formatStat(timing.updatePerf)}\r\n` +
-                  `Render: ${this.formatStat(timing.renderPerf)}`;
+                  `Render: ${this.formatStat(timing.renderPerf)}\r\n` +
+                  renderer_stats;
     this.container.displayStats(stats);
   }
 

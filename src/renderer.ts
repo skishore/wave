@@ -1,4 +1,4 @@
-import {assert, drop, int, nonnull, Mat4, Tensor3, Vec3} from './base.js';
+import {assert, drop, int, nonnull, Mat4, Tensor3, Vec3, Vec4} from './base.js';
 
 //////////////////////////////////////////////////////////////////////////////
 // The graphics engine:
@@ -340,6 +340,8 @@ class TextureAtlas {
 
 //////////////////////////////////////////////////////////////////////////////
 
+const kTmpBound: Vec4 = [0, 0, 0, 0];
+
 class Geometry {
   static PositionsOffset: int = 0;
   static NormalsOffset: int = 3;
@@ -351,6 +353,9 @@ class Geometry {
   vertices: Float32Array;
   num_indices: int;
   num_vertices: int;
+  private lower_bound: Vec3;
+  private upper_bound: Vec3;
+  private bounds: Vec4[];
 
   constructor(indices: Uint32Array, vertices: Float32Array,
               num_indices: int, num_vertices: int) {
@@ -358,11 +363,15 @@ class Geometry {
     this.vertices = vertices;
     this.num_indices = num_indices;
     this.num_vertices = num_vertices;
+    this.lower_bound = Vec3.create();
+    this.upper_bound = Vec3.create();
+    this.bounds = [];
   }
 
   clear() {
     this.num_indices = 0;
     this.num_vertices = 0;
+    this.bounds.length = 0;
   }
 
   allocateIndices(n: int) {
@@ -383,6 +392,52 @@ class Geometry {
     const expanded = new Float32Array(Math.max(length * 2, needed));
     for (let i = 0; i < length; i++) expanded[i] = this.vertices[i];
     this.vertices = expanded;
+  }
+
+  cull(transform: Mat4): boolean {
+    this.computeBounds();
+    let a = 0, b = 0, c = 0, d = 0;
+    for (const bound of this.bounds) {
+      Mat4.multiplyVec4(kTmpBound, transform, bound);
+      const x = kTmpBound[0];
+      const y = kTmpBound[1];
+      const w = kTmpBound[3];
+      if (x >  w) a++;
+      if (x < -w) b++;
+      if (y >  w) c++;
+      if (y < -w) d++;
+    }
+    return (a | b | c | d) >= 8;
+  }
+
+  private computeBounds() {
+    if (this.bounds.length > 0) return;
+
+    const {lower_bound, upper_bound} = this;
+    Vec3.set(lower_bound, Infinity, Infinity, Infinity);
+    Vec3.set(upper_bound, -Infinity, -Infinity, -Infinity);
+
+    const stride = Geometry.Stride;
+    const vertices = this.vertices;
+    const start = Geometry.PositionsOffset;
+    const limit = start + this.num_vertices * stride;
+    for (let i = start; i < limit; i += stride) {
+      const x = vertices[i + 0], y = vertices[i + 1], z = vertices[i + 2];
+      if (lower_bound[0] > x) lower_bound[0] = x;
+      if (lower_bound[1] > y) lower_bound[1] = y;
+      if (lower_bound[2] > z) lower_bound[2] = z;
+      if (upper_bound[0] < x) upper_bound[0] = x;
+      if (upper_bound[1] < y) upper_bound[1] = y;
+      if (upper_bound[2] < z) upper_bound[2] = z;
+    }
+
+    for (let i = 0; i < 8; i++) {
+      const bound: Vec4 = [0, 0, 0, 1];
+      for (let j = 0; j < 3; j++) {
+        bound[j] = (i & (1 << j)) ? lower_bound[j] : upper_bound[j];
+      }
+      this.bounds.push(bound);
+    }
   }
 
   static clone(geo: Geometry): Geometry {
@@ -457,7 +512,10 @@ class BasicMesh {
     this.meshes.push(this);
   }
 
-  draw(camera: Camera): void {
+  draw(camera: Camera): boolean {
+    const transform = camera.getTransformFor(this.position);
+    if (this.geo.cull(transform)) return false;
+
     this.prepareBuffers();
     this.atlas.bind();
     this.shader.bind();
@@ -467,9 +525,9 @@ class BasicMesh {
     context.bindElementArrayBuffer(this.indices);
 
     const gl = context.gl;
-    const transform = camera.getTransformFor(this.position);
     gl.uniformMatrix4fv(this.uniform, false, transform);
     gl.drawElements(gl.TRIANGLES, this.geo.num_indices, gl.UNSIGNED_INT, 0);
+    return true;
   }
 
   dispose(): void {
@@ -590,13 +648,17 @@ class Renderer {
     return new BasicMesh(context, atlas, shader, meshes, geo);
   }
 
-  render() {
+  render(): string {
     const gl = this.context.gl;
     gl.clearColor(0.8, 0.9, 1, 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
+    let drawn = 0;
     const camera = this.camera;
-    for (const mesh of this.meshes) mesh.draw(camera);
+    for (const mesh of this.meshes) {
+      if (mesh.draw(camera)) drawn++;
+    }
+    return `Draw calls: ${drawn} / ${this.meshes.length}`;
   }
 };
 

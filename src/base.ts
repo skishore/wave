@@ -22,6 +22,7 @@ const nonnull = <T>(x: T | null, message?: () => string): T => {
 //////////////////////////////////////////////////////////////////////////////
 
 interface Vec3 extends Float32Array {__type__: 'Vec3'};
+type Vec4 = [number, number, number, number];
 
 const Vec3 = {
   create: (): Vec3 => new Float32Array(3) as Vec3,
@@ -149,6 +150,14 @@ const Mat4 = {
       d[0] = 0; d[1] = 0; d[2] = 0;
     }
   },
+  multiplyVec4: (d: Vec4, a: Mat4, b: Vec4) => {
+    const b0 = b[0]; const b1 = b[1]; const b2 = b[2]; const b3 = b[3];
+    const x = a[0] * b0 + a[4] * b[1] + a[8]  * b2 + a[12] * b3;
+    const y = a[1] * b0 + a[5] * b[1] + a[9]  * b2 + a[13] * b3;
+    const z = a[2] * b0 + a[6] * b[1] + a[10] * b2 + a[14] * b3;
+    const w = a[3] * b0 + a[7] * b[1] + a[11] * b2 + a[15] * b3;
+    d[0] = x; d[1] = y; d[2] = z; d[3] = w;
+  },
   perspective: (d: Mat4, fov: number, aspect: number,
                 near: number, far?: number) => {
     const f = 1 / Math.tan(fov / 2);
@@ -229,4 +238,4 @@ class Tensor3 {
 
 //////////////////////////////////////////////////////////////////////////////
 
-export {assert, drop, int, nonnull, Mat4, Tensor3, Vec3};
+export {assert, drop, int, nonnull, Mat4, Tensor3, Vec3, Vec4};
