@@ -51,11 +51,21 @@ class TerrainMesher {
     this.renderer = renderer;
   }
 
-  meshChunk(voxels: Tensor3): Mesh | null {
-    const geo = kCachedGeometry;
+  meshChunk(voxels: Tensor3, old: Mesh | null): Mesh | null {
+    const geo = old ? old.getGeometry() : kCachedGeometry;
     this.computeChunkGeometry(geo, voxels);
-    if (geo.num_indices === 0) return null;
-    return this.renderer.addFixedMesh(Geometry.clone(geo));
+    return this.buildMesh(geo, old);
+  }
+
+  private buildMesh(geo: Geometry, old: Mesh | null): Mesh | null {
+    if (geo.num_indices === 0) {
+      if (old) old.dispose();
+      return null;
+    } else if (old) {
+      old.setGeometry(geo);
+      return old;
+    }
+    return this.renderer.addBasicMesh(Geometry.clone(geo));
   }
 
   private computeChunkGeometry(geo: Geometry, voxels: Tensor3): void {

@@ -399,7 +399,7 @@ class Geometry {
 
 //////////////////////////////////////////////////////////////////////////////
 
-const kFixedShader = `
+const kBasicShader = `
   uniform mat4 u_transform;
   in vec3 a_position;
   in vec4 a_color;
@@ -427,11 +427,11 @@ const kFixedShader = `
   }
 `;
 
-class FixedMesh {
+class BasicMesh {
   private context: Context;
   private atlas: TextureAtlas;
   private shader: Shader;
-  private meshes: FixedMesh[];
+  private meshes: BasicMesh[];
   private geo: Geometry;
   private vao: WebGLVertexArrayObject | null;
   private uniform: WebGLUniformLocation | null;
@@ -441,7 +441,7 @@ class FixedMesh {
   private index: int;
 
   constructor(context: Context, atlas: TextureAtlas, shader: Shader,
-              meshes: FixedMesh[], geo: Geometry) {
+              meshes: BasicMesh[], geo: Geometry) {
     this.index = 0;
     this.context = context;
     this.atlas = atlas;
@@ -457,8 +457,8 @@ class FixedMesh {
     this.meshes.push(this);
   }
 
-  draw(camera: Camera) {
-    this.prepare();
+  draw(camera: Camera): void {
+    this.prepareBuffers();
     this.atlas.bind();
     this.shader.bind();
 
@@ -472,15 +472,8 @@ class FixedMesh {
     gl.drawElements(gl.TRIANGLES, this.geo.num_indices, gl.UNSIGNED_INT, 0);
   }
 
-  dispose() {
-    const gl = this.context.gl;
-    gl.deleteVertexArray(this.vao);
-    gl.deleteBuffer(this.indices);
-    gl.deleteBuffer(this.vertices);
-    this.vao = null;
-    this.indices = null;
-    this.vertices = null;
-
+  dispose(): void {
+    this.destroyBuffers();
     assert(this === this.meshes[this.index]);
     const last = this.meshes.length - 1;
     if (this.index !== last) {
@@ -491,11 +484,30 @@ class FixedMesh {
     this.meshes.pop();
   }
 
-  setPosition(x: int, y: int, z: int) {
+  getGeometry(): Geometry {
+    return this.geo;
+  }
+
+  setGeometry(geo: Geometry): void {
+    this.destroyBuffers();
+    this.geo = geo;
+  }
+
+  setPosition(x: int, y: int, z: int): void {
     Vec3.set(this.position, x, y, z);
   }
 
-  private prepare() {
+  private destroyBuffers() {
+    const gl = this.context.gl;
+    gl.deleteVertexArray(this.vao);
+    gl.deleteBuffer(this.indices);
+    gl.deleteBuffer(this.vertices);
+    this.vao = null;
+    this.indices = null;
+    this.vertices = null;
+  }
+
+  private prepareBuffers() {
     if (this.vao) return;
     const gl = this.context.gl;
     this.vao = nonnull(gl.createVertexArray());
@@ -541,6 +553,8 @@ class FixedMesh {
 
 interface Mesh {
   dispose: () => void,
+  getGeometry: () => Geometry,
+  setGeometry: (geo: Geometry) => void,
   setPosition: (x: number, y: number, z: number) => void,
 };
 
@@ -549,7 +563,7 @@ class Renderer {
   atlas: TextureAtlas;
   private context: Context;
   private shader: Shader;
-  private meshes: FixedMesh[];
+  private meshes: BasicMesh[];
 
   constructor(canvas: HTMLCanvasElement) {
     canvas.width = canvas.clientWidth;
@@ -567,13 +581,13 @@ class Renderer {
 
     this.context = new Context(gl);
     this.atlas = new TextureAtlas(this.context);
-    this.shader = new Shader(this.context, kFixedShader);
+    this.shader = new Shader(this.context, kBasicShader);
     this.meshes = [];
   }
 
-  addFixedMesh(geo: Geometry): Mesh {
+  addBasicMesh(geo: Geometry): Mesh {
     const {context, atlas, meshes, shader} = this;
-    return new FixedMesh(context, atlas, shader, meshes, geo);
+    return new BasicMesh(context, atlas, shader, meshes, geo);
   }
 
   render() {

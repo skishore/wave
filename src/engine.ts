@@ -512,7 +512,7 @@ class Chunk {
   }
 
   private refreshTerrain() {
-    const {cx, cz, voxels} = this;
+    const {cx, cz} = this;
     const w = kChunkWidth + 2;
     const h = kWorldHeight + 2;
     const expanded = new Tensor3(w, h, w);
@@ -522,11 +522,9 @@ class Chunk {
       if (!(chunk && chunk.voxels)) continue;
       this.copyVoxels(expanded, dstPos, chunk.voxels, srcPos, size);
     }
-    const dx = cx << kChunkBits;
-    const dz = cz << kChunkBits;
-    if (this.mesh) this.mesh.dispose();
-    const mesh = this.world.mesher.meshChunk(expanded);
-    if (mesh) mesh.setPosition(dx, 0, dz);
+
+    const mesh = this.world.mesher.meshChunk(expanded, this.mesh);
+    if (mesh) mesh.setPosition(cx << kChunkBits, 0, cz << kChunkBits);
     this.mesh = mesh;
   }
 
