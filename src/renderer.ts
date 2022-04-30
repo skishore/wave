@@ -477,7 +477,12 @@ const kBasicShader = `
   out vec4 o_color;
 
   void main() {
-    o_color = v_color * texture(u_texture, v_uvw);
+    const float kFogHalfLife = 256.0;
+    const vec3 kFogColor = vec3(0.2, 0.5, 0.8);
+
+    float fog = clamp(exp2(-kFogHalfLife * gl_FragCoord.w), 0.0, 1.0);
+    vec4 color = v_color * texture(u_texture, v_uvw);
+    o_color = mix(color, vec4(kFogColor, color[3]), fog);
     if (o_color[3] < 0.5) discard;
   }
 `;
