@@ -436,7 +436,7 @@ class FixedMesh {
   private vao: WebGLVertexArrayObject | null;
   private uniform: WebGLUniformLocation | null;
   private indices: WebGLBuffer | null;
-  private buffers: WebGLBuffer[];
+  private vertices: WebGLBuffer | null;
   private position: Vec3;
   private index: int;
 
@@ -451,7 +451,7 @@ class FixedMesh {
     this.vao = null;
     this.uniform = shader.getUniformLocation('u_transform');
     this.indices = null;
-    this.buffers = [];
+    this.vertices = null;
     this.position = Vec3.create();
     this.index = this.meshes.length;
     this.meshes.push(this);
@@ -476,10 +476,10 @@ class FixedMesh {
     const gl = this.context.gl;
     gl.deleteVertexArray(this.vao);
     gl.deleteBuffer(this.indices);
-    for (const buffer of this.buffers) gl.deleteBuffer(buffer);
+    gl.deleteBuffer(this.vertices);
     this.vao = null;
     this.indices = null;
-    this.buffers.length = 0;
+    this.vertices = null;
 
     assert(this === this.meshes[this.index]);
     const last = this.meshes.length - 1;
@@ -501,27 +501,23 @@ class FixedMesh {
     this.vao = nonnull(gl.createVertexArray());
     this.context.bindVertexArray(this.vao);
     const data = this.geo.vertices;
+    this.prepareIndices(this.geo.indices);
+    this.prepareVertices(this.geo.vertices);
     this.prepareAttribute('a_position', data, 3, Geometry.PositionsOffset);
     this.prepareAttribute('a_color', data, 4, Geometry.ColorsOffset);
     this.prepareAttribute('a_uvw', data, 3, Geometry.UVWsOffset);
-    this.prepareIndices(this.geo.indices);
   }
 
   private prepareAttribute(
       name: string, data: Float32Array, size: int, offset_in_floats: int) {
     const gl = this.context.gl;
-    const buffer = nonnull(gl.createBuffer());
     const location = this.shader.getAttribLocation(name);
     if (location === null) return;
 
     const offset = 4 * offset_in_floats;
     const stride = 4 * Geometry.Stride;
-
     gl.enableVertexAttribArray(location);
-    this.context.bindArrayBuffer(buffer);
-    gl.bufferData(ARRAY_BUFFER, data, gl.STATIC_DRAW);
     gl.vertexAttribPointer(location, size, gl.FLOAT, false, stride, offset);
-    this.buffers.push(buffer);
   }
 
   private prepareIndices(data: Uint32Array) {
@@ -530,6 +526,14 @@ class FixedMesh {
     this.context.bindElementArrayBuffer(buffer);
     gl.bufferData(ELEMENT_ARRAY_BUFFER, data, gl.STATIC_DRAW);
     this.indices = buffer;
+  }
+
+  private prepareVertices(data: Float32Array) {
+    const gl = this.context.gl;
+    const buffer = nonnull(gl.createBuffer());
+    this.context.bindArrayBuffer(buffer);
+    gl.bufferData(ARRAY_BUFFER, data, gl.STATIC_DRAW);
+    this.vertices = buffer;
   }
 };
 
