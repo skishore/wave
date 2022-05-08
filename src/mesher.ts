@@ -16,8 +16,8 @@ interface Material {
 };
 
 interface Registry {
-  _solid: boolean[];
-  _opaque: boolean[];
+  solid: boolean[];
+  opaque: boolean[];
   getBlockFaceMaterial(id: BlockId, face: int): MaterialId;
   getMaterialData(id: MaterialId): Material;
 };
@@ -44,8 +44,8 @@ class TerrainMesher {
   renderer: Renderer;
 
   constructor(registry: Registry, renderer: Renderer) {
-    this.solid = registry._solid;
-    this.opaque = registry._opaque;
+    this.solid = registry.solid;
+    this.opaque = registry.opaque;
     this.getBlockFaceMaterial = registry.getBlockFaceMaterial.bind(registry);
     this.getMaterialData = registry.getMaterialData.bind(registry);
     this.renderer = renderer;

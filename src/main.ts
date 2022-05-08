@@ -111,7 +111,7 @@ const runPhysics = (env: TypedEnv, dt: int, state: PhysicsState) => {
   Vec3.scale(kTmpDelta, state.vel, dt);
   sweep(state.min, state.max, kTmpDelta, state.resting, (p: Vec3) => {
     const block = env.world.getBlock(p[0], p[1], p[2]);
-    return !env.registry._solid[block];
+    return !env.registry.solid[block];
   });
   Vec3.set(state.forces, 0, 0, 0);
   Vec3.set(state.impulses, 0, 0, 0);
@@ -384,9 +384,9 @@ const main = () => {
   const env = new TypedEnv('container');
   const player = env.entities.addEntity();
   const position = env.position.add(player);
-  position.x = 0;
+  position.x = 1;
   position.y = kWorldHeight;
-  position.z = 0;
+  position.z = 1;
   position.w = 0.8;
   position.h = 1.6;
 
@@ -419,7 +419,7 @@ const main = () => {
       last = height;
     }
   };
-  env.world.setLoader(loader);
+  env.world.setLoader(wall, loader);
 
   env.refresh();
 };

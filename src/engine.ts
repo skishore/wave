@@ -101,21 +101,21 @@ const kEmptyBlock = 0 as BlockId;
 const kUnknownBlock = 1 as BlockId;
 
 class Registry {
-  _opaque: boolean[];
-  _solid: boolean[];
-  _faces: MaterialId[];
-  _materials: Material[];
-  _ids: Map<string, MaterialId>;
+  opaque: boolean[];
+  solid: boolean[];
+  private faces: MaterialId[];
+  private materials: Material[];
+  private ids: Map<string, MaterialId>;
 
   constructor() {
-    this._opaque = [false, false];
-    this._solid = [false, true];
-    this._faces = []
+    this.opaque = [false, false];
+    this.solid = [false, true];
+    this.faces = []
     for (let i = 0; i < 12; i++) {
-      this._faces.push(kNoMaterial);
+      this.faces.push(kNoMaterial);
     }
-    this._materials = [];
-    this._ids = new Map();
+    this.materials = [];
+    this.ids = new Map();
   }
 
   addBlock(xs: string[], solid: boolean): BlockId {
@@ -135,13 +135,13 @@ class Registry {
       }
     })();
 
-    const result = this._opaque.length as BlockId;
-    this._opaque.push(solid);
-    this._solid.push(solid);
+    const result = this.opaque.length as BlockId;
+    this.opaque.push(solid);
+    this.solid.push(solid);
     materials.forEach(x => {
-      const material = this._ids.get(x);
+      const material = this.ids.get(x);
       if (material === undefined) throw new Error(`Unknown material: ${x}`);
-      this._faces.push(material + 1 as MaterialId);
+      this.faces.push(material + 1 as MaterialId);
     });
 
     return result;
@@ -157,20 +157,20 @@ class Registry {
 
   // faces has 6 elements for each block type: [+x, -x, +y, -y, +z, -z]
   getBlockFaceMaterial(id: BlockId, face: int): MaterialId {
-    return this._faces[id * 6 + face];
+    return this.faces[id * 6 + face];
   }
 
   getMaterialData(id: MaterialId): Material {
-    assert(0 < id && id <= this._materials.length);
-    return this._materials[id - 1];
+    assert(0 < id && id <= this.materials.length);
+    return this.materials[id - 1];
   }
 
   private addMaterialHelper(
       name: string, color: Color, texture: string | null) {
     assert(name.length > 0, () => 'Empty material name!');
-    assert(!this._ids.has(name), () => `Duplicate material: ${name}`);
-    this._ids.set(name, this._materials.length as MaterialId);
-    this._materials.push({color, texture, textureIndex: 0});
+    assert(!this.ids.has(name), () => `Duplicate material: ${name}`);
+    this.ids.set(name, this.materials.length as MaterialId);
+    this.materials.push({color, texture, textureIndex: 0});
   }
 };
 
@@ -318,7 +318,7 @@ class Column {
     this.size = 0;
   }
 
-  fill(x: int, z: int, chunk: Chunk) {
+  fillChunk(x: int, z: int, chunk: Chunk) {
     let last = 0;
     for (let i = 0; i < this.size; i++) {
       const offset = 2 * i;
@@ -433,7 +433,7 @@ class Chunk {
     for (let x = 0; x < kChunkWidth; x++) {
       for (let z = 0; z < kChunkWidth; z++) {
         loader(x + dx, z + dz, column);
-        column.fill(x + dx, z + dz, this);
+        column.fillChunk(x + dx, z + dz, this);
         column.clear();
       }
     }
@@ -460,19 +460,16 @@ class Chunk {
   }
 
   getBlock(x: int, y: int, z: int): BlockId {
-    if (!this.voxels) return kEmptyBlock;
-    if (!(0 <= y && y < kWorldHeight)) return kEmptyBlock;
-    const mask = kChunkMask;
-    return this.voxels.get(x & mask, y, z & mask) as BlockId;
+    const voxels = this.voxels;
+    if (!voxels) return kEmptyBlock;
+    const xm = x & kChunkMask, zm = z & kChunkMask;
+    return voxels.get(xm, y, zm) as BlockId;
   }
 
   setBlock(x: int, y: int, z: int, block: BlockId) {
-    if (!this.voxels) return;
-    if (!(0 <= y && y < kWorldHeight)) return;
-
-    const xm = x & kChunkMask;
-    const zm = z & kChunkMask;
-    const voxels = nonnull(this.voxels);
+    const voxels = this.voxels;
+    if (!voxels) return;
+    const xm = x & kChunkMask, zm = z & kChunkMask;
     if (!this.finished) return voxels.set(xm, y, zm, block);
 
     const old = voxels.get(xm, y, zm) as BlockId;
@@ -512,18 +509,16 @@ class Chunk {
   }
 
   private refreshTerrain() {
-    const {cx, cz} = this;
-    const w = kChunkWidth + 2;
-    const h = kWorldHeight + 2;
-    const expanded = new Tensor3(w, h, w);
+    const {cx, cz, world} = this;
+    const {bedrock, buffer} = world;
     for (const offset of kNeighborOffsets) {
       const [c, dstPos, srcPos, size] = offset;
-      const chunk = this.world.getChunk(cx + c[0], cz + c[2], false);
-      if (!(chunk && chunk.voxels)) continue;
-      this.copyVoxels(expanded, dstPos, chunk.voxels, srcPos, size);
+      const chunk = world.getChunk(cx + c[0], cz + c[2], false);
+      chunk && chunk.voxels
+        ? this.copyVoxels(buffer, dstPos, chunk.voxels, srcPos, size)
+        : this.zeroVoxels(buffer, dstPos, size);
     }
-
-    const mesh = this.world.mesher.meshChunk(expanded, this.mesh);
+    const mesh = world.mesher.meshChunk(buffer, this.mesh);
     if (mesh) mesh.setPosition(cx << kChunkBits, 0, cz << kChunkBits);
     this.mesh = mesh;
   }
@@ -547,6 +542,22 @@ class Chunk {
       }
     }
   }
+
+  private zeroVoxels(dst: Tensor3, dstPos: [number, number, number],
+                     size: [number, number, number]) {
+    const [ni, nj, nk] = size;
+    const [di, dj, dk] = dstPos;
+    const dsj = dst.stride[1];
+    for (let i = 0; i < ni; i++) {
+      for (let k = 0; k < nk; k++) {
+        // Unroll along the y-axis, since it's the longest chunk dimension.
+        let dindex = dst.index(di + i, dj, dk + k);
+        for (let j = 0; j < nj; j++, dindex += dsj) {
+          dst.data[dindex] = kEmptyBlock;
+        }
+      }
+    }
+  }
 };
 
 class World {
@@ -555,7 +566,9 @@ class World {
   renderer: Renderer;
   registry: Registry;
   mesher: TerrainMesher;
+  bedrock: BlockId;
   loader: Loader | null;
+  buffer: Tensor3;
 
   constructor(registry: Registry, renderer: Renderer) {
     this.chunks = new Map();
@@ -564,17 +577,25 @@ class World {
     this.registry = registry;
     this.mesher = new TerrainMesher(registry, renderer);
     this.loader = null;
+    this.bedrock = kEmptyBlock;
+
+    const w = kChunkWidth + 2;
+    const h = kWorldHeight + 2;
+    this.buffer = new Tensor3(w, h, w);
   }
 
   getBlock(x: int, y: int, z: int): BlockId {
-    const bits = kChunkBits;
-    const chunk = this.getChunk(x >> bits, z >> bits, false);
+    if (y < 0) return this.bedrock;
+    if (y >= kWorldHeight) return kEmptyBlock;
+    const cx = x >> kChunkBits, cz = z >> kChunkBits;
+    const chunk = this.getChunk(cx, cz, false);
     return chunk && chunk.finished ? chunk.getBlock(x, y, z) : kUnknownBlock;
   }
 
   setBlock(x: int, y: int, z: int, block: BlockId) {
-    const bits = kChunkBits;
-    const chunk = this.getChunk(x >> bits, z >> bits, false);
+    if (!(0 <= y && y < kWorldHeight)) return;
+    const cx = x >> kChunkBits, cz = z >> kChunkBits;
+    const chunk = this.getChunk(cx, cz, false);
     if (chunk && chunk.active) chunk.setBlock(x, y, z, block);
   }
 
@@ -588,8 +609,16 @@ class World {
     return chunk;
   }
 
-  setLoader(loader: Loader | null) {
+  setLoader(bedrock: BlockId, loader: Loader | null) {
+    this.bedrock = bedrock;
     this.loader = loader;
+
+    const buffer = this.buffer;
+    for (let x = 0; x < buffer.shape[0]; x++) {
+      for (let z = 0; z < buffer.shape[2]; z++) {
+        buffer.set(x, 0, z, bedrock);
+      }
+    }
   }
 
   recenter(x: number, y: number, z: number) {
