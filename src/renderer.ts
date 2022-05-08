@@ -629,8 +629,16 @@ class Renderer {
   private meshes: BasicMesh[];
 
   constructor(canvas: HTMLCanvasElement) {
-    canvas.width = canvas.clientWidth;
-    canvas.height = canvas.clientHeight;
+    const params = new URLSearchParams(window.location.search);
+    const size   = params.get('size') || 'large';
+    const base   = size === 'small' ? '1' : '2';
+    const scale  = parseFloat(params.get('scale') || base);
+
+    const container = nonnull(canvas.parentElement);
+    container.classList.add(size);
+
+    canvas.width = canvas.clientWidth / scale;
+    canvas.height = canvas.clientHeight / scale;
     this.camera = new Camera(canvas.width, canvas.height);
 
     const gl = nonnull(canvas.getContext('webgl2', {alpha: false}));

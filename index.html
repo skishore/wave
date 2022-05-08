@@ -7,19 +7,44 @@
 
     <style type="text/css">
       body {
-        margin: none;
+        background-color: #888;
+        margin: 0;
+        padding: 0;
         overflow: hidden;
+        text-align: center;
       }
 
-      #container, #container>canvas {
+      #container {
+        display: inline-block;
         overflow: hidden;
+        text-align: left;
+      }
+
+      #container.small {
+        margin: 32px;
+        height: 360px;
+        width: 640px;
+      }
+
+      #container.large {
+        margin: 64px;
+        height: 720px;
+        width: 1080px;
+      }
+
+      #container.fullscreen {
         position: absolute;
-        bottom: 0;
         left: 0;
-        right: 0;
         top: 0;
-        height: 100%;
+        bottom: 0;
+        right: 0;
+      }
+
+      #container>canvas {
+        image-rendering: crisp-edges;
+        image-rendering: pixelated;
         width: 100%;
+        height: 100%;
       }
 
       #stats {

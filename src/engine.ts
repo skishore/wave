@@ -205,6 +205,10 @@ class Performance {
     this.ticks[index] = tick;
   }
 
+  frame(): int {
+    return this.index;
+  }
+
   max(): number {
     return Math.max.apply(null, this.ticks);
   }
@@ -728,6 +732,7 @@ class Env {
     const renderer_stats = this.renderer.render();
 
     const timing = this.timing;
+    if (timing.updatePerf.frame() % 10 !== 0) return;
     const stats = `Update: ${this.formatStat(timing.updatePerf)}\r\n` +
                   `Render: ${this.formatStat(timing.renderPerf)}\r\n` +
                   renderer_stats;
