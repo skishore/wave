@@ -626,7 +626,8 @@ class Renderer {
   atlas: TextureAtlas;
   private context: Context;
   private shader: Shader;
-  private meshes: BasicMesh[];
+  private solid_meshes: BasicMesh[];
+  private water_meshes: BasicMesh[];
 
   constructor(canvas: HTMLCanvasElement) {
     const params = new URLSearchParams(window.location.search);
@@ -653,11 +654,13 @@ class Renderer {
     this.context = new Context(gl);
     this.atlas = new TextureAtlas(this.context);
     this.shader = new Shader(this.context, kBasicShader);
-    this.meshes = [];
+    this.solid_meshes = [];
+    this.water_meshes = [];
   }
 
-  addBasicMesh(geo: Geometry): Mesh {
-    const {context, atlas, meshes, shader} = this;
+  addBasicMesh(geo: Geometry, solid: boolean): Mesh {
+    const {context, atlas, shader} = this;
+    const meshes = solid ? this.solid_meshes : this.water_meshes;
     return new BasicMesh(context, atlas, shader, meshes, geo);
   }
 
@@ -668,10 +671,14 @@ class Renderer {
 
     let drawn = 0;
     const camera = this.camera;
-    for (const mesh of this.meshes) {
+    for (const mesh of this.solid_meshes) {
       if (mesh.draw(camera)) drawn++;
     }
-    return `Draw calls: ${drawn} / ${this.meshes.length}`;
+    for (const mesh of this.water_meshes) {
+      if (mesh.draw(camera)) drawn++;
+    }
+    const total = this.solid_meshes.length + this.water_meshes.length;
+    return `Draw calls: ${drawn} / ${total}`;
   }
 };
 

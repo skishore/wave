@@ -24,7 +24,8 @@ interface Registry {
 
 //////////////////////////////////////////////////////////////////////////////
 
-const kCachedGeometry: Geometry = Geometry.empty();
+const kCachedGeometryA: Geometry = Geometry.empty();
+const kCachedGeometryB: Geometry = Geometry.empty();
 
 const kTmpPos = Vec3.create();
 let kMaskData = new Int16Array();
@@ -51,13 +52,19 @@ class TerrainMesher {
     this.renderer = renderer;
   }
 
-  meshChunk(voxels: Tensor3, old: Mesh | null): Mesh | null {
-    const geo = old ? old.getGeometry() : kCachedGeometry;
-    this.computeChunkGeometry(geo, voxels);
-    return this.buildMesh(geo, old);
+  meshChunk(voxels: Tensor3, solid: Mesh | null,
+            water: Mesh | null): [Mesh | null, Mesh | null] {
+    const solid_geo = solid ? solid.getGeometry() : kCachedGeometryA;
+    const water_geo = water ? water.getGeometry() : kCachedGeometryB;
+    this.computeChunkGeometry(solid_geo, water_geo, voxels);
+    return [
+      this.buildMesh(solid_geo, solid, true),
+      this.buildMesh(water_geo, water, false),
+    ];
   }
 
-  private buildMesh(geo: Geometry, old: Mesh | null): Mesh | null {
+  private buildMesh(
+      geo: Geometry, old: Mesh | null, solid: boolean): Mesh | null {
     if (geo.num_indices === 0) {
       if (old) old.dispose();
       return null;
@@ -65,12 +72,14 @@ class TerrainMesher {
       old.setGeometry(geo);
       return old;
     }
-    return this.renderer.addBasicMesh(Geometry.clone(geo));
+    return this.renderer.addBasicMesh(Geometry.clone(geo), solid);
   }
 
-  private computeChunkGeometry(geo: Geometry, voxels: Tensor3): void {
+  private computeChunkGeometry(
+      solid_geo: Geometry, water_geo: Geometry, voxels: Tensor3): void {
     const {data, shape, stride} = voxels;
-    geo.clear();
+    solid_geo.clear();
+    water_geo.clear();
 
     for (let d = 0; d < 3; d++) {
       const dir = d * 2;
@@ -140,7 +149,10 @@ class TerrainMesher {
 
             kTmpPos[u] = iu;
             kTmpPos[v] = iv;
-            this.addQuad(geo, d, u, v, w, h, mask, kTmpPos);
+            const id = Math.abs(mask >> 8) as MaterialId;
+            const material = this.getMaterialData(id);
+            const geo = material.color[3] < 1 ? water_geo : solid_geo;
+            this.addQuad(geo, material, d, u, v, w, h, mask, kTmpPos);
 
             nw = n;
             for (let wx = 0; wx < w; wx++, nw += lv) {
@@ -154,7 +166,7 @@ class TerrainMesher {
     }
   }
 
-  private addQuad(geo: Geometry, d: int, u: int, v: int,
+  private addQuad(geo: Geometry, material: Material, d: int, u: int, v: int,
                   w: int, h: int, mask: int, pos: Vec3) {
     const {num_indices, num_vertices} = geo;
     geo.allocateVertices(num_vertices + 4);
@@ -196,8 +208,6 @@ class TerrainMesher {
       indices[num_indices + i] = num_vertices + offsets[i];
     }
 
-    const id = Math.abs(mask >> 8) as MaterialId;
-    const material = this.getMaterialData(id);
     let textureIndex = material.textureIndex;
     if (textureIndex === 0 && material.texture) {
       textureIndex = this.renderer.atlas.addImage(material.texture);

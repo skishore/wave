@@ -390,7 +390,8 @@ class Chunk {
   distance: number;
   private neighbors: int;
   private dirty: boolean;
-  private mesh: Mesh | null;
+  private solid: Mesh | null;
+  private water: Mesh | null;
   private voxels: Tensor3 | null;
 
   constructor(world: World, cx: int, cz: int) {
@@ -404,7 +405,8 @@ class Chunk {
     this.distance = 0;
     this.neighbors = kNeighbors;
     this.dirty = true;
-    this.mesh = null;
+    this.solid = null;
+    this.water = null;
     this.voxels = null;
   }
 
@@ -412,8 +414,10 @@ class Chunk {
     if (!this.enabled) return;
     this.world.enabled.delete(this);
 
-    if (this.mesh) this.mesh.dispose();
-    this.mesh = null;
+    if (this.solid) this.solid.dispose();
+    if (this.water) this.water.dispose();
+    this.solid = null;
+    this.water = null;
 
     this.active = false;
     this.enabled = false;
@@ -522,9 +526,14 @@ class Chunk {
         ? this.copyVoxels(buffer, dstPos, chunk.voxels, srcPos, size)
         : this.zeroVoxels(buffer, dstPos, size);
     }
-    const mesh = world.mesher.meshChunk(buffer, this.mesh);
-    if (mesh) mesh.setPosition(cx << kChunkBits, 0, cz << kChunkBits);
-    this.mesh = mesh;
+
+    const x = cx << kChunkBits, z = cz << kChunkBits;
+    const meshed = world.mesher.meshChunk(buffer, this.solid, this.water);
+    const [solid, water] = meshed;
+    if (solid) solid.setPosition(x, 0, z);
+    if (water) water.setPosition(x, 0, z);
+    this.solid = solid;
+    this.water = water;
   }
 
   private copyVoxels(dst: Tensor3, dstPos: [number, number, number],
