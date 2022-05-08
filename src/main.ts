@@ -395,7 +395,9 @@ const main = () => {
   env.target.add(player);
 
   const registry = env.registry;
-  registry.addMaterialOfColor('water', [0, 0, 1, 0.5]);
+  registry.addMaterialOfColor('blue', [0.1, 0.1, 0.4, 0.7]);
+  registry.addMaterialOfTexture(
+    'water', 'images/water.png', [0.2, 0.2, 0.6, 0.6]);
   const textures = ['dirt', 'grass', 'ground', 'wall'];
   for (const texture of textures) {
     registry.addMaterialOfTexture(texture, `images/${texture}.png`);
@@ -404,7 +406,7 @@ const main = () => {
   const dirt = registry.addBlock(['dirt'], true);
   const grass = registry.addBlock(['grass', 'dirt', 'dirt'], true);
   const ground = registry.addBlock(['ground', 'dirt', 'dirt'], true);
-  const water = registry.addBlock(['water'], false);
+  const water = registry.addBlock(['water', 'blue', 'blue'], false);
 
   const H = kWorldHeight;
   const S = Math.floor(kWorldHeight / 2);

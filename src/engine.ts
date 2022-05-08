@@ -1,4 +1,4 @@
-import {assert, drop, int, nonnull, Tensor3, Vec3} from './base.js';
+import {assert, drop, int, nonnull, Color, Tensor3, Vec3} from './base.js';
 import {EntityComponentSystem} from './ecs.js';
 import {Mesh, Renderer} from './renderer.js';
 import {TerrainMesher} from './mesher.js';
@@ -84,8 +84,6 @@ class Container {
 type BlockId = int & {__type__: 'BlockId'};
 type MaterialId = int & {__type__: 'MaterialId'};
 
-type Color = [number, number, number, number];
-
 interface Material {
   color: Color,
   texture: string | null,
@@ -151,8 +149,8 @@ class Registry {
     this.addMaterialHelper(name, color, null);
   }
 
-  addMaterialOfTexture(name: string, texture: string) {
-    this.addMaterialHelper(name, kWhite, texture);
+  addMaterialOfTexture(name: string, texture: string, color?: Color) {
+    this.addMaterialHelper(name, color || kWhite, texture);
   }
 
   // faces has 6 elements for each block type: [+x, -x, +y, -y, +z, -z]
@@ -709,16 +707,19 @@ class Env {
   entities: EntityComponentSystem;
   registry: Registry;
   renderer: Renderer;
-  timing: Timing;
   world: World;
+  private cameraBlock: BlockId;
+  private timing: Timing;
 
   constructor(id: string) {
     this.container = new Container(id);
     this.entities = new EntityComponentSystem();
     this.registry = new Registry();
     this.renderer = new Renderer(this.container.canvas);
-    this.timing = new Timing(this.render.bind(this), this.update.bind(this));
     this.world = new World(this.registry, this.renderer);
+
+    this.cameraBlock = kEmptyBlock;
+    this.timing = new Timing(this.render.bind(this), this.update.bind(this));
   }
 
   refresh() {
@@ -738,6 +739,7 @@ class Env {
     deltas.x = deltas.y = deltas.scroll = 0;
 
     this.entities.render(dt);
+    this.updateOverlayColor();
     const renderer_stats = this.renderer.render();
 
     const timing = this.timing;
@@ -757,6 +759,22 @@ class Env {
   private formatStat(perf: Performance): string {
     const format = (x: number) => (x / 1000).toFixed(2);
     return `${format(perf.mean())}ms / ${format(perf.max())}ms`;
+  }
+
+  private updateOverlayColor() {
+    const [x, y, z] = this.renderer.camera.position;
+    const block = this.world.getBlock(
+      Math.floor(x), Math.floor(y), Math.floor(z));
+    if (block === this.cameraBlock) return;
+
+    const color = (() => {
+      if (block === kEmptyBlock) return kWhite;
+      const material = this.registry.getBlockFaceMaterial(block, 3);
+      return this.registry.getMaterialData(material).color;
+    })();
+
+    this.cameraBlock = block;
+    this.renderer.setOverlayColor(color);
   }
 };
 

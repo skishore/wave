@@ -1,4 +1,5 @@
-import {assert, drop, int, nonnull, Mat4, Tensor3, Vec3, Vec4} from './base.js';
+import {assert, drop, int, nonnull} from './base.js';
+import {Color, Mat4, Tensor3, Vec3, Vec4} from './base.js';
 
 //////////////////////////////////////////////////////////////////////////////
 // The graphics engine:
@@ -38,7 +39,7 @@ class Camera {
     this.view = Mat4.create();
 
     const aspect = height ? width / height : 1;
-    Mat4.perspective(this.projection, 3 * Math.PI / 8, aspect, 0.1);
+    Mat4.perspective(this.projection, 3 * Math.PI / 8, aspect, 0.01);
   }
 
   applyInputs(dx: number, dy: number, dscroll: number) {
@@ -614,6 +615,87 @@ class BasicMesh {
 
 //////////////////////////////////////////////////////////////////////////////
 
+const kScreenOverlayShader = `
+  in vec3 a_position;
+
+  void main() {
+    gl_Position = vec4(a_position, 1);
+  }
+#split
+  precision highp float;
+  precision highp sampler2DArray;
+
+  uniform vec4 u_color;
+
+  out vec4 o_color;
+
+  void main() {
+    o_color = u_color;
+  }
+`;
+
+class ScreenOverlay {
+  private color: Float32Array;
+  private context: Context;
+  private shader: Shader;
+  private vertices: Float32Array;
+  private vao: WebGLVertexArrayObject | null;
+  private uniform: WebGLUniformLocation | null;
+  private buffer: WebGLBuffer | null;
+
+  constructor(context: Context) {
+    this.color = new Float32Array([0, 0, 0, 0]);
+    this.context = context;
+    this.shader = new Shader(context, kScreenOverlayShader);
+    this.uniform = this.shader.getUniformLocation('u_color');
+    this.vertices = Float32Array.from([
+      1, 1, 0, -1, 1, 0, -1, -1, 0,
+      1, 1, 0, -1, -1, 0, 1, -1, 0
+    ]);
+    this.vao = null;
+    this.buffer = null;
+  }
+
+  draw() {
+    if (this.color[3] === 1) return;
+
+    this.prepareBuffers();
+    this.shader.bind();
+
+    const context = this.context;
+    context.bindVertexArray(this.vao);
+
+    const gl = context.gl;
+    gl.disable(gl.DEPTH_TEST);
+    gl.uniform4fv(this.uniform, this.color);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    gl.enable(gl.DEPTH_TEST);
+  }
+
+  setColor(color: Color) {
+    for (let i = 0; i < 4; i++) this.color[i] = color[i];
+  }
+
+  private prepareBuffers() {
+    if (this.vao) return;
+    const gl = this.context.gl;
+    this.vao = nonnull(gl.createVertexArray());
+    this.context.bindVertexArray(this.vao);
+
+    const location = this.shader.getAttribLocation('a_position');
+    if (location === null) return;
+
+    const buffer = nonnull(gl.createBuffer());
+    this.context.bindArrayBuffer(buffer);
+    gl.bufferData(ARRAY_BUFFER, this.vertices, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(location);
+    gl.vertexAttribPointer(location, 3, gl.FLOAT, false, 0, 0);
+    this.buffer = buffer;
+  }
+};
+
+//////////////////////////////////////////////////////////////////////////////
+
 interface Mesh {
   dispose: () => void,
   getGeometry: () => Geometry,
@@ -625,6 +707,7 @@ class Renderer {
   camera: Camera;
   atlas: TextureAtlas;
   private context: Context;
+  private overlay: ScreenOverlay;
   private shader: Shader;
   private solid_meshes: BasicMesh[];
   private water_meshes: BasicMesh[];
@@ -652,6 +735,7 @@ class Renderer {
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
     this.context = new Context(gl);
+    this.overlay = new ScreenOverlay(this.context);
     this.atlas = new TextureAtlas(this.context);
     this.shader = new Shader(this.context, kBasicShader);
     this.solid_meshes = [];
@@ -674,11 +758,19 @@ class Renderer {
     for (const mesh of this.solid_meshes) {
       if (mesh.draw(camera)) drawn++;
     }
+    gl.disable(gl.CULL_FACE);
     for (const mesh of this.water_meshes) {
       if (mesh.draw(camera)) drawn++;
     }
+    gl.enable(gl.CULL_FACE);
+    this.overlay.draw();
+
     const total = this.solid_meshes.length + this.water_meshes.length;
     return `Draw calls: ${drawn} / ${total}`;
+  }
+
+  setOverlayColor(color: Color) {
+    this.overlay.setColor(color);
   }
 };
 

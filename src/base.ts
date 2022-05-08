@@ -1,4 +1,5 @@
 type int = number;
+type Color = [number, number, number, number];
 
 const assert = (x: boolean, message?: () => string) => {
   if (x) return;
@@ -238,4 +239,4 @@ class Tensor3 {
 
 //////////////////////////////////////////////////////////////////////////////
 
-export {assert, drop, int, nonnull, Mat4, Tensor3, Vec3, Vec4};
+export {assert, drop, int, nonnull, Color, Mat4, Tensor3, Vec3, Vec4};

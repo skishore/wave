@@ -1,4 +1,4 @@
-import {assert, int, Tensor3, Vec3} from './base.js';
+import {assert, int, Color, Tensor3, Vec3} from './base.js';
 import {Geometry, Mesh, Renderer} from './renderer.js';
 
 //////////////////////////////////////////////////////////////////////////////
@@ -10,7 +10,7 @@ const kNoMaterial = 0 as MaterialId;
 const kEmptyBlock = 0 as BlockId;
 
 interface Material {
-  color: [number, number, number, number],
+  color: Color,
   texture: string | null,
   textureIndex: int,
 };
