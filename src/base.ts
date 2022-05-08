@@ -161,7 +161,7 @@ const Mat4 = {
   perspective: (d: Mat4, fov: number, aspect: number,
                 near: number, far?: number) => {
     const f = 1 / Math.tan(fov / 2);
-    const g = f / aspect;
+    const g = f * aspect;
     let x = 1;
     let y = -2 * near;
     if (far) {
@@ -169,8 +169,8 @@ const Mat4 = {
       x = (far + near) * n;
       y = -(far * near * 2) * n;
     }
-    d[0]  = g; d[1]  = 0; d[2]  = 0; d[3]  = 0;
-    d[4]  = 0; d[5]  = f; d[6]  = 0; d[7]  = 0;
+    d[0]  = f; d[1]  = 0; d[2]  = 0; d[3]  = 0;
+    d[4]  = 0; d[5]  = g; d[6]  = 0; d[7]  = 0;
     d[8]  = 0; d[9]  = 0; d[10] = x; d[11] = 1;
     d[12] = 0; d[13] = 0; d[14] = y; d[15] = 0;
   },

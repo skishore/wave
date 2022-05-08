@@ -38,7 +38,7 @@ class Camera {
     this.view = Mat4.create();
 
     const aspect = height ? width / height : 1;
-    Mat4.perspective(this.projection, Math.PI / 4, aspect, 0.1);
+    Mat4.perspective(this.projection, 3 * Math.PI / 8, aspect, 0.1);
   }
 
   applyInputs(dx: number, dy: number, dscroll: number) {
