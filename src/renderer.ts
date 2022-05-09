@@ -472,6 +472,7 @@ const kBasicShader = `
   precision highp float;
   precision highp sampler2DArray;
 
+  uniform vec3 u_fogColor;
   uniform sampler2DArray u_texture;
   in vec4 v_color;
   in vec3 v_uvw;
@@ -479,11 +480,10 @@ const kBasicShader = `
 
   void main() {
     const float kFogHalfLife = 256.0;
-    const vec3 kFogColor = vec3(0.2, 0.5, 0.8);
 
     float fog = clamp(exp2(-kFogHalfLife * gl_FragCoord.w), 0.0, 1.0);
     vec4 color = v_color * texture(u_texture, v_uvw);
-    o_color = mix(color, vec4(kFogColor, color[3]), fog);
+    o_color = mix(color, vec4(u_fogColor, color[3]), fog);
     if (o_color[3] < 0.5) discard;
   }
 `;
@@ -495,7 +495,8 @@ class BasicMesh {
   private meshes: BasicMesh[];
   private geo: Geometry;
   private vao: WebGLVertexArrayObject | null;
-  private uniform: WebGLUniformLocation | null;
+  private fog_location: WebGLUniformLocation | null;
+  private transform_location: WebGLUniformLocation | null;
   private indices: WebGLBuffer | null;
   private vertices: WebGLBuffer | null;
   private position: Vec3;
@@ -510,7 +511,8 @@ class BasicMesh {
     this.meshes = meshes;
     this.geo = geo;
     this.vao = null;
-    this.uniform = shader.getUniformLocation('u_transform');
+    this.fog_location = shader.getUniformLocation('u_fogColor');
+    this.transform_location = shader.getUniformLocation('u_transform');
     this.indices = null;
     this.vertices = null;
     this.position = Vec3.create();
@@ -518,7 +520,7 @@ class BasicMesh {
     this.meshes.push(this);
   }
 
-  draw(camera: Camera): boolean {
+  draw(camera: Camera, fog: Float32Array): boolean {
     const transform = camera.getTransformFor(this.position);
     if (this.geo.cull(transform)) return false;
 
@@ -531,7 +533,8 @@ class BasicMesh {
     context.bindElementArrayBuffer(this.indices);
 
     const gl = context.gl;
-    gl.uniformMatrix4fv(this.uniform, false, transform);
+    gl.uniform3fv(this.fog_location, fog);
+    gl.uniformMatrix4fv(this.transform_location, false, transform);
     gl.drawElements(gl.TRIANGLES, this.geo.num_indices, gl.UNSIGNED_INT, 0);
     return true;
   }
@@ -615,6 +618,8 @@ class BasicMesh {
 
 //////////////////////////////////////////////////////////////////////////////
 
+const kDefaultFogColor = [0.2, 0.5, 0.8];
+
 const kScreenOverlayShader = `
   in vec3 a_position;
 
@@ -636,6 +641,7 @@ const kScreenOverlayShader = `
 
 class ScreenOverlay {
   private color: Float32Array;
+  private fog_color: Float32Array;
   private context: Context;
   private shader: Shader;
   private vertices: Float32Array;
@@ -645,6 +651,7 @@ class ScreenOverlay {
 
   constructor(context: Context) {
     this.color = new Float32Array([0, 0, 0, 0]);
+    this.fog_color = new Float32Array(kDefaultFogColor);
     this.context = context;
     this.shader = new Shader(context, kScreenOverlayShader);
     this.uniform = this.shader.getUniformLocation('u_color');
@@ -672,8 +679,17 @@ class ScreenOverlay {
     gl.enable(gl.DEPTH_TEST);
   }
 
+  getFogColor(): Float32Array {
+    return this.fog_color;
+  }
+
   setColor(color: Color) {
     for (let i = 0; i < 4; i++) this.color[i] = color[i];
+    if (color[3] < 1) {
+      for (let i = 0; i < 3; i++) this.fog_color[i] = color[i];
+    } else {
+      this.fog_color.set(kDefaultFogColor);
+    }
   }
 
   private prepareBuffers() {
@@ -755,12 +771,13 @@ class Renderer {
 
     let drawn = 0;
     const camera = this.camera;
+    const fog = this.overlay.getFogColor();
     for (const mesh of this.solid_meshes) {
-      if (mesh.draw(camera)) drawn++;
+      if (mesh.draw(camera, fog)) drawn++;
     }
     gl.disable(gl.CULL_FACE);
     for (const mesh of this.water_meshes) {
-      if (mesh.draw(camera)) drawn++;
+      if (mesh.draw(camera, fog)) drawn++;
     }
     gl.enable(gl.CULL_FACE);
     this.overlay.draw();
