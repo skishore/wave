@@ -501,10 +501,13 @@ class BasicMesh {
   private vertices: WebGLBuffer | null;
   private position: Vec3;
   private index: int;
+  private shown: boolean;
 
   constructor(context: Context, atlas: TextureAtlas, shader: Shader,
               meshes: BasicMesh[], geo: Geometry) {
-    this.index = 0;
+    const index = meshes.length;
+    meshes.push(this);
+
     this.context = context;
     this.atlas = atlas;
     this.shader = shader;
@@ -516,11 +519,12 @@ class BasicMesh {
     this.indices = null;
     this.vertices = null;
     this.position = Vec3.create();
-    this.index = this.meshes.length;
-    this.meshes.push(this);
+    this.index = index;
+    this.shown = true;
   }
 
   draw(camera: Camera, fog: Float32Array): boolean {
+    if (!this.shown) return false;
     const transform = camera.getTransformFor(this.position);
     if (this.geo.cull(transform)) return false;
 
@@ -562,6 +566,10 @@ class BasicMesh {
 
   setPosition(x: int, y: int, z: int): void {
     Vec3.set(this.position, x, y, z);
+  }
+
+  show(value: boolean): void {
+    this.shown = value;
   }
 
   private destroyBuffers() {
@@ -717,6 +725,7 @@ interface Mesh {
   getGeometry: () => Geometry,
   setGeometry: (geo: Geometry) => void,
   setPosition: (x: number, y: number, z: number) => void,
+  show: (value: boolean) => void,
 };
 
 class Renderer {
