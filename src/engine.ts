@@ -106,9 +106,9 @@ class Registry {
   _faces: MaterialId[];
   _materials: Material[];
   _ids: Map<string, MaterialId>;
-  rust: RustHelper;
+  wasm: WasmHelper;
 
-  constructor(rust: RustHelper) {
+  constructor(wasm: WasmHelper) {
     this._opaque = [false, false];
     this._solid = [false, true];
     this._faces = []
@@ -117,10 +117,10 @@ class Registry {
     }
     this._materials = [];
     this._ids = new Map();
-    this.rust = rust;
+    this.wasm = wasm;
 
-    this.registerBlockWithRust(0);
-    this.registerBlockWithRust(1);
+    this.registerBlockWithWasm(0);
+    this.registerBlockWithWasm(1);
   }
 
   addBlock(xs: string[], solid: boolean): BlockId {
@@ -149,7 +149,7 @@ class Registry {
       this._faces.push(material + 1 as MaterialId);
     });
 
-    this.registerBlockWithRust(result);
+    this.registerBlockWithWasm(result);
     return result;
   }
 
@@ -177,11 +177,11 @@ class Registry {
     assert(!this._ids.has(name), () => `Duplicate material: ${name}`);
     this._ids.set(name, this._materials.length as MaterialId);
     this._materials.push({color, texture, textureIndex: 0});
-    this.registerMaterialWithRust(color, texture);
+    this.registerMaterialWithWasm(color, texture);
   }
 
-  private registerBlockWithRust(id: int) {
-    this.rust.register_block(
+  private registerBlockWithWasm(id: int) {
+    this.wasm.register_block(
       this._faces[6 * id + 0],
       this._faces[6 * id + 1],
       this._faces[6 * id + 2],
@@ -193,8 +193,8 @@ class Registry {
     );
   }
 
-  private registerMaterialWithRust(color: Color, texture: string | null) {
-    this.rust.register_facet(color[0], color[1], color[2], color[3], 0);
+  private registerMaterialWithWasm(color: Color, texture: string | null) {
+    this.wasm.register_facet(color[0], color[1], color[2], color[3], 0);
   }
 };
 
@@ -550,19 +550,19 @@ class Chunk {
     const dx = cx << kChunkBits;
     const dz = cz << kChunkBits;
     (() => {
-      const rs_start = Date.now();
+      const ws_start = Date.now();
       for (let i = 0; i < 100; i++) {
-        this.world.rust.mesh();
+        this.world.wasm.mesh();
       }
-      const rs_time = Date.now() - rs_start;
+      const ws_time = Date.now() - ws_start;
       const js_start = Date.now();
       for (let i = 0; i < 100; i++) {
         this.world.mesher.countQuads(expanded);
       }
       const js_time = Date.now() - js_start;
-      console.log(rs_time, js_time);
+      console.log(ws_time, js_time);
     })();
-    const rs_quads = this.world.rust.mesh();
+    const rs_quads = this.world.wasm.mesh();
     const js_quads = this.world.mesher.countQuads(expanded);
     assert(rs_quads === js_quads);
     const mesh = voxels ? this.world.mesher.mesh(expanded) : null;
@@ -579,8 +579,8 @@ class Chunk {
 
     const y_offset = kChunkWidth + 2;
     const z_offset = y_offset * (kWorldHeight + 2);
-    const memory = this.world.rust.memory;
-    const raw = new Uint32Array(memory.buffer, this.world.data);
+    const memory = this.world.wasm.memory;
+    const raw = new Uint8Array(memory.buffer, this.world.data);
 
     for (let i = 0; i < ni; i++) {
       for (let j = 0; j < nj; j++) {
@@ -603,21 +603,21 @@ class World {
   registry: Registry;
   mesher: TerrainMesher;
   loader: Loader | null;
-  rust: RustHelper;
+  wasm: WasmHelper;
   data: int;
 
-  constructor(registry: Registry, renderer: Renderer, rust: RustHelper) {
+  constructor(registry: Registry, renderer: Renderer, wasm: WasmHelper) {
     this.chunks = new Map();
     this.enabled = new Set();
     this.renderer = renderer;
     this.registry = registry;
     this.mesher = new TerrainMesher(registry, renderer);
     this.loader = null;
-    this.rust = rust;
+    this.wasm = wasm;
 
     const w = kChunkWidth + 2;
     const h = kWorldHeight + 2;
-    this.data = rust.allocate_voxels(w, h, w);
+    this.data = wasm.allocate_voxels(w, h, w);
   }
 
   getBlock(x: int, y: int, z: int): BlockId {
@@ -724,13 +724,13 @@ class Env {
   timing: Timing;
   world: World;
 
-  constructor(id: string, rust: RustHelper) {
+  constructor(id: string, wasm: WasmHelper) {
     this.container = new Container(id);
     this.entities = new EntityComponentSystem();
-    this.registry = new Registry(rust);
+    this.registry = new Registry(wasm);
     this.renderer = new Renderer(this.container.canvas);
     this.timing = new Timing(this.render.bind(this), this.update.bind(this));
-    this.world = new World(this.registry, this.renderer, rust);
+    this.world = new World(this.registry, this.renderer, wasm);
   }
 
   refresh() {
@@ -772,7 +772,7 @@ class Env {
 
 //////////////////////////////////////////////////////////////////////////////
 
-interface RustHelper {
+interface WasmHelper {
   memory: WebAssembly.Memory,
   register_block: (f0: int, f1: int, f2: int, f3: int, f4: int, f5: int,
                    opaque: boolean, solid: boolean) => null,
@@ -784,4 +784,4 @@ interface RustHelper {
 
 //////////////////////////////////////////////////////////////////////////////
 
-export {BlockId, MaterialId, Column, Env, RustHelper, kWorldHeight};
+export {BlockId, MaterialId, Column, Env, WasmHelper, kWorldHeight};

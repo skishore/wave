@@ -1,5 +1,5 @@
 import {int, Tensor3, Vec3} from './base.js';
-import {BlockId, Column, Env, RustHelper, kWorldHeight} from './engine.js';
+import {BlockId, Column, Env, WasmHelper, kWorldHeight} from './engine.js';
 import {Component, ComponentState, ComponentStore, EntityId, kNoEntity} from './ecs.js';
 import {sweep} from './sweep.js';
 
@@ -12,8 +12,8 @@ class TypedEnv extends Env {
   physics: ComponentStore<PhysicsState>;
   target: ComponentStore;
 
-  constructor(id: string, rust: RustHelper) {
-    super(id, rust);
+  constructor(id: string, wasm: WasmHelper) {
+    super(id, wasm);
     const ents = this.entities;
     this.position = ents.registerComponent('position', Position);
     this.movement = ents.registerComponent('movement', Movement(this));
@@ -375,8 +375,8 @@ const fractalPerlin2D = (
 
 // Putting it all together:
 
-const main = (rust: RustHelper) => {
-  const env = new TypedEnv('container', rust);
+const main = (wasm: WasmHelper) => {
+  const env = new TypedEnv('container', wasm);
   const player = env.entities.addEntity();
   const position = env.position.add(player);
   position.x = 0;
@@ -420,14 +420,14 @@ const main = (rust: RustHelper) => {
 };
 
 const wrapper = async () => {
-  const path = 'rust/target/wasm32-unknown-unknown/release/voxels.wasm';
-  const data = await (await fetch(path)).arrayBuffer();
+  const data = await (await fetch('exports.wasm.opt')).arrayBuffer();
   const module = await WebAssembly.compile(data);
+  console.log(module);
 
   const console_log = (x: int) => { console.log(x); };
   const imports = {env: {console_log}};
   const instance = await WebAssembly.instantiate(module, imports);
-  main(instance.exports as any as RustHelper);
+  main(instance.exports as any as WasmHelper);
 };
 
 window.onload = wrapper;
