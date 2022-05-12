@@ -22,13 +22,13 @@ const nonnull = <T>(x: T | null, message?: () => string): T => {
 
 //////////////////////////////////////////////////////////////////////////////
 
-interface Vec3 extends Float32Array {__type__: 'Vec3'};
+interface Vec3 extends Float64Array {__type__: 'Vec3'};
 type Vec4 = [number, number, number, number];
 
 const Vec3 = {
-  create: (): Vec3 => new Float32Array(3) as Vec3,
+  create: (): Vec3 => new Float64Array(3) as Vec3,
   from: (x: number, y: number, z: number): Vec3 => {
-    const result = new Float32Array(3) as Vec3;
+    const result = new Float64Array(3) as Vec3;
     result[0] = x;
     result[1] = y;
     result[2] = z;

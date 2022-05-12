@@ -4,6 +4,16 @@ import {Color, Mat4, Tensor3, Vec3, Vec4} from './base.js';
 //////////////////////////////////////////////////////////////////////////////
 // The graphics engine:
 
+interface CullingPlane {
+  x: number;
+  y: number;
+  z: number;
+  index: int;
+};
+
+const kTmpDelta = Vec3.create();
+const kTmpPlane = Vec3.create();
+
 class Camera {
   heading: number; // In radians: [0, 2π)
   pitch: number;   // In radians: (-π/2, π/2)
@@ -83,6 +93,23 @@ class Camera {
     // Scrolling is trivial to apply: add and clamp.
     if (dscroll === 0) return;
     this.zoom = Math.max(0, Math.min(10, this.zoom + Math.sign(dscroll)));
+  }
+
+  getCullingPlanes(): CullingPlane[] {
+    const result = [];
+    const {heading, pitch, projection} = this;
+    for (let i = 0; i < 4; i++) {
+      const a = i < 2 ? (1 - ((i & 1) << 1)) * projection[0] : 0;
+      const b = i > 1 ? (1 - ((i & 1) << 1)) * projection[5] : 0;
+      Vec3.set(kTmpPlane, a, b, 1);
+      Vec3.rotateX(kTmpPlane, kTmpPlane, pitch);
+      Vec3.rotateY(kTmpPlane, kTmpPlane, heading);
+
+      const [x, y, z] = kTmpPlane;
+      const index = (x > 0 ? 1 : 0) | (y > 0 ? 2 : 0) | (z > 0 ? 4 : 0);
+      result.push({x, y, z, index});
+    }
+    return result;
   }
 
   getTransform(): Mat4 {
@@ -341,8 +368,6 @@ class TextureAtlas {
 
 //////////////////////////////////////////////////////////////////////////////
 
-const kTmpBound: Vec4 = [0, 0, 0, 0];
-
 class Geometry {
   static PositionsOffset: int = 0;
   static NormalsOffset: int = 3;
@@ -395,25 +420,21 @@ class Geometry {
     this.vertices = expanded;
   }
 
-  cull(transform: Mat4): boolean {
-    this.computeBounds();
-    let a = 0, b = 0, c = 0, d = 0;
-    for (const bound of this.bounds) {
-      Mat4.multiplyVec4(kTmpBound, transform, bound);
-      const x = kTmpBound[0];
-      const y = kTmpBound[1];
-      const w = kTmpBound[3];
-      if (x >  w) a++;
-      if (x < -w) b++;
-      if (y >  w) c++;
-      if (y < -w) d++;
+  cull(delta: Vec3, planes: CullingPlane[]): boolean {
+    if (!this.bounds.length) this.computeBounds();
+    const bounds = this.bounds;
+    for (const plane of planes) {
+      const {x, y, z, index} = plane;
+      const bound = bounds[index];
+      const value = (bound[0] + delta[0]) * x +
+                    (bound[1] + delta[1]) * y +
+                    (bound[2] + delta[2]) * z;
+      if (value < 0) return true;
     }
-    return (a | b | c | d) >= 8;
+    return false;
   }
 
   private computeBounds() {
-    if (this.bounds.length > 0) return;
-
     const {lower_bound, upper_bound} = this;
     Vec3.set(lower_bound, Infinity, Infinity, Infinity);
     Vec3.set(upper_bound, -Infinity, -Infinity, -Infinity);
@@ -435,7 +456,7 @@ class Geometry {
     for (let i = 0; i < 8; i++) {
       const bound: Vec4 = [0, 0, 0, 1];
       for (let j = 0; j < 3; j++) {
-        bound[j] = (i & (1 << j)) ? lower_bound[j] : upper_bound[j];
+        bound[j] = (i & (1 << j)) ? upper_bound[j] : lower_bound[j];
       }
       this.bounds.push(bound);
     }
@@ -523,10 +544,12 @@ class BasicMesh {
     this.shown = true;
   }
 
-  draw(camera: Camera, fog: Float32Array): boolean {
+  draw(camera: Camera, fog: Float32Array, planes: CullingPlane[]): boolean {
     if (!this.shown) return false;
-    const transform = camera.getTransformFor(this.position);
-    if (this.geo.cull(transform)) return false;
+    const position = this.position;
+    Vec3.sub(kTmpDelta, position, camera.position);
+    if (this.geo.cull(kTmpDelta, planes)) return false;
+    const transform = camera.getTransformFor(position);
 
     this.prepareBuffers();
     this.atlas.bind();
@@ -780,13 +803,14 @@ class Renderer {
 
     let drawn = 0;
     const camera = this.camera;
+    const planes = camera.getCullingPlanes();
     const fog = this.overlay.getFogColor();
     for (const mesh of this.solid_meshes) {
-      if (mesh.draw(camera, fog)) drawn++;
+      if (mesh.draw(camera, fog, planes)) drawn++;
     }
     gl.disable(gl.CULL_FACE);
     for (const mesh of this.water_meshes) {
-      if (mesh.draw(camera, fog)) drawn++;
+      if (mesh.draw(camera, fog, planes)) drawn++;
     }
     gl.enable(gl.CULL_FACE);
     this.overlay.draw();
