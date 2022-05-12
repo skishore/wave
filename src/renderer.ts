@@ -1,5 +1,5 @@
 import {assert, drop, int, nonnull} from './base.js';
-import {Color, Mat4, Tensor3, Vec3, Vec4} from './base.js';
+import {Color, Mat4, Tensor3, Vec3} from './base.js';
 
 //////////////////////////////////////////////////////////////////////////////
 // The graphics engine:
@@ -26,7 +26,7 @@ class Camera {
   private last_dy: number;
 
   // transform = projection * view is the overall model-view-projection.
-  private position_for: Vec3;
+  private planes: CullingPlane[];
   private transform_for: Mat4;
   private transform: Mat4;
   private projection: Mat4;
@@ -42,7 +42,6 @@ class Camera {
     this.last_dx = 0;
     this.last_dy = 0;
 
-    this.position_for = Vec3.create();
     this.transform_for = Mat4.create();
     this.transform = Mat4.create();
     this.projection = Mat4.create();
@@ -50,6 +49,9 @@ class Camera {
 
     const aspect = height ? width / height : 1;
     Mat4.perspective(this.projection, 3 * Math.PI / 8, aspect, 0.01);
+
+    this.planes = Array(4).fill(null);
+    for (let i = 0; i < 4; i++) this.planes[i] = {x: 0, y: 0, z: 0, index: 0};
   }
 
   applyInputs(dx: number, dy: number, dscroll: number) {
@@ -96,8 +98,7 @@ class Camera {
   }
 
   getCullingPlanes(): CullingPlane[] {
-    const result = [];
-    const {heading, pitch, projection} = this;
+    const {heading, pitch, planes, projection} = this;
     for (let i = 0; i < 4; i++) {
       const a = i < 2 ? (1 - ((i & 1) << 1)) * projection[0] : 0;
       const b = i > 1 ? (1 - ((i & 1) << 1)) * projection[5] : 0;
@@ -106,10 +107,11 @@ class Camera {
       Vec3.rotateY(kTmpPlane, kTmpPlane, heading);
 
       const [x, y, z] = kTmpPlane;
-      const index = (x > 0 ? 1 : 0) | (y > 0 ? 2 : 0) | (z > 0 ? 4 : 0);
-      result.push({x, y, z, index});
+      const plane = planes[i];
+      plane.x = x; plane.y = y; plane.z = z;
+      plane.index = (x > 0 ? 1 : 0) | (y > 0 ? 2 : 0) | (z > 0 ? 4 : 0);
     }
-    return result;
+    return planes;
   }
 
   getTransform(): Mat4 {
@@ -119,8 +121,8 @@ class Camera {
   }
 
   getTransformFor(offset: Vec3): Mat4 {
-    Vec3.sub(this.position_for, this.position, offset);
-    Mat4.view(this.view, this.position_for, this.direction);
+    Vec3.sub(kTmpDelta, this.position, offset);
+    Mat4.view(this.view, kTmpDelta, this.direction);
     Mat4.multiply(this.transform_for, this.projection, this.view);
     return this.transform_for;
   }
@@ -381,7 +383,8 @@ class Geometry {
   num_vertices: int;
   private lower_bound: Vec3;
   private upper_bound: Vec3;
-  private bounds: Vec4[];
+  private bounds: Vec3[];
+  private dirty: boolean;
 
   constructor(indices: Uint32Array, vertices: Float32Array,
               num_indices: int, num_vertices: int) {
@@ -391,13 +394,15 @@ class Geometry {
     this.num_vertices = num_vertices;
     this.lower_bound = Vec3.create();
     this.upper_bound = Vec3.create();
-    this.bounds = [];
+    this.bounds = Array(8).fill(null);
+    for (let i = 0; i < 8; i++) this.bounds[i] = Vec3.create();
+    this.dirty = true;
   }
 
   clear() {
     this.num_indices = 0;
     this.num_vertices = 0;
-    this.bounds.length = 0;
+    this.dirty = true;
   }
 
   allocateIndices(n: int) {
@@ -421,7 +426,7 @@ class Geometry {
   }
 
   cull(delta: Vec3, planes: CullingPlane[]): boolean {
-    if (!this.bounds.length) this.computeBounds();
+    if (this.dirty) this.computeBounds();
     const bounds = this.bounds;
     for (const plane of planes) {
       const {x, y, z, index} = plane;
@@ -454,12 +459,12 @@ class Geometry {
     }
 
     for (let i = 0; i < 8; i++) {
-      const bound: Vec4 = [0, 0, 0, 1];
+      const bound = this.bounds[i];
       for (let j = 0; j < 3; j++) {
         bound[j] = (i & (1 << j)) ? upper_bound[j] : lower_bound[j];
       }
-      this.bounds.push(bound);
     }
+    this.dirty = false;
   }
 
   static clone(geo: Geometry): Geometry {
