@@ -511,32 +511,27 @@ const kBasicShader = `
 
 class BasicMesh {
   private context: Context;
-  private atlas: TextureAtlas;
   private shader: Shader;
   private meshes: BasicMesh[];
   private geo: Geometry;
   private vao: WebGLVertexArrayObject | null;
-  private fog_location: WebGLUniformLocation | null;
-  private transform_location: WebGLUniformLocation | null;
   private indices: WebGLBuffer | null;
   private vertices: WebGLBuffer | null;
+  private transform: WebGLUniformLocation | null;
   private position: Vec3;
   private index: int;
   private shown: boolean;
 
-  constructor(context: Context, atlas: TextureAtlas, shader: Shader,
-              meshes: BasicMesh[], geo: Geometry) {
+  constructor(context: Context, shader: Shader, meshes: BasicMesh[], geo: Geometry) {
     const index = meshes.length;
     meshes.push(this);
 
     this.context = context;
-    this.atlas = atlas;
     this.shader = shader;
     this.meshes = meshes;
     this.geo = geo;
     this.vao = null;
-    this.fog_location = shader.getUniformLocation('u_fogColor');
-    this.transform_location = shader.getUniformLocation('u_transform');
+    this.transform = shader.getUniformLocation('u_transform');
     this.indices = null;
     this.vertices = null;
     this.position = Vec3.create();
@@ -544,7 +539,7 @@ class BasicMesh {
     this.shown = true;
   }
 
-  draw(camera: Camera, fog: Float32Array, planes: CullingPlane[]): boolean {
+  draw(camera: Camera, planes: CullingPlane[]): boolean {
     if (!this.shown) return false;
     const position = this.position;
     Vec3.sub(kTmpDelta, position, camera.position);
@@ -552,16 +547,12 @@ class BasicMesh {
     const transform = camera.getTransformFor(position);
 
     this.prepareBuffers();
-    this.atlas.bind();
-    this.shader.bind();
-
     const context = this.context;
     context.bindVertexArray(this.vao);
     context.bindElementArrayBuffer(this.indices);
 
     const gl = context.gl;
-    gl.uniform3fv(this.fog_location, fog);
-    gl.uniformMatrix4fv(this.transform_location, false, transform);
+    gl.uniformMatrix4fv(this.transform, false, transform);
     gl.drawElements(gl.TRIANGLES, this.geo.num_indices, gl.UNSIGNED_INT, 0);
     return true;
   }
@@ -759,6 +750,7 @@ class Renderer {
   private shader: Shader;
   private solid_meshes: BasicMesh[];
   private water_meshes: BasicMesh[];
+  private fog: WebGLUniformLocation | null;
 
   constructor(canvas: HTMLCanvasElement) {
     const params = new URLSearchParams(window.location.search);
@@ -788,12 +780,13 @@ class Renderer {
     this.shader = new Shader(this.context, kBasicShader);
     this.solid_meshes = [];
     this.water_meshes = [];
+    this.fog = this.shader.getUniformLocation('u_fogColor');
   }
 
   addBasicMesh(geo: Geometry, solid: boolean): Mesh {
     const {context, atlas, shader} = this;
     const meshes = solid ? this.solid_meshes : this.water_meshes;
-    return new BasicMesh(context, atlas, shader, meshes, geo);
+    return new BasicMesh(context, shader, meshes, geo);
   }
 
   render(): string {
@@ -804,13 +797,16 @@ class Renderer {
     let drawn = 0;
     const camera = this.camera;
     const planes = camera.getCullingPlanes();
+    this.atlas.bind();
+    this.shader.bind();
     const fog = this.overlay.getFogColor();
+    this.context.gl.uniform3fv(this.fog, fog);
     for (const mesh of this.solid_meshes) {
-      if (mesh.draw(camera, fog, planes)) drawn++;
+      if (mesh.draw(camera, planes)) drawn++;
     }
     gl.disable(gl.CULL_FACE);
     for (const mesh of this.water_meshes) {
-      if (mesh.draw(camera, fog, planes)) drawn++;
+      if (mesh.draw(camera, planes)) drawn++;
     }
     gl.enable(gl.CULL_FACE);
     this.overlay.draw();
