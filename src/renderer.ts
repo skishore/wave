@@ -139,68 +139,19 @@ const ARRAY_BUFFER         = WebGL2RenderingContext.ARRAY_BUFFER;
 const ELEMENT_ARRAY_BUFFER = WebGL2RenderingContext.ELEMENT_ARRAY_BUFFER;
 const TEXTURE_2D_ARRAY     = WebGL2RenderingContext.TEXTURE_2D_ARRAY;
 
-class Context {
-  gl: WebGL2RenderingContext;
-  private array_buffer: WebGLBuffer | null;
-  private element_array_buffer: WebGLBuffer | null;
-  private program: WebGLProgram | null;
-  private texture_2d_array: WebGLTexture | null;
-  private vertex_array: WebGLVertexArrayObject | null;
-
-  constructor(gl: WebGL2RenderingContext) {
-    this.gl = gl;
-    this.array_buffer = null;
-    this.element_array_buffer = null;
-    this.program = null;
-    this.texture_2d_array = null;
-    this.vertex_array = null;
-  }
-
-  bindArrayBuffer(buffer: WebGLBuffer | null) {
-    if (buffer === this.array_buffer) return;
-    this.gl.bindBuffer(ARRAY_BUFFER, buffer);
-    this.element_array_buffer = buffer;
-  }
-
-  bindElementArrayBuffer(buffer: WebGLBuffer | null) {
-    if (buffer === this.element_array_buffer) return;
-    this.gl.bindBuffer(ELEMENT_ARRAY_BUFFER, buffer);
-    this.element_array_buffer = buffer;
-  }
-
-  bindProgram(program: WebGLProgram | null) {
-    if (program === this.program) return;
-    this.gl.useProgram(program);
-    this.program = program;
-  }
-
-  bindTexture2DArray(texture: WebGLTexture | null) {
-    if (texture === this.texture_2d_array) return;
-    this.gl.bindTexture(TEXTURE_2D_ARRAY, texture);
-    this.texture_2d_array = texture;
-  }
-
-  bindVertexArray(vao: WebGLVertexArrayObject | null) {
-    if (vao === this.vertex_array) return;
-    this.gl.bindVertexArray(vao);
-    this.vertex_array = vao;
-  }
-}
-
 //////////////////////////////////////////////////////////////////////////////
 
 interface Uniform { info: WebGLActiveInfo, location: WebGLUniformLocation };
 interface Attribute { info: WebGLActiveInfo, location: number };
 
 class Shader {
-  private context: Context;
+  private gl: WebGL2RenderingContext;
   private program: WebGLProgram;
   private uniforms: Map<string, Uniform>;
   private attributes: Map<string, Attribute>;
 
-  constructor(context: Context, source: string) {
-    this.context = context;
-    const gl = context.gl;
+  constructor(gl: WebGL2RenderingContext, source: string) {
+    this.gl = gl;
     const parts = source.split('#split');
     const vertex = this.compile(parts[0], gl.VERTEX_SHADER);
     const fragment = this.compile(parts[1], gl.FRAGMENT_SHADER);
@@ -227,7 +178,7 @@ class Shader {
   }
 
   bind() {
-    this.context.bindProgram(this.program);
+    this.gl.useProgram(this.program);
   }
 
   getAttribLocation(name: string): number | null {
@@ -245,7 +196,7 @@ class Shader {
   }
 
   private compile(source: string, type: number): WebGLShader {
-    const gl = this.context.gl;
+    const gl = this.gl;
     const result = nonnull(gl.createShader(type));
     gl.shaderSource(result, `#version 300 es\n${source}`);
     gl.compileShader(result);
@@ -258,7 +209,7 @@ class Shader {
   }
 
   private link(vertex: WebGLShader, fragment: WebGLShader): WebGLProgram {
-    const gl = this.context.gl;
+    const gl = this.gl;
     const result = nonnull(gl.createProgram());
     gl.attachShader(result, vertex);
     gl.attachShader(result, fragment);
@@ -275,18 +226,16 @@ class Shader {
 //////////////////////////////////////////////////////////////////////////////
 
 class TextureAtlas {
-  private context: Context;
+  private gl: WebGL2RenderingContext;
   private texture: WebGLTexture;
   private canvas: CanvasRenderingContext2D | null;
   private urls: Map<string, int>;
   private data: Uint8Array;
   private nextResult: int;
 
-  constructor(context: Context) {
-    const gl = context.gl;
-    const texture = nonnull(gl.createTexture());
-    this.context = context;
-    this.texture = texture;
+  constructor(gl: WebGL2RenderingContext) {
+    this.gl = gl;
+    this.texture = nonnull(gl.createTexture());
     this.canvas = null;
     this.urls = new Map();
     this.data = new Uint8Array();
@@ -311,7 +260,7 @@ class TextureAtlas {
   }
 
   bind() {
-    this.context.bindTexture2DArray(this.texture);
+    this.gl.bindTexture(TEXTURE_2D_ARRAY, this.texture);
   }
 
   private loaded(index: int, image: HTMLImageElement) {
@@ -354,7 +303,7 @@ class TextureAtlas {
     }
 
     this.bind();
-    const gl = this.context.gl;
+    const gl = this.gl;
     if (allocate) {
       assert(this.data.length % length === 0);
       const depth = this.data.length / length;
@@ -515,7 +464,7 @@ const kBasicShader = `
 `;
 
 class BasicMesh {
-  private context: Context;
+  private gl: WebGL2RenderingContext;
   private shader: Shader;
   private meshes: BasicMesh[];
   private geo: Geometry;
@@ -527,11 +476,12 @@ class BasicMesh {
   private index: int;
   private shown: boolean;
 
-  constructor(context: Context, shader: Shader, meshes: BasicMesh[], geo: Geometry) {
+  constructor(gl: WebGL2RenderingContext, shader: Shader,
+              meshes: BasicMesh[], geo: Geometry) {
     const index = meshes.length;
     meshes.push(this);
 
-    this.context = context;
+    this.gl = gl;
     this.shader = shader;
     this.meshes = meshes;
     this.geo = geo;
@@ -549,14 +499,13 @@ class BasicMesh {
     const position = this.position;
     Vec3.sub(kTmpDelta, position, camera.position);
     if (this.geo.cull(kTmpDelta, planes)) return false;
-    const transform = camera.getTransformFor(position);
 
     this.prepareBuffers();
-    const context = this.context;
-    context.bindVertexArray(this.vao);
-    context.bindElementArrayBuffer(this.indices);
+    const transform = camera.getTransformFor(position);
 
-    const gl = context.gl;
+    const gl = this.gl;
+    gl.bindVertexArray(this.vao);
+    gl.bindBuffer(ELEMENT_ARRAY_BUFFER, this.indices);
     gl.uniformMatrix4fv(this.transform, false, transform);
     gl.drawElements(gl.TRIANGLES, this.geo.num_indices, gl.UNSIGNED_INT, 0);
     return true;
@@ -592,7 +541,7 @@ class BasicMesh {
   }
 
   private destroyBuffers() {
-    const gl = this.context.gl;
+    const gl = this.gl;
     gl.deleteVertexArray(this.vao);
     gl.deleteBuffer(this.indices);
     gl.deleteBuffer(this.vertices);
@@ -603,9 +552,9 @@ class BasicMesh {
 
   private prepareBuffers() {
     if (this.vao) return;
-    const gl = this.context.gl;
+    const gl = this.gl;
     this.vao = nonnull(gl.createVertexArray());
-    this.context.bindVertexArray(this.vao);
+    gl.bindVertexArray(this.vao);
     const data = this.geo.vertices;
     this.prepareIndices(this.geo.indices);
     this.prepareVertices(this.geo.vertices);
@@ -616,7 +565,7 @@ class BasicMesh {
 
   private prepareAttribute(
       name: string, data: Float32Array, size: int, offset_in_floats: int) {
-    const gl = this.context.gl;
+    const gl = this.gl;
     const location = this.shader.getAttribLocation(name);
     if (location === null) return;
 
@@ -627,17 +576,17 @@ class BasicMesh {
   }
 
   private prepareIndices(data: Uint32Array) {
-    const gl = this.context.gl;
+    const gl = this.gl;
     const buffer = nonnull(gl.createBuffer());
-    this.context.bindElementArrayBuffer(buffer);
+    gl.bindBuffer(ELEMENT_ARRAY_BUFFER, buffer);
     gl.bufferData(ELEMENT_ARRAY_BUFFER, data, gl.STATIC_DRAW);
     this.indices = buffer;
   }
 
   private prepareVertices(data: Float32Array) {
-    const gl = this.context.gl;
+    const gl = this.gl;
     const buffer = nonnull(gl.createBuffer());
-    this.context.bindArrayBuffer(buffer);
+    gl.bindBuffer(ARRAY_BUFFER, buffer);
     gl.bufferData(ARRAY_BUFFER, data, gl.STATIC_DRAW);
     this.vertices = buffer;
   }
@@ -669,18 +618,18 @@ const kScreenOverlayShader = `
 class ScreenOverlay {
   private color: Float32Array;
   private fog_color: Float32Array;
-  private context: Context;
+  private gl: WebGL2RenderingContext;
   private shader: Shader;
   private vertices: Float32Array;
   private vao: WebGLVertexArrayObject | null;
   private uniform: WebGLUniformLocation | null;
   private buffer: WebGLBuffer | null;
 
-  constructor(context: Context) {
+  constructor(gl: WebGL2RenderingContext) {
     this.color = new Float32Array([0, 0, 0, 0]);
     this.fog_color = new Float32Array(kDefaultFogColor);
-    this.context = context;
-    this.shader = new Shader(context, kScreenOverlayShader);
+    this.gl = gl;
+    this.shader = new Shader(gl, kScreenOverlayShader);
     this.uniform = this.shader.getUniformLocation('u_color');
     this.vertices = Float32Array.from([
       1, 1, 0, -1, 1, 0, -1, -1, 0,
@@ -696,10 +645,8 @@ class ScreenOverlay {
     this.prepareBuffers();
     this.shader.bind();
 
-    const context = this.context;
-    context.bindVertexArray(this.vao);
-
-    const gl = context.gl;
+    const gl = this.gl;
+    gl.bindVertexArray(this.vao);
     gl.disable(gl.DEPTH_TEST);
     gl.uniform4fv(this.uniform, this.color);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
@@ -721,15 +668,15 @@ class ScreenOverlay {
 
   private prepareBuffers() {
     if (this.vao) return;
-    const gl = this.context.gl;
+    const gl = this.gl;
     this.vao = nonnull(gl.createVertexArray());
-    this.context.bindVertexArray(this.vao);
+    gl.bindVertexArray(this.vao);
 
     const location = this.shader.getAttribLocation('a_position');
     if (location === null) return;
 
     const buffer = nonnull(gl.createBuffer());
-    this.context.bindArrayBuffer(buffer);
+    gl.bindBuffer(ARRAY_BUFFER, buffer);
     gl.bufferData(ARRAY_BUFFER, this.vertices, gl.STATIC_DRAW);
     gl.enableVertexAttribArray(location);
     gl.vertexAttribPointer(location, 3, gl.FLOAT, false, 0, 0);
@@ -750,7 +697,7 @@ interface Mesh {
 class Renderer {
   camera: Camera;
   atlas: TextureAtlas;
-  private context: Context;
+  private gl: WebGL2RenderingContext;
   private overlay: ScreenOverlay;
   private shader: Shader;
   private solid_meshes: BasicMesh[];
@@ -779,23 +726,23 @@ class Renderer {
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
-    this.context = new Context(gl);
-    this.overlay = new ScreenOverlay(this.context);
-    this.atlas = new TextureAtlas(this.context);
-    this.shader = new Shader(this.context, kBasicShader);
+    this.gl = gl;
+    this.overlay = new ScreenOverlay(gl);
+    this.atlas = new TextureAtlas(gl);
+    this.shader = new Shader(gl, kBasicShader);
     this.solid_meshes = [];
     this.water_meshes = [];
     this.fog = this.shader.getUniformLocation('u_fogColor');
   }
 
   addBasicMesh(geo: Geometry, solid: boolean): Mesh {
-    const {context, atlas, shader} = this;
+    const {gl, atlas, shader} = this;
     const meshes = solid ? this.solid_meshes : this.water_meshes;
-    return new BasicMesh(context, shader, meshes, geo);
+    return new BasicMesh(gl, shader, meshes, geo);
   }
 
   render(): string {
-    const gl = this.context.gl;
+    const gl = this.gl;
     gl.clearColor(0.8, 0.9, 1, 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
@@ -805,7 +752,7 @@ class Renderer {
     this.atlas.bind();
     this.shader.bind();
     const fog = this.overlay.getFogColor();
-    this.context.gl.uniform3fv(this.fog, fog);
+    gl.uniform3fv(this.fog, fog);
     for (const mesh of this.solid_meshes) {
       if (mesh.draw(camera, planes)) drawn++;
     }
