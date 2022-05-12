@@ -198,7 +198,7 @@ class Performance {
     const index = this.index;
     const next_index = index + 1;
     this.index = next_index < this.ticks.length ? next_index : 0;
-    const tick = Math.round(1000 * (performance.now() - this.last));
+    const tick = Math.round(1000 * (this.now.now() - this.last));
     this.sum += tick - this.ticks[index];
     this.ticks[index] = tick;
   }
