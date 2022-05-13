@@ -71,11 +71,11 @@ class TerrainMesher {
     ];
   }
 
-  meshFrontier(heightmap: Uint32Array, sx: int, sz: int,
-               scale: int, old: Mesh | null): Mesh | null {
+  meshFrontier(heightmap: Uint32Array, sx: int, sz: int, scale: int,
+               old: Mesh | null, solid: boolean): Mesh | null {
     const geo = old ? old.getGeometry() : kCachedGeometryA;
-    this.computeFrontierGeometry(geo, heightmap, sx, sz, scale);
-    return this.buildMesh(geo, old, true);
+    this.computeFrontierGeometry(geo, heightmap, sx, sz, scale, solid);
+    return this.buildMesh(geo, old, solid);
   }
 
   private buildMesh(
@@ -181,8 +181,9 @@ class TerrainMesher {
     }
   }
 
-  private computeFrontierGeometry(geo: Geometry, heightmap: Uint32Array,
-                                  sx: int, sz: int, scale: int): void {
+  private computeFrontierGeometry(
+      geo: Geometry, heightmap: Uint32Array,
+      sx: int, sz: int, scale: int, solid: boolean): void {
     geo.clear();
     const stride = 2 * sx;
 
@@ -233,6 +234,7 @@ class TerrainMesher {
     for (let i = 0; i < limit; i += 2) {
       heightmap[i] &= ~kSentinel;
     }
+    if (!solid) return;
 
     for (let i = 0; i < 4; i++) {
       const sign = i & 0x1 ? -1 : 1;
@@ -271,10 +273,7 @@ class TerrainMesher {
           const id = this.getBlockFaceMaterial(block, dir);
           const mask = ((sign * id) << 8) | ao;
           const material = this.getMaterialData(id);
-
-          if (material.color[3] === 1) {
-            this.addQuad(geo, material, d, u, v, wi, hi, mask, kTmpPos);
-          }
+          this.addQuad(geo, material, d, u, v, wi, hi, mask, kTmpPos);
 
           const extra = w - 1;
           offset += extra * sj;
