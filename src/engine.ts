@@ -1023,4 +1023,4 @@ class Env {
 
 //////////////////////////////////////////////////////////////////////////////
 
-export {BlockId, MaterialId, Column, Env, kWorldHeight};
+export {BlockId, MaterialId, Column, Env, kEmptyBlock, kWorldHeight};
