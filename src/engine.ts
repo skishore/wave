@@ -86,6 +86,7 @@ type MaterialId = int & {__type__: 'MaterialId'};
 
 interface Material {
   color: Color,
+  liquid: boolean,
   texture: string | null,
   textureIndex: int,
 };
@@ -145,12 +146,13 @@ class Registry {
     return result;
   }
 
-  addMaterialOfColor(name: string, color: Color) {
-    this.addMaterialHelper(name, color, null);
+  addMaterialOfColor(name: string, color: Color, liquid: boolean = false) {
+    this.addMaterialHelper(name, color, liquid, null);
   }
 
-  addMaterialOfTexture(name: string, texture: string, color?: Color) {
-    this.addMaterialHelper(name, color || kWhite, texture);
+  addMaterialOfTexture(name: string, texture: string,
+                       color: Color = kWhite, liquid: boolean = false) {
+    this.addMaterialHelper(name, color, liquid, texture);
   }
 
   // faces has 6 elements for each block type: [+x, -x, +y, -y, +z, -z]
@@ -164,11 +166,11 @@ class Registry {
   }
 
   private addMaterialHelper(
-      name: string, color: Color, texture: string | null) {
+      name: string, color: Color, liquid: boolean, texture: string | null) {
     assert(name.length > 0, () => 'Empty material name!');
     assert(!this.ids.has(name), () => `Duplicate material: ${name}`);
     this.ids.set(name, this.materials.length as MaterialId);
-    this.materials.push({color, texture, textureIndex: 0});
+    this.materials.push({color, liquid, texture, textureIndex: 0});
   }
 };
 
@@ -924,6 +926,7 @@ class Env {
   world: World;
   private cameraBlock: BlockId;
   private timing: Timing;
+  private frame: int = 0;
 
   constructor(id: string) {
     this.container = new Container(id);
@@ -947,14 +950,21 @@ class Env {
   render(dt: int) {
     if (!this.container.inputs.pointer) return;
 
+    this.frame += 1;
+    if (this.frame === 65536) this.frame = 0;
+    const pos = this.frame / 256;
+    const rad = 2 * Math.PI * pos;
+    const move = 0.25 * (Math.cos(rad) * 0.5 + pos);
+    const wave = 0.05 * (Math.sin(rad) + 3);
+
     const camera = this.renderer.camera;
     const deltas = this.container.deltas;
     camera.applyInputs(deltas.x, deltas.y, deltas.scroll);
     deltas.x = deltas.y = deltas.scroll = 0;
 
     this.entities.render(dt);
-    this.updateOverlayColor();
-    const renderer_stats = this.renderer.render();
+    this.updateOverlayColor(wave);
+    const renderer_stats = this.renderer.render(move, wave);
 
     const timing = this.timing;
     if (timing.updatePerf.frame() % 10 !== 0) return;
@@ -975,10 +985,10 @@ class Env {
     return `${format(perf.mean())}ms / ${format(perf.max())}ms`;
   }
 
-  private updateOverlayColor() {
+  private updateOverlayColor(wave: int) {
     const [x, y, z] = this.renderer.camera.position;
     const block = this.world.getBlock(
-      Math.floor(x), Math.floor(y), Math.floor(z));
+      Math.floor(x), Math.floor(y + wave), Math.floor(z));
     if (block === this.cameraBlock) return;
 
     const color = (() => {

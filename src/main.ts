@@ -395,9 +395,9 @@ const main = () => {
   env.target.add(player);
 
   const registry = env.registry;
-  registry.addMaterialOfColor('blue', [0.1, 0.1, 0.4, 0.7]);
+  registry.addMaterialOfColor('blue', [0.1, 0.1, 0.4, 0.6], true);
   registry.addMaterialOfTexture(
-    'water', 'images/water.png', [0.2, 0.2, 0.6, 0.6]);
+    'water', 'images/water.png', [0.2, 0.5, 0.8, 0.8], true);
   const textures = ['dirt', 'grass', 'ground', 'wall'];
   for (const texture of textures) {
     registry.addMaterialOfTexture(texture, `images/${texture}.png`);

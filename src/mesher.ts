@@ -12,6 +12,7 @@ const kSentinel   = 1 << 30;
 
 interface Material {
   color: Color,
+  liquid: boolean,
   texture: string | null,
   textureIndex: int,
 };
@@ -46,11 +47,11 @@ const kHeightmapSides: [int, int, int, int, int, int][] = [
 ];
 
 class TerrainMesher {
-  solid: boolean[];
-  opaque: boolean[];
-  getBlockFaceMaterial: (id: BlockId, face: int) => MaterialId;
-  getMaterialData: (id: MaterialId) => Material;
-  renderer: Renderer;
+  private solid: boolean[];
+  private opaque: boolean[];
+  private getBlockFaceMaterial: (id: BlockId, face: int) => MaterialId;
+  private getMaterialData: (id: MaterialId) => Material;
+  private renderer: Renderer;
 
   constructor(registry: Registry, renderer: Renderer) {
     this.solid = registry.solid;
@@ -292,12 +293,21 @@ class TerrainMesher {
     const dir = Math.sign(mask);
     const {indices, vertices} = geo;
 
+    const triangleHint = this.getTriangleHint(mask);
+    const offsets = mask > 0
+      ? (triangleHint ? kIndexOffsets.C : kIndexOffsets.D)
+      : (triangleHint ? kIndexOffsets.A : kIndexOffsets.B);
+    for (let i = 0; i < 6; i++) {
+      indices[num_indices + i] = num_vertices + offsets[i];
+    }
+
     const Stride = Geometry.Stride;
     const base = Stride * num_vertices;
     const positions_offset = base + Geometry.PositionsOffset;
     const normals_offset   = base + Geometry.NormalsOffset;
     const colors_offset    = base + Geometry.ColorsOffset;
     const uvws_offset      = base + Geometry.UVWsOffset;
+    const wave_offset      = base + Geometry.WaveOffset;
 
     for (let i = 0; i < 3; i++) {
       const p = pos[i];
@@ -317,14 +327,6 @@ class TerrainMesher {
     vertices[positions_offset + Stride * 2 + v] += h;
     vertices[positions_offset + Stride * 3 + v] += h;
 
-    const triangleHint = this.getTriangleHint(mask);
-    const offsets = mask > 0
-      ? (triangleHint ? kIndexOffsets.C : kIndexOffsets.D)
-      : (triangleHint ? kIndexOffsets.A : kIndexOffsets.B);
-    for (let i = 0; i < 6; i++) {
-      indices[num_indices + i] = num_vertices + offsets[i];
-    }
-
     let textureIndex = material.textureIndex;
     if (textureIndex === 0 && material.texture) {
       textureIndex = this.renderer.atlas.addImage(material.texture);
@@ -340,10 +342,12 @@ class TerrainMesher {
       vertices[colors_offset + Stride * i + 3] = color[3];
     }
 
+    const wave = material.liquid ? 1 : 0;
     for (let i = 0; i < 4; i++) {
       vertices[uvws_offset + Stride * i + 0] = 0;
       vertices[uvws_offset + Stride * i + 1] = 0;
       vertices[uvws_offset + Stride * i + 2] = textureIndex;
+      vertices[wave_offset + Stride * i] = wave;
     }
     if (d === 2) {
       const wd = -dir * w;
