@@ -924,7 +924,9 @@ class Env {
   registry: Registry;
   renderer: Renderer;
   world: World;
-  private cameraBlock: BlockId;
+  private cameraAlpha = 0;
+  private cameraBlock = kEmptyBlock;
+  private cameraColor = kWhite;
   private timing: Timing;
   private frame: int = 0;
 
@@ -934,8 +936,6 @@ class Env {
     this.registry = new Registry();
     this.renderer = new Renderer(this.container.canvas);
     this.world = new World(this.registry, this.renderer);
-
-    this.cameraBlock = kEmptyBlock;
     this.timing = new Timing(this.render.bind(this), this.update.bind(this));
   }
 
@@ -987,18 +987,37 @@ class Env {
 
   private updateOverlayColor(wave: int) {
     const [x, y, z] = this.renderer.camera.position;
-    const block = this.world.getBlock(
-      Math.floor(x), Math.floor(y + wave), Math.floor(z));
-    if (block === this.cameraBlock) return;
+    const xi = Math.floor(x), zi = Math.floor(z);
+    const yi = Math.floor(y + wave);
 
-    const color = (() => {
-      if (block === kEmptyBlock) return kWhite;
-      const material = this.registry.getBlockFaceMaterial(block, 3);
-      return this.registry.getMaterialData(material).color;
+    const old_block = this.cameraBlock;
+    const new_block = this.world.getBlock(xi, yi, zi);
+    this.cameraBlock = new_block;
+
+    if (new_block === kEmptyBlock) {
+      const changed = new_block !== old_block;
+      if (changed) this.renderer.setOverlayColor(kWhite);
+      return;
+    }
+
+    if (new_block !== old_block) {
+      const material = this.registry.getBlockFaceMaterial(new_block, 3);
+      const color = this.registry.getMaterialData(material).color;
+      this.cameraColor = color.slice() as Color;
+      this.cameraAlpha = color[3];
+    }
+
+    const falloff = (() => {
+      const max = 2, step = 32;
+      const limit = max * step;
+      for (let i = 1; i < limit; i++) {
+        const other = this.world.getBlock(xi, yi + i, zi);
+        if (other === kEmptyBlock) return Math.pow(2, i / step);
+      }
+      return Math.pow(2, max);
     })();
-
-    this.cameraBlock = block;
-    this.renderer.setOverlayColor(color);
+    this.cameraColor[3] = 1 - (1 - this.cameraAlpha) / falloff;
+    this.renderer.setOverlayColor(this.cameraColor);
   }
 };
 
