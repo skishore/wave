@@ -469,7 +469,7 @@ const kBasicShader = `
     vec3 index = v_uvw + vec3(v_move, v_move, 0);
     vec4 color = v_color * texture(u_texture, index);
     o_color = mix(color, vec4(u_fogColor, color[3]), fog);
-    if (o_color[3] < 0.5) discard;
+    if (o_color[3] < 0.25) discard;
   }
 `;
 
@@ -783,9 +783,11 @@ class Renderer {
       if (mesh.draw(camera, planes)) drawn++;
     }
     gl.disable(gl.CULL_FACE);
+    gl.depthMask(false);
     for (const mesh of this.water_meshes) {
       if (mesh.draw(camera, planes)) drawn++;
     }
+    gl.depthMask(true);
     gl.enable(gl.CULL_FACE);
     this.overlay.draw();
 
