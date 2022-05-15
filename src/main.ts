@@ -433,13 +433,13 @@ const main = () => {
   const noise = fractalPerlin2D(2, 8, 1.0, 6);
   const loader = (x: int, z: int, column: Column) => {
     let last = 0;
-    const target = Math.round(noise(x, z) + H / 2);
+    const target = Math.max(Math.round(noise(x, z) + H / 2), 0);
     for (const [tile, height] of tiles) {
       const next = Math.min(height, target);
       column.push(tile, next - last);
       if ((last = next) === target) break;
     }
-    if (last < S) column.push(water, S - last);
+    column.push(water, S - last);
   };
   env.world.setLoader(wall, loader);
 

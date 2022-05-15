@@ -336,12 +336,12 @@ class Column {
   }
 
   push(block: BlockId, count: int): void {
+    count = Math.min(count, kWorldHeight - this.last);
     if (count <= 0) return;
+    this.last += count;
     const offset = 2 * this.size;
-    const last = Math.min(this.last + count, kWorldHeight);
     this.data[offset + 0] = block;
-    this.data[offset + 1] = last;
-    this.last = last;
+    this.data[offset + 1] = this.last;
     this.size++;
   }
 
