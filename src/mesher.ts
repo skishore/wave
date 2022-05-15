@@ -270,8 +270,11 @@ class TerrainMesher {
           const hi = d === 0 ? scale * w : height - neighbor;
           Vec3.set(kTmpPos, px, neighbor, pz);
 
-          const dir = 2 * d + ((1 - sign) >> 1);
-          const id = this.getBlockFaceMaterial(block, dir);
+          // We could use the material at the side of the block with:
+          //  const dir = 2 * d + ((1 - sign) >> 1);
+          //
+          // But doing so muddles grass, etc. textures at a distance.
+          const id = this.getBlockFaceMaterial(block, 2);
           const mask = ((sign * id) << 8) | ao;
           const material = this.getMaterialData(id);
           this.addQuad(geo, material, d, u, v, wi, hi, mask, kTmpPos);
