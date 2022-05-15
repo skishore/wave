@@ -787,8 +787,21 @@ class World {
     this.loader = null;
     this.bedrock = kEmptyBlock;
 
+    // h needs to be kWorldHeight + 3 because in TerrainMesher, we assume
+    // that we're going to mesh adjacent chunks along all three axes, so
+    // we intentionally leave out the topmost layer of polygons.
+    //
+    // We can modify this behavior to follow a different rule: if a polygon
+    // face comes from a block in this chunk, we'll mesh it in this chunk.
+    // If we do that, we'll still need the same height, but the extra layer
+    // will be on bottom (a layer of bedrock) instead of on top.
+    //
+    // This alternate rule is better for two reasons: a) it means that AO
+    // calculations will always examine blocks we've loaded, and b) it means
+    // that we can pass truncated versions of chunks to TerrainMesher as a
+    // further optimization.
     const w = kChunkWidth + 2;
-    const h = kWorldHeight + 2;
+    const h = kWorldHeight + 3;
     this.buffer = new Tensor3(w, h, w);
   }
 
