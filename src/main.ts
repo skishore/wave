@@ -416,23 +416,26 @@ const main = () => {
   env.target.add(player);
 
   const registry = env.registry;
-  registry.addMaterialOfColor('blue', [0.1, 0.1, 0.4, 0.6], true);
+  registry.addMaterialOfColor('blue', [0.1, 0.1, 0.4, 0.4], true);
   registry.addMaterialOfTexture(
-    'water', 'images/water.png', [0.2, 0.5, 0.8, 0.8], true);
-  const textures = ['dirt', 'grass', 'ground', 'wall'];
+    'water', 'images/mc_water.png', [1, 1, 1, 0.8], true);
+  const textures =
+    ['bedrock', 'grass', 'grass_dirt', 'dirt', 'sand', 'snow', 'stone'];
   for (const texture of textures) {
-    registry.addMaterialOfTexture(texture, `images/${texture}.png`);
+    registry.addMaterialOfTexture(texture, `images/mc_${texture}.png`);
   }
-  const wall = registry.addBlock(['wall'], true);
+  const rock = registry.addBlock(['stone'], true);
   const dirt = registry.addBlock(['dirt'], true);
-  const grass = registry.addBlock(['grass', 'dirt', 'dirt'], true);
-  const ground = registry.addBlock(['ground', 'dirt', 'dirt'], true);
+  const sand = registry.addBlock(['sand'], true);
+  const snow = registry.addBlock(['snow'], true);
+  const grass = registry.addBlock(['grass', 'dirt', 'grass_dirt'], true);
+  const bedrock = registry.addBlock(['bedrock'], true);
   const water = registry.addBlock(['water', 'blue', 'blue'], false);
 
   const H = kWorldHeight;
   const S = Math.floor(kWorldHeight / 2);
   const tiles: [BlockId, int][] =
-    [[wall, S - 3], [dirt, S - 1], [ground, S + 1], [grass, H]];
+    [[dirt, S - 2], [sand, S + 1], [grass, S + 31], [dirt, S + 33], [snow, H]];
 
   const noise = fractalPerlin2D(2, 8, 1.0, 6);
   const loader = (x: int, z: int, column: Column) => {
@@ -445,7 +448,7 @@ const main = () => {
     }
     column.push(water, S - last);
   };
-  env.world.setLoader(wall, loader);
+  env.world.setLoader(bedrock, loader);
 
   env.refresh();
 };
