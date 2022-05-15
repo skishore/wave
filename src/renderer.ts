@@ -713,7 +713,7 @@ class ScreenOverlay {
   }
 
   getFogDepth(): number {
-    return this.color[3] === 1 ? 256 : 16;
+    return this.color[3] === 1 ? 4096 : 16;
   }
 
   setColor(color: Color) {
