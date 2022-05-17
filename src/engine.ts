@@ -387,11 +387,11 @@ const kNeighborOffsets = ((): [Point, Point, Point, Point][] => {
   const L = W - 1;
   const N = W + 1;
   return [
-    [[ 0,  0,  0], [1, 1, 1], [0, 0, 0], [W, H, W]],
-    [[-1,  0,  0], [0, 1, 1], [L, 0, 0], [1, H, W]],
-    [[ 1,  0,  0], [N, 1, 1], [0, 0, 0], [1, H, W]],
-    [[ 0,  0, -1], [1, 1, 0], [0, 0, L], [W, H, 1]],
-    [[ 0,  0,  1], [1, 1, N], [0, 0, 0], [W, H, 1]],
+    [[ 0,  0,  0], [1, 2, 1], [0, 0, 0], [W, H, W]],
+    [[-1,  0,  0], [0, 2, 1], [L, 0, 0], [1, H, W]],
+    [[ 1,  0,  0], [N, 2, 1], [0, 0, 0], [1, H, W]],
+    [[ 0,  0, -1], [1, 2, 0], [0, 0, L], [W, H, 1]],
+    [[ 0,  0,  1], [1, 2, N], [0, 0, 0], [W, H, 1]],
   ];
 })();
 
@@ -550,8 +550,8 @@ class Chunk {
     const x = cx << kChunkBits, z = cz << kChunkBits;
     const meshed = world.mesher.meshChunk(buffer, this.solid, this.water);
     const [solid, water] = meshed;
-    if (solid) solid.setPosition(x, 0, z);
-    if (water) water.setPosition(x, 0, z);
+    if (solid) solid.setPosition(x, -1, z);
+    if (water) water.setPosition(x, -1, z);
     this.solid = solid;
     this.water = water;
   }
@@ -788,19 +788,12 @@ class World {
     this.loader = null;
     this.bedrock = kEmptyBlock;
 
-    // h needs to be kWorldHeight + 3 because in TerrainMesher, we assume
-    // that we're going to mesh adjacent chunks along all three axes, so
-    // we intentionally leave out the topmost layer of polygons.
+    // Add a one-block-wide plane of extra space on each side of our voxels,
+    // so that we can include adjacent chunks and use their contents for AO.
     //
-    // We can modify this behavior to follow a different rule: if a polygon
-    // face comes from a block in this chunk, we'll mesh it in this chunk.
-    // If we do that, we'll still need the same height, but the extra layer
-    // will be on bottom (a layer of bedrock) instead of on top.
-    //
-    // This alternate rule is better for two reasons: a) it means that AO
-    // calculations will always examine blocks we've loaded, and b) it means
-    // that we can pass truncated versions of chunks to TerrainMesher as a
-    // further optimization.
+    // We add a two-block-wide plane below our voxel data, so that we also
+    // have room for a plane of bedrock blocks below this chunk (in case we
+    // dig all the way to y = 0).
     const w = kChunkWidth + 2;
     const h = kWorldHeight + 3;
     this.buffer = new Tensor3(w, h, w);
@@ -846,7 +839,7 @@ class World {
     const buffer = this.buffer;
     for (let x = 0; x < buffer.shape[0]; x++) {
       for (let z = 0; z < buffer.shape[2]; z++) {
-        buffer.set(x, 0, z, bedrock);
+        buffer.set(x, 1, z, bedrock);
       }
     }
   }

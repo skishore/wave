@@ -101,7 +101,7 @@ class TerrainMesher {
       const dir = d * 2;
       const u = (d + 1) % 3;
       const v = (d + 2) % 3;
-      const ld = shape[d] - 2,  lu = shape[u] - 2,  lv = shape[v] - 2;
+      const ld = shape[d] - 1,  lu = shape[u] - 2,  lv = shape[v] - 2;
       const sd = stride[d], su = stride[u], sv = stride[v];
       const base = su + sv;
 
@@ -136,6 +136,16 @@ class TerrainMesher {
               ? this.packAOMask(data, index + sd, index, su, sv)
               : this.packAOMask(data, index, index + sd, su, sv)
             kMaskData[n] = (mask << 8) | ao;
+          }
+        }
+
+        if (id === 0) {
+          for (let i = 0; i < area; i++) {
+            if (kMaskData[i] > 0) kMaskData[i] = 0;
+          }
+        } else if (id === ld - 1) {
+          for (let i = 0; i < area; i++) {
+            if (kMaskData[i] < 0) kMaskData[i] = 0;
           }
         }
 
