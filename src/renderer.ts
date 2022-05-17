@@ -523,8 +523,9 @@ class BasicShader extends Shader {
 class BasicMesh {
   private gl: WebGL2RenderingContext;
   private shader: BasicShader;
-  private meshes: BasicMesh[];
   private geo: Geometry;
+  private meshes: BasicMesh[];
+  private hidden_meshes: BasicMesh[];
   private vao: WebGLVertexArrayObject | null;
   private indices: WebGLBuffer | null;
   private vertices: WebGLBuffer | null;
@@ -533,15 +534,16 @@ class BasicMesh {
   private shown: boolean;
   private mask: int;
 
-  constructor(gl: WebGL2RenderingContext, shader: BasicShader,
-              meshes: BasicMesh[], geo: Geometry) {
+  constructor(gl: WebGL2RenderingContext, shader: BasicShader, geo: Geometry,
+              meshes: BasicMesh[], hidden_meshes: BasicMesh[]) {
     const index = meshes.length;
     meshes.push(this);
 
     this.gl = gl;
     this.shader = shader;
-    this.meshes = meshes;
     this.geo = geo;
+    this.meshes = meshes;
+    this.hidden_meshes = hidden_meshes;
     this.vao = null;
     this.indices = null;
     this.vertices = null;
@@ -552,7 +554,6 @@ class BasicMesh {
   }
 
   draw(camera: Camera, planes: CullingPlane[]): boolean {
-    if (!this.shown) return false;
     const position = this.position;
     Vec3.sub(kTmpDelta, position, camera.position);
     if (this.geo.cull(kTmpDelta, planes)) return false;
@@ -571,14 +572,7 @@ class BasicMesh {
 
   dispose(): void {
     this.destroyBuffers();
-    assert(this === this.meshes[this.index]);
-    const last = this.meshes.length - 1;
-    if (this.index !== last) {
-      const swap = this.meshes[last];
-      this.meshes[this.index] = swap;
-      swap.index = this.index;
-    }
-    this.meshes.pop();
+    this.removeFromMeshes();
   }
 
   getGeometry(): Geometry {
@@ -596,7 +590,13 @@ class BasicMesh {
 
   show(mask: int, shown: boolean): void {
     this.mask = mask;
+    if (shown === this.shown) return;
+
+    this.removeFromMeshes();
+    const meshes = shown ? this.meshes : this.hidden_meshes;
+    this.index = meshes.length;
     this.shown = shown;
+    meshes.push(this);
   }
 
   private destroyBuffers() {
@@ -649,6 +649,18 @@ class BasicMesh {
     gl.bindBuffer(ARRAY_BUFFER, buffer);
     gl.bufferData(ARRAY_BUFFER, data, gl.STATIC_DRAW);
     this.vertices = buffer;
+  }
+
+  private removeFromMeshes() {
+    const meshes = this.shown ? this.meshes : this.hidden_meshes;
+    assert(this === meshes[this.index]);
+    const last = meshes.length - 1;
+    if (this.index !== last) {
+      const swap = meshes[last];
+      meshes[this.index] = swap;
+      swap.index = this.index;
+    }
+    meshes.pop();
   }
 };
 
@@ -774,6 +786,7 @@ class Renderer {
   private shader: BasicShader;
   private solid_meshes: BasicMesh[];
   private water_meshes: BasicMesh[];
+  private hidden_meshes: BasicMesh[];
 
   constructor(canvas: HTMLCanvasElement) {
     const params = new URLSearchParams(window.location.search);
@@ -803,12 +816,13 @@ class Renderer {
     this.shader = new BasicShader(gl);
     this.solid_meshes = [];
     this.water_meshes = [];
+    this.hidden_meshes = [];
   }
 
   addBasicMesh(geo: Geometry, solid: boolean): Mesh {
-    const {gl, atlas, shader} = this;
+    const {gl, atlas, shader, hidden_meshes} = this;
     const meshes = solid ? this.solid_meshes : this.water_meshes;
-    return new BasicMesh(gl, shader, meshes, geo);
+    return new BasicMesh(gl, shader, geo, meshes, hidden_meshes);
   }
 
   render(move: number, wave: number): string {
