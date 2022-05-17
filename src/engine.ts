@@ -42,6 +42,7 @@ class Container {
     document.addEventListener('keydown', e => this.onKeyInput(e, true));
     document.addEventListener('keyup', e => this.onKeyInput(e, false));
     document.addEventListener('mousemove', e => this.onMouseMove(e));
+    document.addEventListener('touchmove', e => this.onMouseMove(e));
     document.addEventListener('pointerlockchange', e => this.onPointerInput(e));
     document.addEventListener('wheel', e => this.onMouseWheel(e));
   }
