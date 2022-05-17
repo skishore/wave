@@ -201,9 +201,13 @@ const handleJumping =
   const canJump = grounded || body.inFluid || hasAirJumps;
   if (!canJump) return;
 
+  const height = body.min[1];
+  const factor = height / kWorldHeight;
+  const density = factor > 1 ? Math.exp(1 - factor) : 1;
+  const penalty = body.inFluid ? state.swimPenalty : density;
+
   state._jumped = true;
   state._jumpTimeLeft = state.jumpTime;
-  const penalty = body.inFluid ? state.swimPenalty : 1;
   body.impulses[1] += state.jumpImpulse * penalty;
   if (grounded) return;
 
