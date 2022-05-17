@@ -32,6 +32,11 @@ class Camera {
   private projection: Mat4;
   private view: Mat4;
 
+  // The min-Z (in camera space) at which we render meshes. A low value of
+  // min-Z results in more detail nearby but causes z-fighting far away.
+  private aspect: number;
+  private minZ: number;
+
   constructor(width: int, height: int) {
     this.pitch = 0;
     this.heading = 0;
@@ -47,8 +52,9 @@ class Camera {
     this.projection = Mat4.create();
     this.view = Mat4.create();
 
-    const aspect = height ? width / height : 1;
-    Mat4.perspective(this.projection, 3 * Math.PI / 8, aspect, 0.01);
+    this.aspect = height ? width / height : 1;
+    this.minZ = 0;
+    this.setMinZ(0.1);
 
     this.planes = Array(4).fill(null);
     for (let i = 0; i < 4; i++) this.planes[i] = {x: 0, y: 0, z: 0, index: 0};
@@ -125,6 +131,12 @@ class Camera {
     Mat4.view(this.view, kTmpDelta, this.direction);
     Mat4.multiply(this.transform_for, this.projection, this.view);
     return this.transform_for;
+  }
+
+  setMinZ(minZ: number) {
+    if (minZ === this.minZ) return;
+    Mat4.perspective(this.projection, 3 * Math.PI / 8, this.aspect, minZ);
+    this.minZ = minZ;
   }
 
   setTarget(x: number, y: number, z: number) {

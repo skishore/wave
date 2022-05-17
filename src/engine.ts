@@ -1003,10 +1003,15 @@ class Env {
     const [x, y, z] = this.renderer.camera.position;
     const xi = Math.floor(x), zi = Math.floor(z);
     const yi = Math.floor(y + wave);
+    const yf = y + wave - yi;
 
     const old_block = this.cameraBlock;
     const new_block = this.world.getBlock(xi, yi, zi);
     this.cameraBlock = new_block;
+
+    const focus = new_block === kEmptyBlock && yf < 0.2 &&
+                  this.world.getBlock(xi, yi - 1, zi) !== kEmptyBlock;
+    this.renderer.camera.setMinZ(focus ? Math.max(yf / 2, 0.001) : 0.1);
 
     if (new_block === kEmptyBlock) {
       const changed = new_block !== old_block;
