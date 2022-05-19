@@ -445,9 +445,9 @@ class Geometry {
 //////////////////////////////////////////////////////////////////////////////
 
 const kBasicShader = `
-  uniform mat4 u_transform;
   uniform float u_move;
   uniform float u_wave;
+  uniform mat4 u_transform;
   in vec3 a_position;
   in vec4 a_color;
   in vec3 a_uvw;
@@ -485,20 +485,46 @@ const kBasicShader = `
   }
 `;
 
+class BasicShader extends Shader {
+  u_move: WebGLUniformLocation | null;
+  u_wave: WebGLUniformLocation | null;
+  u_transform: WebGLUniformLocation | null;
+  u_fogColor: WebGLUniformLocation | null;
+  u_fogDepth: WebGLUniformLocation | null;
+
+  a_position: number | null;
+  a_color: number | null;
+  a_uvw: number | null;
+  a_wave: number | null;
+
+  constructor(gl: WebGL2RenderingContext) {
+    super(gl, kBasicShader);
+    this.u_move      = this.getUniformLocation('u_move');
+    this.u_wave      = this.getUniformLocation('u_wave');
+    this.u_transform = this.getUniformLocation('u_transform');
+    this.u_fogColor  = this.getUniformLocation('u_fogColor');
+    this.u_fogDepth  = this.getUniformLocation('u_fogDepth');
+
+    this.a_position = this.getAttribLocation('a_position');
+    this.a_color    = this.getAttribLocation('a_color');
+    this.a_uvw      = this.getAttribLocation('a_uvw');
+    this.a_wave     = this.getAttribLocation('a_wave');
+  }
+};
+
 class BasicMesh {
   private gl: WebGL2RenderingContext;
-  private shader: Shader;
+  private shader: BasicShader;
   private meshes: BasicMesh[];
   private geo: Geometry;
   private vao: WebGLVertexArrayObject | null;
   private indices: WebGLBuffer | null;
   private vertices: WebGLBuffer | null;
-  private transform: WebGLUniformLocation | null;
   private position: Vec3;
   private index: int;
   private shown: boolean;
 
-  constructor(gl: WebGL2RenderingContext, shader: Shader,
+  constructor(gl: WebGL2RenderingContext, shader: BasicShader,
               meshes: BasicMesh[], geo: Geometry) {
     const index = meshes.length;
     meshes.push(this);
@@ -508,7 +534,6 @@ class BasicMesh {
     this.meshes = meshes;
     this.geo = geo;
     this.vao = null;
-    this.transform = shader.getUniformLocation('u_transform');
     this.indices = null;
     this.vertices = null;
     this.position = Vec3.create();
@@ -528,7 +553,7 @@ class BasicMesh {
     const gl = this.gl;
     gl.bindVertexArray(this.vao);
     gl.bindBuffer(ELEMENT_ARRAY_BUFFER, this.indices);
-    gl.uniformMatrix4fv(this.transform, false, transform);
+    gl.uniformMatrix4fv(this.shader.u_transform, false, transform);
     gl.drawElements(gl.TRIANGLES, this.geo.num_indices, gl.UNSIGNED_INT, 0);
     return true;
   }
@@ -574,24 +599,23 @@ class BasicMesh {
 
   private prepareBuffers() {
     if (this.vao) return;
-    const gl = this.gl;
+    const {gl, shader} = this;
     this.vao = nonnull(gl.createVertexArray());
     gl.bindVertexArray(this.vao);
     const data = this.geo.vertices;
     this.prepareIndices(this.geo.indices);
     this.prepareVertices(this.geo.vertices);
-    this.prepareAttribute('a_position', data, 3, Geometry.PositionsOffset);
-    this.prepareAttribute('a_color',    data, 4, Geometry.ColorsOffset);
-    this.prepareAttribute('a_uvw',      data, 3, Geometry.UVWsOffset);
-    this.prepareAttribute('a_wave',     data, 1, Geometry.WaveOffset);
+    this.prepareAttribute(shader.a_position, data, 3, Geometry.PositionsOffset);
+    this.prepareAttribute(shader.a_color,    data, 4, Geometry.ColorsOffset);
+    this.prepareAttribute(shader.a_uvw,      data, 3, Geometry.UVWsOffset);
+    this.prepareAttribute(shader.a_wave,     data, 1, Geometry.WaveOffset);
   }
 
-  private prepareAttribute(
-      name: string, data: Float32Array, size: int, offset_in_floats: int) {
-    const gl = this.gl;
-    const location = this.shader.getAttribLocation(name);
+  private prepareAttribute(location: number | null, data: Float32Array,
+                           size: int, offset_in_floats: int) {
     if (location === null) return;
 
+    const gl = this.gl;
     const offset = 4 * offset_in_floats;
     const stride = 4 * Geometry.Stride;
     gl.enableVertexAttribArray(location);
@@ -627,7 +651,6 @@ const kScreenOverlayShader = `
   }
 #split
   precision highp float;
-  precision highp sampler2DArray;
 
   uniform vec4 u_color;
 
@@ -638,22 +661,31 @@ const kScreenOverlayShader = `
   }
 `;
 
+class ScreenOverlayShader extends Shader {
+  u_color: WebGLUniformLocation | null;
+  a_position: number | null;
+
+  constructor(gl: WebGL2RenderingContext) {
+    super(gl, kScreenOverlayShader);
+    this.u_color = this.getUniformLocation('u_color');
+    this.a_position = this.getAttribLocation('a_position');
+  }
+};
+
 class ScreenOverlay {
   private color: Float32Array;
   private fog_color: Float32Array;
   private gl: WebGL2RenderingContext;
-  private shader: Shader;
+  private shader: ScreenOverlayShader;
   private vertices: Float32Array;
   private vao: WebGLVertexArrayObject | null;
-  private uniform: WebGLUniformLocation | null;
   private buffer: WebGLBuffer | null;
 
   constructor(gl: WebGL2RenderingContext) {
     this.color = new Float32Array([1, 1, 1, 1]);
     this.fog_color = new Float32Array(kDefaultFogColor);
     this.gl = gl;
-    this.shader = new Shader(gl, kScreenOverlayShader);
-    this.uniform = this.shader.getUniformLocation('u_color');
+    this.shader = new ScreenOverlayShader(gl);
     this.vertices = Float32Array.from([
       1, 1, 0, -1, 1, 0, -1, -1, 0,
       1, 1, 0, -1, -1, 0, 1, -1, 0
@@ -671,7 +703,7 @@ class ScreenOverlay {
     const gl = this.gl;
     gl.bindVertexArray(this.vao);
     gl.disable(gl.DEPTH_TEST);
-    gl.uniform4fv(this.uniform, this.color);
+    gl.uniform4fv(this.shader.u_color, this.color);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
     gl.enable(gl.DEPTH_TEST);
   }
@@ -699,7 +731,7 @@ class ScreenOverlay {
     this.vao = nonnull(gl.createVertexArray());
     gl.bindVertexArray(this.vao);
 
-    const location = this.shader.getAttribLocation('a_position');
+    const location = this.shader.a_position;
     if (location === null) return;
 
     const buffer = nonnull(gl.createBuffer());
@@ -726,13 +758,9 @@ class Renderer {
   atlas: TextureAtlas;
   private gl: WebGL2RenderingContext;
   private overlay: ScreenOverlay;
-  private shader: Shader;
+  private shader: BasicShader;
   private solid_meshes: BasicMesh[];
   private water_meshes: BasicMesh[];
-  private fog_color: WebGLUniformLocation | null;
-  private fog_depth: WebGLUniformLocation | null;
-  private move: WebGLUniformLocation | null;
-  private wave: WebGLUniformLocation | null;
 
   constructor(canvas: HTMLCanvasElement) {
     const params = new URLSearchParams(window.location.search);
@@ -759,13 +787,9 @@ class Renderer {
     this.gl = gl;
     this.overlay = new ScreenOverlay(gl);
     this.atlas = new TextureAtlas(gl);
-    this.shader = new Shader(gl, kBasicShader);
+    this.shader = new BasicShader(gl);
     this.solid_meshes = [];
     this.water_meshes = [];
-    this.fog_color = this.shader.getUniformLocation('u_fogColor');
-    this.fog_depth = this.shader.getUniformLocation('u_fogDepth');
-    this.move = this.shader.getUniformLocation('u_move');
-    this.wave = this.shader.getUniformLocation('u_wave');
   }
 
   addBasicMesh(geo: Geometry, solid: boolean): Mesh {
@@ -783,10 +807,10 @@ class Renderer {
     this.shader.bind();
     const fog_color = this.overlay.getFogColor();
     const fog_depth = this.overlay.getFogDepth();
-    gl.uniform3fv(this.fog_color, fog_color);
-    gl.uniform1f(this.fog_depth, fog_depth);
-    gl.uniform1f(this.move, move);
-    gl.uniform1f(this.wave, wave);
+    gl.uniform1f(this.shader.u_move, move);
+    gl.uniform1f(this.shader.u_wave, wave);
+    gl.uniform3fv(this.shader.u_fogColor, fog_color);
+    gl.uniform1f(this.shader.u_fogDepth, fog_depth);
 
     let drawn = 0;
     const camera = this.camera;
