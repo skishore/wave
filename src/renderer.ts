@@ -337,6 +337,7 @@ class Geometry {
   static ColorsOffset: int = 6;
   static UVWsOffset: int = 10;
   static WaveOffset: int = 13;
+  static MaskOffset: int = 14;
   static Stride: int = 16;
 
   indices: Uint32Array;
@@ -445,6 +446,7 @@ class Geometry {
 //////////////////////////////////////////////////////////////////////////////
 
 const kBasicShader = `
+  uniform int u_mask;
   uniform float u_move;
   uniform float u_wave;
   uniform mat4 u_transform;
@@ -452,6 +454,7 @@ const kBasicShader = `
   in vec4 a_color;
   in vec3 a_uvw;
   in float a_wave;
+  in float a_mask;
   out vec4 v_color;
   out vec3 v_uvw;
   out float v_move;
@@ -463,6 +466,7 @@ const kBasicShader = `
     float wave = a_wave * u_wave;
     vec3 adjusted = a_position - vec3(0, wave, 0);
     gl_Position = u_transform * vec4(adjusted, 1.0);
+    if ((u_mask & int(a_mask)) != 0) gl_Position[3] = 0.0;
   }
 #split
   precision highp float;
@@ -486,6 +490,7 @@ const kBasicShader = `
 `;
 
 class BasicShader extends Shader {
+  u_mask: WebGLUniformLocation | null;
   u_move: WebGLUniformLocation | null;
   u_wave: WebGLUniformLocation | null;
   u_transform: WebGLUniformLocation | null;
@@ -496,9 +501,11 @@ class BasicShader extends Shader {
   a_color: number | null;
   a_uvw: number | null;
   a_wave: number | null;
+  a_mask: number | null;
 
   constructor(gl: WebGL2RenderingContext) {
     super(gl, kBasicShader);
+    this.u_mask      = this.getUniformLocation('u_mask');
     this.u_move      = this.getUniformLocation('u_move');
     this.u_wave      = this.getUniformLocation('u_wave');
     this.u_transform = this.getUniformLocation('u_transform');
@@ -509,6 +516,7 @@ class BasicShader extends Shader {
     this.a_color    = this.getAttribLocation('a_color');
     this.a_uvw      = this.getAttribLocation('a_uvw');
     this.a_wave     = this.getAttribLocation('a_wave');
+    this.a_mask     = this.getAttribLocation('a_mask');
   }
 };
 
@@ -523,6 +531,7 @@ class BasicMesh {
   private position: Vec3;
   private index: int;
   private shown: boolean;
+  private mask: int;
 
   constructor(gl: WebGL2RenderingContext, shader: BasicShader,
               meshes: BasicMesh[], geo: Geometry) {
@@ -539,6 +548,7 @@ class BasicMesh {
     this.position = Vec3.create();
     this.index = index;
     this.shown = true;
+    this.mask = 0;
   }
 
   draw(camera: Camera, planes: CullingPlane[]): boolean {
@@ -553,6 +563,7 @@ class BasicMesh {
     const gl = this.gl;
     gl.bindVertexArray(this.vao);
     gl.bindBuffer(ELEMENT_ARRAY_BUFFER, this.indices);
+    gl.uniform1i(this.shader.u_mask, this.mask);
     gl.uniformMatrix4fv(this.shader.u_transform, false, transform);
     gl.drawElements(gl.TRIANGLES, this.geo.num_indices, gl.UNSIGNED_INT, 0);
     return true;
@@ -583,8 +594,9 @@ class BasicMesh {
     Vec3.set(this.position, x, y, z);
   }
 
-  show(value: boolean): void {
-    this.shown = value;
+  show(mask: int, shown: boolean): void {
+    this.mask = mask;
+    this.shown = shown;
   }
 
   private destroyBuffers() {
@@ -609,6 +621,7 @@ class BasicMesh {
     this.prepareAttribute(shader.a_color,    data, 4, Geometry.ColorsOffset);
     this.prepareAttribute(shader.a_uvw,      data, 3, Geometry.UVWsOffset);
     this.prepareAttribute(shader.a_wave,     data, 1, Geometry.WaveOffset);
+    this.prepareAttribute(shader.a_mask,     data, 1, Geometry.MaskOffset);
   }
 
   private prepareAttribute(location: number | null, data: Float32Array,
@@ -750,7 +763,7 @@ interface Mesh {
   getGeometry: () => Geometry,
   setGeometry: (geo: Geometry) => void,
   setPosition: (x: number, y: number, z: number) => void,
-  show: (value: boolean) => void,
+  show: (mask: int, shown: boolean) => void,
 };
 
 class Renderer {

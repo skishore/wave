@@ -691,22 +691,28 @@ class Frontier {
     if (min_x > max_x || min_z > max_z) return;
 
     const r = kFrontierRadius;
-    const ax = (min_x - r) & ~1, bx = (max_x + r + 1) & ~1;
-    const az = (min_z - r) & ~1, bz = (max_z + r + 1) & ~1;
+    const ax = (min_x - r) >> 1, bx = (max_x + r + 1) >> 1;
+    const az = (min_z - r) >> 1, bz = (max_z + r + 1) >> 1;
 
     const world = this.world;
     for (let cx = ax; cx < bx; cx++) {
       for (let cz = az; cz < bz; cz++) {
-        const key = world.getChunkKey(cx, cz);
-        const lod = this.getFrontierChunk(cx, cz, key, 0);
-        const chunk = world.getChunkByKey(key);
+        const lod = this.getFrontierChunk(cx, cz, 0);
 
-        const mesh = chunk && chunk.hasMesh();
-        if (!mesh && !(lod.solid || lod.water)) {
+        let mask = 0;
+        for (let i = 0; i < 4; i++) {
+          const dx = (cx << 1) + (i & 1 ? 1 : 0);
+          const dz = (cz << 1) + (i & 2 ? 1 : 0);
+          const chunk = world.getChunk(dx, dz, false);
+          if (chunk && chunk.hasMesh()) mask |= (1 << i);
+        }
+
+        const shown = mask !== 15;
+        if (shown && !(lod.solid || lod.water)) {
           this.createLODMeshes(lod);
         }
-        if (lod.solid) lod.solid.show(!mesh);
-        if (lod.water) lod.water.show(!mesh);
+        if (lod.solid) lod.solid.show(mask, shown);
+        if (lod.water) lod.water.show(mask, shown);
       }
     }
 
@@ -720,25 +726,31 @@ class Frontier {
 
   private computeLODAtLevel(level: int) {
     const prev = this.levels[level - 1];
-    assert(((prev.ax | prev.az | prev.bx | prev.bz) & 1) === 0);
-    const pax = prev.ax >> 1; const pbx = prev.bx >> 1;
-    const paz = prev.az >> 1; const pbz = prev.bz >> 1;
+    const pax = prev.ax; const pbx = prev.bx;
+    const paz = prev.az; const pbz = prev.bz;
 
     const r = kFrontierRadius;
-    const ax = (pax - r) & ~1, bx = (pbx + r + 1) & ~1;
-    const az = (paz - r) & ~1, bz = (pbz + r + 1) & ~1;
+    const ax = (pax - r) >> 1, bx = (pbx + r + 1) >> 1;
+    const az = (paz - r) >> 1, bz = (pbz + r + 1) >> 1;
 
     const world = this.world;
     for (let cx = ax; cx < bx; cx++) {
       for (let cz = az; cz < bz; cz++) {
-        const key = world.getChunkKey(cx, cz);
-        const lod = this.getFrontierChunk(cx, cz, key, level);
-        const mesh = pax <= cx && cx < pbx && paz <= cz && cz < pbz;
-        if (!mesh && !(lod.solid || lod.water)) {
+        const lod = this.getFrontierChunk(cx, cz, level);
+
+        let mask = 0;
+        for (let i = 0; i < 4; i++) {
+          const dx = (cx << 1) + (i & 1 ? 1 : 0);
+          const dz = (cz << 1) + (i & 2 ? 1 : 0);
+          if (pax <= dx && dx < pbx && paz <= dz && dz < pbz) mask |= (1 << i);
+        }
+
+        const shown = mask !== 15;
+        if (shown && !(lod.solid || lod.water)) {
           this.createLODMeshes(lod);
         }
-        if (lod.solid) lod.solid.show(!mesh);
-        if (lod.water) lod.water.show(!mesh);
+        if (lod.solid) lod.solid.show(mask, shown);
+        if (lod.water) lod.water.show(mask, shown);
       }
     }
 
@@ -757,48 +769,57 @@ class Frontier {
     assert(registry.solid[bedrock]);
     const lshift = kChunkBits + level;
     const lod = kFrontierLOD << level;
-    const x = cx << lshift, z = cz << lshift;
-    const ax = x + lod / 2, az = z + lod / 2;
+    const x = (2 * cx + 1) << lshift;
+    const z = (2 * cz + 1) << lshift;
 
-    for (let i = 0; i < side; i++) {
-      for (let j = 0; j < side; j++) {
-        loader(ax + i * lod, az + j * lod, column);
-        const offset = 2 * ((i + 1) + (j + 1) * (side + 2));
+    for (let k = 0; k < 4; k++) {
+      const dx = (k & 1 ? 0 : -1 << lshift);
+      const dz = (k & 2 ? 0 : -1 << lshift);
+      const ax = x + dx + lod / 2;
+      const az = z + dz + lod / 2;
 
-        const size = column.getSize();
-        const last_block = column.getNthBlock(size - 1, bedrock);
-        const last_level = column.getNthLevel(size - 1);
+      for (let i = 0; i < side; i++) {
+        for (let j = 0; j < side; j++) {
+          loader(ax + i * lod, az + j * lod, column);
+          const offset = 2 * ((i + 1) + (j + 1) * (side + 2));
 
-        if (registry.solid[last_block]) {
-          solid_heightmap[offset + 0] = last_block;
-          solid_heightmap[offset + 1] = last_level;
-          water_heightmap[offset + 0] = 0;
-          water_heightmap[offset + 1] = 0;
-        } else {
-          water_heightmap[offset + 0] = last_block;
-          water_heightmap[offset + 1] = last_level;
+          const size = column.getSize();
+          const last_block = column.getNthBlock(size - 1, bedrock);
+          const last_level = column.getNthLevel(size - 1);
 
-          for (let i = size; i > 0; i--) {
-            const block = column.getNthBlock(i - 2, bedrock);
-            const level = column.getNthLevel(i - 2);
-            if (!registry.solid[block]) continue;
-            solid_heightmap[offset + 0] = block;
-            solid_heightmap[offset + 1] = level;
-            break;
+          if (registry.solid[last_block]) {
+            solid_heightmap[offset + 0] = last_block;
+            solid_heightmap[offset + 1] = last_level;
+            water_heightmap[offset + 0] = 0;
+            water_heightmap[offset + 1] = 0;
+          } else {
+            water_heightmap[offset + 0] = last_block;
+            water_heightmap[offset + 1] = last_level;
+
+            for (let i = size; i > 0; i--) {
+              const block = column.getNthBlock(i - 2, bedrock);
+              const level = column.getNthLevel(i - 2);
+              if (!registry.solid[block]) continue;
+              solid_heightmap[offset + 0] = block;
+              solid_heightmap[offset + 1] = level;
+              break;
+            }
           }
+          column.clear();
         }
-        column.clear();
       }
+
+      const n = side + 2;
+      const mask = (1 << k);
+      const px = dx - lod, pz = dz - lod;
+      chunk.solid = this.world.mesher.meshFrontier(
+          solid_heightmap, mask, px, pz, n, n, lod, chunk.solid, true);
+      chunk.water = this.world.mesher.meshFrontier(
+          water_heightmap, mask, px, pz, n, n, lod, chunk.water, false);
     }
 
-    const solid = this.world.mesher.meshFrontier(
-        solid_heightmap, side + 2, side + 2, lod, chunk.solid, true);
-    const water = this.world.mesher.meshFrontier(
-        water_heightmap, side + 2, side + 2, lod, chunk.water, false);
-    if (solid) solid.setPosition(x - lod, 0, z - lod);
-    if (water) water.setPosition(x - lod, 0, z - lod);
-    chunk.solid = solid;
-    chunk.water = water;
+    if (chunk.solid) chunk.solid.setPosition(x, 0, z);
+    if (chunk.water) chunk.water.setPosition(x, 0, z);
   }
 
   private disableFarawayMeshes() {
@@ -815,9 +836,8 @@ class Frontier {
     }
   }
 
-  private getFrontierChunk(
-      cx: int, cz: int, key: int, level: int): FrontierChunk {
-    key = key * kFrontierLevels + level;
+  private getFrontierChunk(cx: int, cz: int, level: int): FrontierChunk {
+    const key = this.world.getChunkKey(cx, cz) * kFrontierLevels + level;
     const result = this.meshes.get(key);
     if (result) return result;
     const created = {cx, cz, level, solid: null, water: null};
@@ -885,10 +905,6 @@ class World {
 
   getChunkKey(cx: int, cz: int): int {
     return (cx & kChunkKeyMask) | ((cz & kChunkKeyMask) << kChunkKeyBits);
-  }
-
-  getChunkByKey(key: int): Chunk | null {
-    return this.chunks.get(key) || null;
   }
 
   setLoader(bedrock: BlockId, loader: Loader | null) {
