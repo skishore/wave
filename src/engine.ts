@@ -375,6 +375,7 @@ const kNeighbors = (kChunkRadius ? 4 : 0);
 
 const kNumChunksToLoadPerFrame = 1;
 const kNumChunksToMeshPerFrame = 1;
+const kNumLODChunksToMeshPerFrame = 1;
 
 const kFrontierLOD = 2;
 const kFrontierRadius = 4;
@@ -710,10 +711,17 @@ class Frontier {
     const meshed = (dx: int, dz: int) => {
       if (!(pax <= dx && dx < pbx)) return false;
       if (!(paz <= dz && dz < pbz)) return false;
-      if (level > 0) return true;
-      const chunk = this.world.getChunk(dx, dz, false);
-      return chunk && chunk.hasMesh();
+      if (level > 0) {
+        const chunk = this.getFrontierChunk(dx, dz, level - 1);
+        return chunk && (chunk.solid || chunk.water);
+      } else {
+        const chunk = this.world.getChunk(dx, dz, false);
+        return chunk && chunk.hasMesh();
+      }
     };
+
+    const required: [FrontierChunk, int, boolean][] = [];
+    const optional: [FrontierChunk, int, boolean][] = [];
 
     const world = this.world;
     for (let cx = ax; cx < bx; cx++) {
@@ -729,11 +737,26 @@ class Frontier {
 
         const shown = mask !== 15;
         if (shown && !(lod.solid || lod.water)) {
-          this.createLODMeshes(lod);
+          (mask ? required : optional).push([lod, mask, shown]);
+        } else {
+          if (lod.solid) lod.solid.show(mask, shown);
+          if (lod.water) lod.water.show(mask, shown);
         }
-        if (lod.solid) lod.solid.show(mask, shown);
-        if (lod.water) lod.water.show(mask, shown);
       }
+    }
+
+    for (const [lod, mask, shown] of required) {
+      this.createLODMeshes(lod);
+      if (lod.solid) lod.solid.show(mask, shown);
+      if (lod.water) lod.water.show(mask, shown);
+    }
+    const extra = kNumLODChunksToMeshPerFrame - required.length;
+    const count = Math.min(optional.length, extra);
+    for (let i = 0; i < count; i++) {
+      const [lod, mask, shown] = optional[i];
+      this.createLODMeshes(lod);
+      if (lod.solid) lod.solid.show(mask, shown);
+      if (lod.water) lod.water.show(mask, shown);
     }
 
     const bounds = this.levels[level + 1];
