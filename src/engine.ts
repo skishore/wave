@@ -624,7 +624,7 @@ class Counters {
     const count = this.values.get(value) || 0;
     this.values.set(value, count + 1);
   }
-}
+};
 
 interface FrontierChunk {
   cx: int,
@@ -660,7 +660,7 @@ class Frontier {
     this.meshes = new Map();
 
     this.levels = [];
-    for (let i = 0; i < kFrontierLevels; i++) {
+    for (let i = 0; i <= kFrontierLevels; i++) {
       this.levels.push({ax: 0, az: 0, bx: 0, bz: 0});
     }
 
@@ -686,52 +686,34 @@ class Frontier {
 
   remeshFrontier() {
     if (!kFrontierLevels) return;
-    const [min_x, max_x] = this.xs.bounds();
-    const [min_z, max_z] = this.zs.bounds();
-    if (min_x > max_x || min_z > max_z) return;
-
-    const r = kFrontierRadius;
-    const ax = (min_x - r) >> 1, bx = (max_x + r + 1) >> 1;
-    const az = (min_z - r) >> 1, bz = (max_z + r + 1) >> 1;
-
-    const world = this.world;
-    for (let cx = ax; cx < bx; cx++) {
-      for (let cz = az; cz < bz; cz++) {
-        const lod = this.getFrontierChunk(cx, cz, 0);
-
-        let mask = 0;
-        for (let i = 0; i < 4; i++) {
-          const dx = (cx << 1) + (i & 1 ? 1 : 0);
-          const dz = (cz << 1) + (i & 2 ? 1 : 0);
-          const chunk = world.getChunk(dx, dz, false);
-          if (chunk && chunk.hasMesh()) mask |= (1 << i);
-        }
-
-        const shown = mask !== 15;
-        if (shown && !(lod.solid || lod.water)) {
-          this.createLODMeshes(lod);
-        }
-        if (lod.solid) lod.solid.show(mask, shown);
-        if (lod.water) lod.water.show(mask, shown);
-      }
-    }
+    const [ax, bx] = this.xs.bounds();
+    const [az, bz] = this.zs.bounds();
+    if (ax > bx || az > bz) return;
 
     const bounds = this.levels[0];
     bounds.ax = ax; bounds.az = az; bounds.bx = bx; bounds.bz = bz;
-    for (let i = 1; i < kFrontierLevels; i++) {
+    for (let i = 0; i < kFrontierLevels; i++) {
       this.computeLODAtLevel(i);
     }
     this.disableFarawayMeshes();
   }
 
   private computeLODAtLevel(level: int) {
-    const prev = this.levels[level - 1];
+    const prev = this.levels[level];
     const pax = prev.ax; const pbx = prev.bx;
     const paz = prev.az; const pbz = prev.bz;
 
     const r = kFrontierRadius;
     const ax = (pax - r) >> 1, bx = (pbx + r + 1) >> 1;
     const az = (paz - r) >> 1, bz = (pbz + r + 1) >> 1;
+
+    const meshed = (dx: int, dz: int) => {
+      if (!(pax <= dx && dx < pbx)) return false;
+      if (!(paz <= dz && dz < pbz)) return false;
+      if (level > 0) return true;
+      const chunk = this.world.getChunk(dx, dz, false);
+      return chunk && chunk.hasMesh();
+    };
 
     const world = this.world;
     for (let cx = ax; cx < bx; cx++) {
@@ -742,7 +724,7 @@ class Frontier {
         for (let i = 0; i < 4; i++) {
           const dx = (cx << 1) + (i & 1 ? 1 : 0);
           const dz = (cz << 1) + (i & 2 ? 1 : 0);
-          if (pax <= dx && dx < pbx && paz <= dz && dz < pbz) mask |= (1 << i);
+          if (meshed(dx, dz)) mask |= (1 << i);
         }
 
         const shown = mask !== 15;
@@ -754,7 +736,7 @@ class Frontier {
       }
     }
 
-    const bounds = this.levels[level];
+    const bounds = this.levels[level + 1];
     bounds.ax = ax; bounds.az = az; bounds.bx = bx; bounds.bz = bz;
   }
 
@@ -826,7 +808,7 @@ class Frontier {
     const {levels, meshes} = this;
     for (const lod of meshes.values()) {
       const {cx, cz, level} = lod;
-      const {ax, az, bx, bz} = levels[level];
+      const {ax, az, bx, bz} = levels[level + 1];
       const disable = !(ax <= cx && cx < bx && az <= cz && cz < bz);
       if (!disable || !(lod.solid || lod.water)) continue;
       if (lod.solid) lod.solid.dispose();
