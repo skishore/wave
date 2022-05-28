@@ -745,19 +745,26 @@ class Frontier {
       }
     }
 
-    for (const [lod, mask, shown] of required) {
+    const mesh = (x: [FrontierChunk, int, boolean]) => {
+      const [lod, mask, shown] = x;
       this.createLODMeshes(lod);
       if (lod.solid) lod.solid.show(mask, shown);
       if (lod.water) lod.water.show(mask, shown);
-    }
+    };
+
     const extra = kNumLODChunksToMeshPerFrame - required.length;
     const count = Math.min(optional.length, extra);
-    for (let i = 0; i < count; i++) {
-      const [lod, mask, shown] = optional[i];
-      this.createLODMeshes(lod);
-      if (lod.solid) lod.solid.show(mask, shown);
-      if (lod.water) lod.water.show(mask, shown);
+
+    if (0 < count && count < optional.length) {
+      const hx = (ax + bx - 1) >> 1;
+      const hz = (az + bz - 1) >> 1;
+      const distance = (lod: FrontierChunk): int =>
+          Math.abs(lod.cx - hx) + Math.abs(lod.cz - hz);
+      optional.sort((a, b) => distance(a[0]) - distance(b[0]));
     }
+
+    for (const lod of required) mesh(lod);
+    for (let i = 0; i < count; i++) mesh(optional[i]);
 
     const bounds = this.levels[level + 1];
     bounds.ax = ax; bounds.az = az; bounds.bx = bx; bounds.bz = bz;
