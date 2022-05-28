@@ -55,6 +55,7 @@ interface PhysicsState {
   inFluid: boolean,
   friction: number,
   mass: number,
+  autoStep: number,
 };
 
 const kTmpGravity = Vec3.from(0, -40, 0);
@@ -63,7 +64,10 @@ const kTmpFriction = Vec3.create();
 const kTmpDelta = Vec3.create();
 const kTmpSize = Vec3.create();
 const kTmpPush = Vec3.create();
+const kTmpMax = Vec3.create();
+const kTmpMin = Vec3.create();
 const kTmpPos = Vec3.create();
+const kTmpResting = Vec3.create();
 
 const setPhysicsFromPosition = (a: PositionState, b: PhysicsState) => {
   Vec3.set(kTmpPos, a.x, a.y, a.z);
@@ -93,8 +97,48 @@ const applyFriction = (axis: int, state: PhysicsState, dv: Vec3) => {
   state.vel[(axis + 2) % 3] *= scale;
 };
 
+const tryAutoStepping =
+    (dt: int, state: PhysicsState, min: Vec3, max: Vec3,
+     check: (pos: Vec3) => boolean) => {
+  if (state.resting[1] > 0 && !state.inFluid) return;
+
+  const speed_x = Math.abs(state.vel[0]);
+  const speed_z = Math.abs(state.vel[2]);
+  const step_x = (state.resting[0] !== 0 && speed_x > speed_z);
+  const step_z = (state.resting[2] !== 0 && speed_z > speed_x);
+  if (!step_x && !step_z) return;
+
+  const height = 1 - min[1] + Math.floor(min[1]);
+  Vec3.set(kTmpDelta, 0, height, 0);
+  sweep(min, max, kTmpDelta, kTmpResting, check);
+  if (kTmpResting[1] !== 0) return;
+
+  Vec3.scale(kTmpDelta, state.vel, dt);
+  kTmpDelta[1] = 0;
+  sweep(min, max, kTmpDelta, kTmpResting, check);
+  if (min[0] === state.min[0] && min[2] === state.min[2]) return;
+
+  if (height > state.autoStep) {
+    Vec3.set(kTmpDelta, 0, state.autoStep, 0);
+    sweep(state.min, state.max, kTmpDelta, state.resting, check);
+    if (!step_x) state.vel[0] = 0;
+    if (!step_z) state.vel[2] = 0;
+    state.vel[1] = 0;
+    return;
+  }
+
+  Vec3.copy(state.min, min);
+  Vec3.copy(state.max, max);
+  Vec3.copy(state.resting, kTmpResting);
+};
+
 const runPhysics = (env: TypedEnv, dt: int, state: PhysicsState) => {
   if (state.mass <= 0) return;
+
+  const check = (pos: Vec3) => {
+    const block = env.world.getBlock(pos[0], pos[1], pos[2]);
+    return !env.registry.solid[block];
+  };
 
   const [x, y, z] = state.min;
   const block = env.world.getBlock(
@@ -116,16 +160,22 @@ const runPhysics = (env: TypedEnv, dt: int, state: PhysicsState) => {
     applyFriction(2, state, kTmpDelta);
   }
 
+  if (state.autoStep) {
+    Vec3.copy(kTmpMax, state.max);
+    Vec3.copy(kTmpMin, state.min);
+  }
+
   // Update our state based on the computations above.
   Vec3.add(state.vel, state.vel, kTmpDelta);
   Vec3.scale(state.vel, state.vel, left);
   Vec3.scale(kTmpDelta, state.vel, dt);
-  sweep(state.min, state.max, kTmpDelta, state.resting, (p: Vec3) => {
-    const block = env.world.getBlock(p[0], p[1], p[2]);
-    return !env.registry.solid[block];
-  });
+  sweep(state.min, state.max, kTmpDelta, state.resting, check);
   Vec3.set(state.forces, 0, 0, 0);
   Vec3.set(state.impulses, 0, 0, 0);
+
+  if (state.autoStep) {
+    tryAutoStepping(dt, state, kTmpMin, kTmpMax, check);
+  }
 
   for (let i = 0; i < 3; i++) {
     if (state.resting[i] !== 0) state.vel[i] = 0;
@@ -145,6 +195,7 @@ const Physics = (env: TypedEnv): Component<PhysicsState> => ({
     inFluid: false,
     friction: 0,
     mass: 1,
+    autoStep: 0.25,
   }),
   onAdd: (state: PhysicsState) => {
     setPhysicsFromPosition(env.position.getX(state.id), state);
