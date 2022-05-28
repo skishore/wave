@@ -336,10 +336,9 @@ class Column {
     }
   }
 
-  push(block: BlockId, count: int): void {
-    count = Math.min(count, kWorldHeight - this.last);
-    if (count <= 0) return;
-    this.last += count;
+  push(block: BlockId, height: int): void {
+    if (height <= this.last) return;
+    this.last = Math.min(height, kWorldHeight);
     const offset = 2 * this.size;
     this.data[offset + 0] = block;
     this.data[offset + 1] = this.last;
@@ -773,9 +772,9 @@ class Frontier {
   private createLODMeshes(chunk: FrontierChunk): void {
     const {cx, cz, level} = chunk;
     const {column, side, world} = this;
-    const {bedrock, loader, registry} = world;
+    const {bedrock, loadFrontier, registry} = world;
     const {solid_heightmap, water_heightmap} = this;
-    if (!loader) return;
+    if (!loadFrontier) return;
 
     assert(kFrontierLOD % 2 === 0);
     assert(registry.solid[bedrock]);
@@ -792,7 +791,7 @@ class Frontier {
 
       for (let i = 0; i < side; i++) {
         for (let j = 0; j < side; j++) {
-          loader(ax + i * lod, az + j * lod, column);
+          loadFrontier(ax + i * lod, az + j * lod, column);
           const offset = 2 * ((i + 1) + (j + 1) * (side + 2));
 
           const size = column.getSize();
@@ -866,7 +865,8 @@ class World {
   frontier: Frontier;
   mesher: TerrainMesher;
   bedrock: BlockId;
-  loader: Loader | null;
+  loadChunk: Loader | null;
+  loadFrontier: Loader | null;
   buffer: Tensor3;
 
   constructor(registry: Registry, renderer: Renderer) {
@@ -876,7 +876,8 @@ class World {
     this.registry = registry;
     this.frontier = new Frontier(this);
     this.mesher = new TerrainMesher(registry, renderer);
-    this.loader = null;
+    this.loadChunk = null;
+    this.loadFrontier = null;
     this.bedrock = kEmptyBlock;
 
     // Add a one-block-wide plane of extra space on each side of our voxels,
@@ -919,9 +920,10 @@ class World {
     return (cx & kChunkKeyMask) | ((cz & kChunkKeyMask) << kChunkKeyBits);
   }
 
-  setLoader(bedrock: BlockId, loader: Loader | null) {
+  setLoader(bedrock: BlockId, loadChunk: Loader, loadFrontier?: Loader) {
     this.bedrock = bedrock;
-    this.loader = loader;
+    this.loadChunk = loadChunk;
+    this.loadFrontier = loadFrontier || loadChunk;
 
     const buffer = this.buffer;
     for (let x = 0; x < buffer.shape[0]; x++) {
@@ -954,7 +956,7 @@ class World {
       chunk.disable();
     }
 
-    const loader = this.loader;
+    const loader = this.loadChunk;
     if (!loader) return;
 
     const requests = [];

@@ -488,18 +488,40 @@ const main = () => {
   const tiles: [BlockId, int][] =
     [[dirt, S - 2], [sand, S + 1], [grass, S + 31], [dirt, S + 33], [snow, H]];
 
-  const noise = fractalPerlin2D(2, 8, 1.0, 6);
-  const loader = (x: int, z: int, column: Column) => {
-    let last = 0;
-    const target = Math.max(Math.round(noise(x, z) + H / 2), 0);
-    for (const [tile, height] of tiles) {
-      const next = Math.min(height, target);
-      column.push(tile, next - last);
-      if ((last = next) === target) break;
-    }
-    column.push(water, S - last);
+  const valleys = perlin2D();
+  const roughness = perlin2D();
+  const mountains = fractalPerlin2D(2, 8, 1.0, 6);
+  const heightmap = (x: int, z: int): number => {
+    const a = valleys(x / 64, z / 64);
+    const b = roughness(x / 64, z / 64);
+    const s = 1 / (1 + Math.exp(-16 * (Math.abs(a) / 0.04 - 1)));
+    const t = 1 / (1 + Math.exp(-8 * (b - 0.1)));
+    const m = t * mountains(x, z);
+    const result = m > 0 ? m * s : m;
+    return Math.max(Math.min(Math.round(result + H / 2), H), 0);
   };
-  env.world.setLoader(bedrock, loader);
+
+  const loadChunk = (x: int, z: int, column: Column) => {
+    const target = heightmap(x, z);
+    for (const [tile, height] of tiles) {
+      if (target > height) continue;
+      column.push(rock, target - 4);
+      column.push(dirt, target - 1);
+      column.push(tile, target);
+      column.push(water, S);
+      return;
+    }
+  };
+  const loadFrontier = (x: int, z: int, column: Column) => {
+    const target = heightmap(x, z);
+    for (const [tile, height] of tiles) {
+      if (target > height) continue;
+      column.push(tile, target);
+      column.push(water, S);
+      return;
+    }
+  };
+  env.world.setLoader(bedrock, loadChunk, loadFrontier);
 
   env.refresh();
 };
