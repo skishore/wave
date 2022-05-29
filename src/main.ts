@@ -468,6 +468,8 @@ const main = () => {
 
   const registry = env.registry;
   registry.addMaterialOfColor('blue', [0.1, 0.1, 0.4, 0.4], true);
+  registry.addMaterialOfColor('green', [0, 0.5, 0, 1]);
+  registry.addMaterialOfColor('brown', [0.375, 0.25, 0.125, 1]);
   registry.addMaterialOfTexture(
     'water', 'images/mc_water.png', [1, 1, 1, 0.8], true);
   const textures =
@@ -482,12 +484,15 @@ const main = () => {
   const grass = registry.addBlock(['grass', 'dirt', 'grass_dirt'], true);
   const bedrock = registry.addBlock(['bedrock'], true);
   const water = registry.addBlock(['water', 'blue', 'blue'], false);
+  const trunk = registry.addBlock(['brown'], true);
+  const leaves = registry.addBlock(['green'], true);
 
   const H = kWorldHeight;
   const S = Math.floor(kWorldHeight / 2);
   const tiles: [BlockId, int][] =
-    [[dirt, S - 2], [sand, S + 1], [grass, S + 31], [dirt, S + 33], [snow, H]];
+    [[dirt, S - 2], [sand, S], [grass, S + 30], [dirt, S + 36], [snow, H]];
 
+  const trees = perlin2D();
   const valleys = perlin2D();
   const roughness = perlin2D();
   const mountains = fractalPerlin2D(2, 8, 1.0, 6);
@@ -501,6 +506,12 @@ const main = () => {
     return Math.max(Math.min(Math.round(result + H / 2), H), 0);
   };
 
+  const tree = (x: int, z: int, height: int): boolean => {
+    if (height <= S) return false;
+    const result = trees(x / 17, z / 17);
+    return (((result + 1) * 0x10000) & 0x3ff) <= 8 - height + S;
+  };
+
   const loadChunk = (x: int, z: int, column: Column) => {
     const target = heightmap(x, z);
     for (const [tile, height] of tiles) {
@@ -509,9 +520,31 @@ const main = () => {
       column.push(dirt, target - 1);
       column.push(tile, target);
       column.push(water, S);
+
+      const kTrunkHeight = 4;
+      const kTreeLeaves = 2;
+      const kTreeRadius = 2;
+      if (tree(x, z, target)) {
+        column.push(trunk, target + kTrunkHeight);
+        column.push(leaves, target + kTrunkHeight + 1);
+      }
+      for (let dx = -kTreeRadius; dx <= kTreeRadius; dx++) {
+        for (let dz = -kTreeRadius; dz <= kTreeRadius; dz++) {
+          if (dx === 0 && dz === 0) continue;
+          const neighbor = heightmap(x + dx, z + dz);
+          if (tree(x + dx, z + dz, neighbor)) {
+            const adjacent = Math.abs(dx) <= 1 && Math.abs(dz) <= 1;
+            const start = neighbor + kTreeLeaves;
+            const end = neighbor + kTrunkHeight  + (adjacent ? 1 : 0);
+            column.push(kEmptyBlock, start);
+            column.push(leaves, end);
+          }
+        }
+      }
       return;
     }
   };
+
   const loadFrontier = (x: int, z: int, column: Column) => {
     const target = heightmap(x, z);
     for (const [tile, height] of tiles) {
@@ -521,7 +554,42 @@ const main = () => {
       return;
     }
   };
+
   env.world.setLoader(bedrock, loadChunk, loadFrontier);
+
+  const perlin = perlin2D();
+  const loadChunkHack = (x: int, z: int, column: Column) => {
+    const target = Math.round(8 * perlin(x / 16, z / 16) + S);
+    column.push(dirt, Math.min(target, S - 1));
+    column.push(sand, Math.min(target, S));
+    column.push(grass, target);
+  };
+
+  env.world.setLoader(bedrock, loadChunkHack);
+
+  const ridgeNoise = (scale: number) => {
+    const octaves = new Array(4).fill(null).map(perlin2D);
+    return (x: int, z: int) => {
+      let result = 0, a = 1, s = scale;
+      for (const octave of octaves) {
+        result += (1 - Math.abs(octave(x * s, z * s))) * a;
+        a /= 2;
+        s *= 2;
+      }
+      return result;
+    };
+  };
+  const noiseA = ridgeNoise(0.005);
+  const noiseB = ridgeNoise(0.005);
+  const loadChunkRidge = (x: int, z: int, column: Column) => {
+    const scale = 0.005;
+    const target = (1 + 0.4 * (noiseA(x, z) - noiseB(x, z))) * S;
+    column.push(dirt, Math.min(target, S - 1));
+    column.push(sand, Math.min(target, S));
+    column.push(grass, target);
+  };
+
+  env.world.setLoader(bedrock, loadChunkRidge);
 
   env.refresh();
 };
