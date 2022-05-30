@@ -79,6 +79,7 @@ class TerrainMesher {
       heightmap: Uint32Array, mask: int, px: int, pz: int, sx: int, sz: int,
       scale: int, old: Mesh | null, solid: boolean): Mesh | null {
     const geo = old ? old.getGeometry() : kCachedGeometryA;
+    if (old) geo.dirty = true;
     if (!old) geo.clear();
 
     const {MaskOffset, PositionsOffset, Stride} = Geometry;

@@ -388,10 +388,10 @@ class Geometry {
   vertices: Float32Array;
   num_indices: int;
   num_vertices: int;
+  dirty: boolean;
   private lower_bound: Vec3;
   private upper_bound: Vec3;
   private bounds: Vec3[];
-  private dirty: boolean;
 
   constructor(indices: Uint32Array, vertices: Float32Array,
               num_indices: int, num_vertices: int) {
