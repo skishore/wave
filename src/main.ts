@@ -1,5 +1,6 @@
 import {int, Tensor3, Vec3} from './base.js';
-import {BlockId, Column, Env, kEmptyBlock, kWorldHeight} from './engine.js';
+import {BlockId, Column, Env} from './engine.js';
+import {kChunkWidth, kEmptyBlock, kWorldHeight} from './engine.js';
 import {Component, ComponentState, ComponentStore, EntityId, kNoEntity} from './ecs.js';
 import {sweep} from './sweep.js';
 
@@ -524,8 +525,39 @@ const main = () => {
     return (((result + 1) * 0x10000) & 0x3ff) <= 8 - height + S;
   };
 
+  const kTrunkHeight = 4;
+  const kTreeLeaves = 2;
+  const kTreeRadius = 2;
+
+  const kSideLength = kChunkWidth + 2 * kTreeRadius;
+  const kChunkCache: int[] = new Array(2 * kSideLength * kSideLength).fill(0);
+  let kLastCX = Number.NaN;
+  let kLastCZ = Number.NaN;
+
   const loadChunk = (x: int, z: int, column: Column) => {
-    const target = heightmap(x, z);
+    const cx = Math.floor(x / kChunkWidth);
+    const cz = Math.floor(z / kChunkWidth);
+    const ax = cx * kChunkWidth - kTreeRadius;
+    const az = cz * kChunkWidth - kTreeRadius;
+
+    if (cx !== kLastCX || cz !== kLastCZ) {
+      for (let i = 0; i < kSideLength; i++) {
+        for (let j = 0; j < kSideLength; j++) {
+          const index = i + kSideLength * j;
+          const target = heightmap(ax + i, az + j);
+          const has_tree = tree(ax + i, az + j, target);
+          kChunkCache[2 * index + 0] = target;
+          kChunkCache[2 * index + 1] = has_tree ? 1 : 0;
+        }
+      }
+      kLastCX = cx;
+      kLastCZ = cz;
+    }
+
+    const index = (x - ax) + kSideLength * (z - az);
+    const target = kChunkCache[2 * index + 0];
+    const has_tree = kChunkCache[2 * index + 1];
+
     for (const [tile, height] of tiles) {
       if (target > height) continue;
       column.push(rock, target - 4);
@@ -533,21 +565,20 @@ const main = () => {
       column.push(tile, target);
       column.push(water, S);
 
-      const kTrunkHeight = 4;
-      const kTreeLeaves = 2;
-      const kTreeRadius = 2;
-      if (tree(x, z, target)) {
+      if (has_tree) {
         column.push(trunk, target + kTrunkHeight);
         column.push(leaves, target + kTrunkHeight + 1);
       }
       for (let dx = -kTreeRadius; dx <= kTreeRadius; dx++) {
         for (let dz = -kTreeRadius; dz <= kTreeRadius; dz++) {
           if (dx === 0 && dz === 0) continue;
-          const neighbor = heightmap(x + dx, z + dz);
-          if (tree(x + dx, z + dz, neighbor)) {
+          const neighbor_index = index + dx + kSideLength * dz;
+          const neighbor_target = kChunkCache[2 * neighbor_index + 0];
+          const neighbor_has_tree = kChunkCache[2 * neighbor_index + 1];
+          if (neighbor_has_tree) {
             const adjacent = Math.abs(dx) <= 1 && Math.abs(dz) <= 1;
-            const start = neighbor + kTreeLeaves;
-            const end = neighbor + kTrunkHeight  + (adjacent ? 1 : 0);
+            const start = neighbor_target + kTreeLeaves;
+            const end = neighbor_target + kTrunkHeight  + (adjacent ? 1 : 0);
             column.push(kEmptyBlock, start);
             column.push(leaves, end);
           }
