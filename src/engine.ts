@@ -1,6 +1,6 @@
 import {assert, drop, int, nonnull, Color, Tensor3, Vec3} from './base.js';
 import {EntityComponentSystem} from './ecs.js';
-import {Mesh, Renderer} from './renderer.js';
+import {Mesh, Renderer, Texture} from './renderer.js';
 import {TerrainMesher} from './mesher.js';
 
 //////////////////////////////////////////////////////////////////////////////
@@ -88,7 +88,7 @@ type MaterialId = int & {__type__: 'MaterialId'};
 interface Material {
   color: Color,
   liquid: boolean,
-  texture: string | null,
+  texture: Texture | null,
   textureIndex: int,
 };
 
@@ -135,15 +135,22 @@ class Registry {
       }
     })();
 
-    const result = this.opaque.length as BlockId;
-    this.opaque.push(solid);
-    this.solid.push(solid);
+    let opaque = true;
     materials.forEach(x => {
-      const material = this.ids.get(x);
-      if (material === undefined) throw new Error(`Unknown material: ${x}`);
-      this.faces.push(material + 1 as MaterialId);
+      const id = this.ids.get(x);
+      if (id === undefined) throw new Error(`Unknown material: ${x}`);
+      const material = id + 1 as MaterialId;
+      this.faces.push(material);
+
+      const data = this.getMaterialData(material);
+      const alphaBlend = data.color[3] < 1;
+      const alphaTest = data.texture && data.texture.alphaTest;
+      if (alphaBlend || alphaTest) opaque = false;
     });
 
+    const result = this.opaque.length as BlockId;
+    this.opaque.push(opaque);
+    this.solid.push(solid);
     return result;
   }
 
@@ -151,7 +158,7 @@ class Registry {
     this.addMaterialHelper(name, color, liquid, null);
   }
 
-  addMaterialOfTexture(name: string, texture: string,
+  addMaterialOfTexture(name: string, texture: Texture,
                        color: Color = kWhite, liquid: boolean = false) {
     this.addMaterialHelper(name, color, liquid, texture);
   }
@@ -167,7 +174,7 @@ class Registry {
   }
 
   private addMaterialHelper(
-      name: string, color: Color, liquid: boolean, texture: string | null) {
+      name: string, color: Color, liquid: boolean, texture: Texture | null) {
     assert(name.length > 0, () => 'Empty material name!');
     assert(!this.ids.has(name), () => `Duplicate material: ${name}`);
     this.ids.set(name, this.materials.length as MaterialId);

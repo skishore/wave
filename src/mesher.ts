@@ -1,5 +1,5 @@
 import {assert, int, Color, Tensor3, Vec3} from './base.js';
-import {Geometry, Mesh, Renderer} from './renderer.js';
+import {Geometry, Mesh, Renderer, Texture} from './renderer.js';
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -13,7 +13,7 @@ const kSentinel   = 1 << 30;
 interface Material {
   color: Color,
   liquid: boolean,
-  texture: string | null,
+  texture: Texture | null,
   textureIndex: int,
 };
 
@@ -193,6 +193,10 @@ class TerrainMesher {
             const material = this.getMaterialData(id);
             const geo = material.color[3] < 1 ? water_geo : solid_geo;
             this.addQuad(geo, material, d, u, v, w, h, mask, kTmpPos);
+            if (material.texture && material.texture.alphaTest) {
+              const alt = (-1 * (mask & ~0xff)) | (mask & 0xff);
+              this.addQuad(geo, material, d, u, v, w, h, alt, kTmpPos);
+            }
 
             nw = n;
             for (let wx = 0; wx < w; wx++, nw += lv) {
@@ -357,8 +361,9 @@ class TerrainMesher {
 
     let textureIndex = material.textureIndex;
     if (textureIndex === 0 && material.texture) {
-      textureIndex = this.renderer.atlas.addImage(material.texture);
+      textureIndex = this.renderer.atlas.addTexture(material.texture);
       material.textureIndex = textureIndex;
+      assert(textureIndex !== 0);
     }
 
     const color = material.color;

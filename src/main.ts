@@ -466,26 +466,38 @@ const main = () => {
   env.movement.add(player);
   env.target.add(player);
 
+  const texture = (x: int, y: int, alphaTest: boolean = false) => {
+    return {alphaTest, url: 'images/rhodox-edited.png', x, y, w: 16, h: 16};
+  };
+
   const registry = env.registry;
   registry.addMaterialOfColor('blue', [0.1, 0.1, 0.4, 0.4], true);
-  registry.addMaterialOfColor('green', [0, 0.5, 0, 1]);
-  registry.addMaterialOfColor('brown', [0.375, 0.25, 0.125, 1]);
   registry.addMaterialOfTexture(
-    'water', 'images/mc_water.png', [1, 1, 1, 0.8], true);
-  const textures =
-    ['bedrock', 'grass', 'grass_dirt', 'dirt', 'sand', 'snow', 'stone'];
-  for (const texture of textures) {
-    registry.addMaterialOfTexture(texture, `images/mc_${texture}.png`);
+    'water', texture(13, 13), [1, 1, 1, 0.8], true);
+  registry.addMaterialOfTexture('leaves', texture(4, 3, true));
+  const textures: [string, int, int][] = [
+    ['bedrock', 1, 1],
+    ['dirt', 2, 0],
+    ['grass', 0, 0],
+    ['grass-side', 3, 0],
+    ['sand', 0, 11],
+    ['snow', 2, 4],
+    ['stone', 1, 0],
+    ['trunk', 5, 1],
+    ['trunk-side', 4, 1],
+  ];
+  for (const [name, x, y] of textures) {
+    registry.addMaterialOfTexture(name, texture(x, y));
   }
   const rock = registry.addBlock(['stone'], true);
   const dirt = registry.addBlock(['dirt'], true);
   const sand = registry.addBlock(['sand'], true);
   const snow = registry.addBlock(['snow'], true);
-  const grass = registry.addBlock(['grass', 'dirt', 'grass_dirt'], true);
+  const grass = registry.addBlock(['grass', 'dirt', 'grass-side'], true);
   const bedrock = registry.addBlock(['bedrock'], true);
   const water = registry.addBlock(['water', 'blue', 'blue'], false);
-  const trunk = registry.addBlock(['brown'], true);
-  const leaves = registry.addBlock(['green'], true);
+  const trunk = registry.addBlock(['trunk', 'trunk-side'], true);
+  const leaves = registry.addBlock(['leaves'], true);
 
   const H = kWorldHeight;
   const S = Math.floor(kWorldHeight / 2);
@@ -565,7 +577,7 @@ const main = () => {
     column.push(grass, target);
   };
 
-  env.world.setLoader(bedrock, loadChunkHack);
+  //env.world.setLoader(bedrock, loadChunkHack);
 
   const ridgeNoise = (scale: number) => {
     const octaves = new Array(4).fill(null).map(perlin2D);
@@ -589,7 +601,7 @@ const main = () => {
     column.push(grass, target);
   };
 
-  env.world.setLoader(bedrock, loadChunkRidge);
+  //env.world.setLoader(bedrock, loadChunkRidge);
 
   env.refresh();
 };
