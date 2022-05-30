@@ -634,6 +634,27 @@ const main = () => {
 
   //env.world.setLoader(bedrock, loadChunkRidge);
 
+  const kIslandRadius = 1024;
+  const biomes: [BlockId, (x: int, y: int) => number][] =
+    [bedrock, dirt, grass, rock, sand, snow, trunk, water]
+      .map(x => [x, fractalPerlin2D(1, 16, 1, 4)]);
+  const loadChunkBiome = (x: int, z: int, column: Column) => {
+    const base = Math.sqrt(x * x + z * z) / kIslandRadius;
+    if (base > 1) return column.push(water, S);
+    let best_tile = bedrock;
+    let best_value = Number.NEGATIVE_INFINITY;
+    for (const [tile, noise] of biomes) {
+      const bonus = (tile === water ? 16 * (base - 0.5) : 0);
+      const value = noise(x, z) + bonus;
+      if (value < best_value) continue;
+      best_tile = tile;
+      best_value = value;
+    }
+    column.push(best_tile, S);
+  };
+
+  //env.world.setLoader(bedrock, loadChunkBiome);
+
   env.refresh();
 };
 
