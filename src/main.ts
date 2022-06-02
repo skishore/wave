@@ -655,6 +655,52 @@ const main = () => {
 
   //env.world.setLoader(bedrock, loadChunkBiome);
 
+  const minetest_noise_2d = (
+      offset: number, scale: number, spread: number,
+      octaves: int, persistence: number, lacunarity: number) => {
+    const components = new Array(octaves).fill(null).map(perlin2D);
+
+    return (x: number, y: number): number => {
+      let f = 1, g = 1;
+      let result = 0;
+
+      x /= spread;
+      y /= spread;
+
+      for (let i = 0; i < octaves; i++) {
+        result += g * components[i](x * f, y * f);
+        f *= lacunarity;
+        g *= persistence;
+      }
+      return scale * result + offset;
+    };
+  };
+
+  //const mgv7_np_terrain_persist = minetest_noise_2d(
+  //    0.6, 0.1, 2000, 3, 0.6, 2.0);
+  const mgv7_np_height_select = minetest_noise_2d(
+      -8, 16, 500, 6, 0.7, 2.0);
+  const mgv7_np_terrain_base = minetest_noise_2d(
+      4, 70, 600, 6, 0.6, 2.0);
+  const mgv7_np_terrain_alt = minetest_noise_2d(
+      4, 25, 600, 6, 0.6, 2.0);
+
+  const loadChunkMinetest = (x: int, z: int, column: Column) => {
+    const select = mgv7_np_height_select(x, z);
+    const factor = Math.max(Math.min(select, 1), 0);
+    const height_base = mgv7_np_terrain_base(x, z);
+    const height_alt = mgv7_np_terrain_alt(x, z);
+
+    const height = height_base > height_alt
+      ? height_base * factor + height_alt * (1 - factor)
+      : height_alt;
+    const tile = factor > 0 && height_base > height_alt ? dirt : grass;
+
+    column.push(tile, height | 0);
+  };
+
+  env.world.setLoader(bedrock, loadChunkMinetest);
+
   env.refresh();
 };
 
