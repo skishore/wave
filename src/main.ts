@@ -103,10 +103,11 @@ const tryAutoStepping =
      check: (pos: Vec3) => boolean) => {
   if (state.resting[1] > 0 && !state.inFluid) return;
 
+  const threshold = 4;
   const speed_x = Math.abs(state.vel[0]);
   const speed_z = Math.abs(state.vel[2]);
-  const step_x = (state.resting[0] !== 0 && speed_x > speed_z);
-  const step_z = (state.resting[2] !== 0 && speed_z > speed_x);
+  const step_x = (state.resting[0] !== 0 && threshold * speed_x > speed_z);
+  const step_z = (state.resting[2] !== 0 && threshold * speed_z > speed_x);
   if (!step_x && !step_z) return;
 
   const height = 1 - min[1] + Math.floor(min[1]);
@@ -339,7 +340,7 @@ const Movement = (env: TypedEnv): Component<MovementState> => ({
     runningFriction: 0,
     standingFriction: 2,
     airMoveMultiplier: 0.5,
-    airJumps: 9999,
+    airJumps: 0,
     jumpTime: 0.2,
     jumpForce: 15,
     jumpImpulse: 10,
@@ -474,7 +475,7 @@ const main = () => {
   const registry = env.registry;
   registry.addMaterialOfColor('blue', [0.1, 0.1, 0.4, 0.4], true);
   registry.addMaterialOfTexture(
-    'water', texture(13, 13), [1, 1, 1, 0.8], true);
+    'water', texture(13, 12), [1, 1, 1, 0.8], true);
   registry.addMaterialOfTexture('leaves', texture(4, 3, true));
   const textures: [string, int, int][] = [
     ['bedrock', 1, 1],
@@ -503,7 +504,7 @@ const main = () => {
   const H = kWorldHeight;
   const S = Math.floor(kWorldHeight / 2);
   const tiles: [BlockId, int][] =
-    [[dirt, S - 2], [sand, S], [grass, S + 30], [dirt, S + 36], [snow, H]];
+    [[dirt, S - 2], [sand, S], [grass, S + 4], [dirt, S + 36], [snow, H]];
 
   const trees = perlin2D();
   const valleys = perlin2D();
@@ -679,15 +680,15 @@ const main = () => {
   //const mgv7_np_terrain_persist = minetest_noise_2d(
   //    0.6, 0.1, 2000, 3, 0.6, 2.0);
   const mgv7_np_height_select = minetest_noise_2d(
-      -8, 16, 500, 6, 0.7, 2.0);
+      0, 1, 512, 6, 0.7, 2.0);
   const mgv7_np_terrain_base = minetest_noise_2d(
-      4, 70, 600, 6, 0.6, 2.0);
+      4, 70, 512, 6, 0.6, 2.0);
   const mgv7_np_terrain_alt = minetest_noise_2d(
-      4, 25, 600, 6, 0.6, 2.0);
+      4, 25, 512, 6, 0.6, 2.0);
 
   const loadChunkMinetest = (x: int, z: int, column: Column) => {
     const select = mgv7_np_height_select(x, z);
-    const factor = Math.max(Math.min(select, 1), 0);
+    const factor = Math.max(Math.min(16 * Math.abs(select) - 4, 1), 0);
     const height_base = mgv7_np_terrain_base(x, z);
     const height_alt = mgv7_np_terrain_alt(x, z);
 
@@ -699,7 +700,7 @@ const main = () => {
     column.push(tile, height | 0);
   };
 
-  env.world.setLoader(bedrock, loadChunkMinetest);
+  //env.world.setLoader(bedrock, loadChunkMinetest);
 
   env.refresh();
 };
