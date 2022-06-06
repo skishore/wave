@@ -30,7 +30,8 @@ const kCachedGeometryA: Geometry = Geometry.empty();
 const kCachedGeometryB: Geometry = Geometry.empty();
 
 const kTmpPos = Vec3.create();
-let kMaskData = new Int16Array();
+let kMaskData = new Int32Array();
+let kMaskUnion = new Int32Array();
 
 const kIndexOffsets = {
   A: [0, 1, 2, 0, 2, 3],
@@ -124,12 +125,17 @@ class TerrainMesher {
 
       const area = lu * lv;
       if (kMaskData.length < area) {
-        kMaskData = new Int16Array(area);
+        kMaskData = new Int32Array(area);
+      }
+      if (kMaskUnion.length < lu) {
+        kMaskUnion = new Int32Array(lu);
       }
 
       for (let id = 0; id < ld; id++) {
         let n = 0;
+        let complete_union = 0;
         for (let iu = 0; iu < lu; iu++) {
+          kMaskUnion[iu] = 0;
           let index = base + id * sd + iu * su;
           for (let iv = 0; iv < lv; iv++, index += sv, n += 1) {
             // mask[n] is the face between (id, iu, iv) and (id + 1, iu, iv).
@@ -144,15 +150,20 @@ class TerrainMesher {
             const facing = this.getFaceDir(block0, block1, dir);
             if (facing === 0) continue;
 
-            const mask = facing > 0
+            const material = facing > 0
               ?  this.getBlockFaceMaterial(block0, dir)
               : -this.getBlockFaceMaterial(block1, dir + 1);
             const ao = facing > 0
               ? this.packAOMask(data, index + sd, index, su, sv)
               : this.packAOMask(data, index, index + sd, su, sv)
-            kMaskData[n] = (mask << 8) | ao;
+            const mask = (material << 8) | ao;
+
+            kMaskData[n] = mask;
+            kMaskUnion[iu] |= mask;
+            complete_union |= mask;
           }
         }
+        if (complete_union === 0) continue;
 
         if (id === 0) {
           for (let i = 0; i < area; i++) {
@@ -168,6 +179,11 @@ class TerrainMesher {
         kTmpPos[d] = id;
 
         for (let iu = 0; iu < lu; iu++) {
+          if (kMaskUnion[iu] === 0) {
+            n += lv;
+            continue;
+          }
+
           let h = 1;
           for (let iv = 0; iv < lv; iv += h, n += h) {
             const mask = kMaskData[n];
@@ -423,7 +439,7 @@ class TerrainMesher {
     return (a10 === a01) ? false : (a00 + a11 > a10 + a01);
   }
 
-  private packAOMask(data: Uint32Array, ipos: int, ineg: int,
+  private packAOMask(data: Int16Array, ipos: int, ineg: int,
                      dj: int, dk: int): int {
     let a00 = 0; let a01 = 0; let a10 = 0; let a11 = 0;
     if (this.solid[data[ipos + dj]]) { a10++; a11++; }

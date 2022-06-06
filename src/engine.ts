@@ -336,9 +336,7 @@ class Column {
       const offset = 2 * i;
       const block = this.data[offset + 0] as BlockId;
       const level = this.data[offset + 1];
-      for (let y = last; y < level; y++) {
-        chunk.setBlock(x, y, z, block);
-      }
+      chunk.setColumn(x, z, last, level - last, block);
       last = level;
     }
   }
@@ -520,6 +518,16 @@ class Chunk {
     if (zm === kChunkMask) neighbor(0, 0, 1);
   }
 
+  setColumn(x: int, z: int, start: int, count: int, block: BlockId) {
+    const voxels = this.voxels;
+    if (!voxels) throw new Error(`setColumn called pre-load`);;
+    assert(voxels.stride[1] === 1);
+    assert(!this.finished);
+
+    const sindex = voxels.index(x & kChunkMask, start, z & kChunkMask);
+    voxels.data.fill(block, sindex, sindex + count);
+  }
+
   hasMesh(): boolean {
     return !!(this.solid || this.water);
   }
@@ -570,16 +578,14 @@ class Chunk {
     const [ni, nj, nk] = size;
     const [di, dj, dk] = dstPos;
     const [si, sj, sk] = srcPos;
-    const dsj = dst.stride[1];
-    const ssj = src.stride[1];
+    assert(dst.stride[1] === 1);
+    assert(src.stride[1] === 1);
+
     for (let i = 0; i < ni; i++) {
       for (let k = 0; k < nk; k++) {
-        // Unroll along the y-axis, since it's the longest chunk dimension.
-        let sindex = src.index(si + i, sj, sk + k);
-        let dindex = dst.index(di + i, dj, dk + k);
-        for (let j = 0; j < nj; j++, dindex += dsj, sindex += ssj) {
-          dst.data[dindex] = src.data[sindex];
-        }
+        const sindex = src.index(si + i, sj, sk + k);
+        const dindex = dst.index(di + i, dj, dk + k);
+        dst.data.set(src.data.subarray(sindex, sindex + nj), dindex);
       }
     }
   }

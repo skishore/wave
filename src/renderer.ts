@@ -418,7 +418,7 @@ class Geometry {
     const length = this.indices.length;
     if (length >= needed) return;
     const expanded = new Uint32Array(Math.max(length * 2, needed));
-    for (let i = 0; i < length; i++) expanded[i] = this.indices[i];
+    expanded.set(this.indices);
     this.indices = expanded;
   }
 
@@ -428,7 +428,7 @@ class Geometry {
     const length = this.vertices.length;
     if (length >= needed) return;
     const expanded = new Float32Array(Math.max(length * 2, needed));
-    for (let i = 0; i < length; i++) expanded[i] = this.vertices[i];
+    expanded.set(this.vertices);
     this.vertices = expanded;
   }
 

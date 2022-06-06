@@ -205,14 +205,14 @@ const Mat4 = {
 };
 
 class Tensor3 {
-  data: Uint32Array;
+  data: Int16Array;
   shape: [int, int, int];
   stride: [int, int, int];
 
   constructor(x: int, y: int, z: int) {
-    this.data = new Uint32Array(x * y * z);
+    this.data = new Int16Array(x * y * z);
     this.shape = [x, y, z];
-    this.stride = [1, x * z, x];
+    this.stride = [y, 1, x * y];
   }
 
   get(x: int, y: int, z: int): int {
