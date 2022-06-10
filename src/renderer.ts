@@ -65,6 +65,7 @@ class Camera {
     const jerkx = Math.abs(dx) > 400 && Math.abs(dx / (this.last_dx || 1)) > 4;
     const jerky = Math.abs(dy) > 400 && Math.abs(dy / (this.last_dy || 1)) > 4;
     if (jerkx || jerky) {
+      console.log(`Smoothing out update: ${dx} x ${dy}`);
       const saved_x = this.last_dx;
       const saved_y = this.last_dy;
       this.last_dx = (dx + this.last_dx) / 2;
