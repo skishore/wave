@@ -491,7 +491,7 @@ class Geometry {
 //////////////////////////////////////////////////////////////////////////////
 
 const kBasicShader = `
-  uniform int u_mask;
+  uniform ivec2 u_mask;
   uniform float u_move;
   uniform float u_wave;
   uniform mat4 u_transform;
@@ -511,7 +511,12 @@ const kBasicShader = `
     float wave = a_wave * u_wave;
     vec3 adjusted = a_position - vec3(0, wave, 0);
     gl_Position = u_transform * vec4(adjusted, 1.0);
-    if ((u_mask & int(a_mask)) != 0) gl_Position[3] = 0.0;
+
+    int mask = int(a_mask);
+    int index = mask >> 5;
+    int value = 1 << (mask & 31);
+    bool hide = (u_mask[index] & value) != 0;
+    if (hide) gl_Position[3] = 0.0;
   }
 #split
   precision highp float;
@@ -571,6 +576,8 @@ class BasicShader extends Shader {
   }
 };
 
+const kDefaultMask = new Int32Array(2);
+
 class BasicMesh {
   private gl: WebGL2RenderingContext;
   private shader: BasicShader;
@@ -583,7 +590,7 @@ class BasicMesh {
   private position: Vec3;
   private index: int;
   private shown: boolean;
-  private mask: int;
+  private mask: Int32Array;
 
   constructor(gl: WebGL2RenderingContext, shader: BasicShader, geo: Geometry,
               meshes: BasicMesh[], hidden_meshes: BasicMesh[]) {
@@ -601,7 +608,7 @@ class BasicMesh {
     this.position = Vec3.create();
     this.index = index;
     this.shown = true;
-    this.mask = 0;
+    this.mask = kDefaultMask;
   }
 
   draw(camera: Camera, planes: CullingPlane[]): boolean {
@@ -615,7 +622,7 @@ class BasicMesh {
     const gl = this.gl;
     gl.bindVertexArray(this.vao);
     gl.bindBuffer(ELEMENT_ARRAY_BUFFER, this.indices);
-    gl.uniform1i(this.shader.u_mask, this.mask);
+    gl.uniform2iv(this.shader.u_mask, this.mask);
     gl.uniformMatrix4fv(this.shader.u_transform, false, transform);
     gl.drawElements(gl.TRIANGLES, this.geo.num_indices, gl.UNSIGNED_INT, 0);
     return true;
@@ -624,6 +631,7 @@ class BasicMesh {
   dispose(): void {
     this.destroyBuffers();
     this.removeFromMeshes();
+    this.mask = kDefaultMask;
   }
 
   getGeometry(): Geometry {
@@ -639,7 +647,7 @@ class BasicMesh {
     Vec3.set(this.position, x, y, z);
   }
 
-  show(mask: int, shown: boolean): void {
+  show(mask: Int32Array, shown: boolean): void {
     this.mask = mask;
     if (shown === this.shown) return;
 
@@ -826,7 +834,7 @@ interface Mesh {
   getGeometry: () => Geometry,
   setGeometry: (geo: Geometry) => void,
   setPosition: (x: number, y: number, z: number) => void,
-  show: (mask: int, shown: boolean) => void,
+  show: (mask: Int32Array, shown: boolean) => void,
 };
 
 class Renderer {

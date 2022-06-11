@@ -639,23 +639,27 @@ class Counters {
   }
 };
 
+const kMultiMeshBits = 2;
+const kMultiMeshSide = 1 << kMultiMeshBits;
+const kMultiMeshArea = kMultiMeshSide * kMultiMeshSide;
 const kLODSingleMask = (1 << 4) - 1;
-const kLODMultiMask = (1 << 16) - 1;
 
 class LODMultiMesh {
   solid: Mesh | null;
   water: Mesh | null;
   meshed: boolean[];
 
-  private mask: int;
+  private mask: Int32Array;
+  private visible: int = 0;
   private enabled: boolean[];
 
   constructor() {
     this.solid = null;
     this.water = null;
-    this.mask = 0;
-    this.meshed = new Array(4).fill(false);
-    this.enabled = new Array(4).fill(false);
+    this.meshed = new Array(kMultiMeshArea).fill(false);
+    this.enabled = new Array(kMultiMeshArea).fill(false);
+    this.mask = new Int32Array(2);
+    this.mask[0] = this.mask[1] = -1;
   }
 
   disable(index: int): void {
@@ -669,10 +673,12 @@ class LODMultiMesh {
     if (this.water) this.water.dispose();
     this.solid = null;
     this.water = null;
+    this.mask[0] = this.mask[1] = -1;
   }
 
   index(chunk: FrontierChunk): int {
-    return ((chunk.cz & 1) << 1) | (chunk.cx & 1);
+    const mask = kMultiMeshSide - 1;
+    return ((chunk.cz & mask) << kMultiMeshBits) | (chunk.cx & mask);
   }
 
   show(index: int, mask: int): void {
@@ -682,9 +688,12 @@ class LODMultiMesh {
   }
 
   private setMask(index: int, mask: int): void {
-    this.mask &= ~(kLODSingleMask << (index * 4));
-    this.mask |= mask << (index * 4);
-    const shown = this.mask !== kLODMultiMask;
+    const mask_index = index >> 3;
+    const mask_shift = (index & 7) * 4;
+    this.mask[mask_index] &= ~(kLODSingleMask << mask_shift);
+    this.mask[mask_index] |= mask << mask_shift;
+    const shown = (this.mask[0] & this.mask[1]) !== -1;
+
     if (this.solid) this.solid.show(this.mask, shown);
     if (this.water) this.water.show(this.mask, shown);
   }
@@ -847,6 +856,11 @@ class Frontier {
     const x = (2 * cx + 1) << lshift;
     const z = (2 * cz + 1) << lshift;
 
+    // The (x, z) position of the center of the multimesh for this mesh.
+    const multi = kMultiMeshSide;
+    const mx = (2 * (cx & ~(multi - 1)) + multi) << lshift;
+    const mz = (2 * (cz & ~(multi - 1)) + multi) << lshift;
+
     for (let k = 0; k < 4; k++) {
       const dx = (k & 1 ? 0 : -1 << lshift);
       const dz = (k & 2 ? 0 : -1 << lshift);
@@ -885,19 +899,17 @@ class Frontier {
       }
 
       const n = side + 2;
-      const px = dx - lod - ((cx & 1 ? 1 : 3) << lshift);
-      const pz = dz - lod - ((cz & 1 ? 1 : 3) << lshift);
-      const mask = (1 << (k + 4 * mesh.index(chunk)));
+      const px = x + dx - mx - lod;
+      const pz = z + dz - mz - lod;
+      const mask = k + 4 * mesh.index(chunk);
       mesh.solid = this.world.mesher.meshFrontier(
           solid_heightmap, mask, px, pz, n, n, lod, mesh.solid, true);
       mesh.water = this.world.mesher.meshFrontier(
           water_heightmap, mask, px, pz, n, n, lod, mesh.water, false);
     }
 
-    const px = x + ((cx & 1 ? 1 : 3) << lshift);
-    const pz = z + ((cz & 1 ? 1 : 3) << lshift);
-    if (mesh.solid) mesh.solid.setPosition(px, 0, pz);
-    if (mesh.water) mesh.water.setPosition(px, 0, pz);
+    if (mesh.solid) mesh.solid.setPosition(mx, 0, mz);
+    if (mesh.water) mesh.water.setPosition(mx, 0, mz);
     mesh.meshed[mesh.index(chunk)] = true;
   }
 
@@ -915,7 +927,9 @@ class Frontier {
     const key = this.world.getChunkKey(cx, cz) * kFrontierLevels + level;
     const result = this.chunks.get(key);
     if (result) return result;
-    const mesh = this.getMultiMesh(cx >> 1, cz >> 1, level + 1);
+
+    const bits = kMultiMeshBits;
+    const mesh = this.getMultiMesh(cx >> bits, cz >> bits, level);
     const created = {cx, cz, level, mesh};
     this.chunks.set(key, created);
     return created;
@@ -1097,6 +1111,7 @@ class Env {
   private cameraAlpha = 0;
   private cameraBlock = kEmptyBlock;
   private cameraColor = kWhite;
+  private shouldMesh = true;
   private timing: Timing;
   private frame: int = 0;
 
@@ -1135,6 +1150,7 @@ class Env {
     this.entities.render(dt);
     this.updateOverlayColor(wave);
     const renderer_stats = this.renderer.render(move, wave);
+    this.shouldMesh = true;
 
     const timing = this.timing;
     if (timing.updatePerf.frame() % 10 !== 0) return;
@@ -1147,6 +1163,9 @@ class Env {
   update(dt: int) {
     if (!this.container.inputs.pointer) return;
     this.entities.update(dt);
+
+    if (!this.shouldMesh) return;
+    this.shouldMesh = false;
     this.world.remesh();
   }
 
