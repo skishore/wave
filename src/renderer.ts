@@ -532,7 +532,8 @@ const kBasicShader = `
   out vec4 o_color;
 
   void main() {
-    float fog = clamp(exp2(-u_fogDepth * gl_FragCoord.w), 0.0, 1.0);
+    float depth = u_fogDepth * gl_FragCoord.w;
+    float fog = clamp(exp2(-depth * depth), 0.0, 1.0);
     vec3 index = v_uvw + vec3(v_move, v_move, 0);
     vec4 color = v_color * texture(u_texture, index);
     o_color = mix(color, vec4(u_fogColor, color[3]), fog);
@@ -725,7 +726,8 @@ class BasicMesh {
 
 //////////////////////////////////////////////////////////////////////////////
 
-const kDefaultFogColor = [0.2, 0.5, 0.8];
+const kDefaultFogColor = [0.6, 0.8, 1.0];
+const kDefaultSkyColor = [0.6, 0.8, 1.0];
 
 const kScreenOverlayShader = `
   in vec3 a_position;
@@ -797,7 +799,7 @@ class ScreenOverlay {
   }
 
   getFogDepth(): number {
-    return this.color[3] === 1 ? 4096 : 16;
+    return this.color[3] === 1 ? 1024 : 16;
   }
 
   setColor(color: Color) {
@@ -886,7 +888,8 @@ class Renderer {
 
   render(move: number, wave: number): string {
     const gl = this.gl;
-    gl.clearColor(0.8, 0.9, 1, 1);
+    const [r, g, b] = kDefaultSkyColor;
+    gl.clearColor(r, g, b, 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
     this.atlas.bind();

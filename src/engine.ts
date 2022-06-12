@@ -382,8 +382,8 @@ const kNumChunksToMeshPerFrame = 1;
 const kNumLODChunksToMeshPerFrame = 1;
 
 const kFrontierLOD = 2;
-const kFrontierRadius = 4;
-const kFrontierLevels = 8;
+const kFrontierRadius = 8;
+const kFrontierLevels = 6;
 
 // List of neighboring chunks to include when meshing.
 type Point = [number, number, number];
