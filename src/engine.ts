@@ -1016,6 +1016,7 @@ class World {
     const buffer = this.buffer;
     for (let x = 0; x < buffer.shape[0]; x++) {
       for (let z = 0; z < buffer.shape[2]; z++) {
+        buffer.set(x, 0, z, bedrock);
         buffer.set(x, 1, z, bedrock);
       }
     }
