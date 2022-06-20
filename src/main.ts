@@ -1,3 +1,4 @@
+import {SimplexNoise} from '../lib/simplex-noise.js';
 import {int, Tensor3, Vec3} from './base.js';
 import {BlockId, Column, Env} from './engine.js';
 import {kChunkWidth, kEmptyBlock, kWorldHeight} from './engine.js';
@@ -371,68 +372,11 @@ const CameraTarget = (env: TypedEnv): Component => ({
   },
 });
 
-// Perlin noise implementation:
+// Noise helpers:
 
-const perlin2D = () => {
-  const getPermutation = (x: int): int[] => {
-    const result = [];
-    for (let i = 0; i < x; i++) {
-      result.push(i);
-      const idx = Math.floor(Math.random() * result.length);
-      result[result.length - 1] = result[idx];
-      result[idx] = i;
-    }
-    return result;
-  };
-
-  const count = 256;
-  const table = getPermutation(count);
-  table.slice().forEach(x => table.push(x));
-
-  const gradients: [int, int][] = [];
-  for (let i = 0; i < count; i++) {
-    const angle = 2 * Math.PI * i / count;
-    gradients.push([Math.cos(angle), Math.sin(angle)]);
-  }
-
-  const dot = (gradient: [int, int], x: number, y: number) => {
-    return gradient[0] * x + gradient[1] * y;
-  };
-
-  const fade = (x: number): number => {
-    return x * x * x * (x * (x * 6 - 15) + 10);
-  };
-
-  const lerp = (x: number, a: number, b: number): number => {
-    return a + x * (b - a);
-  };
-
-  const noise = (x: number, y: number): number => {
-    let ix = Math.floor(x);
-    let iy = Math.floor(y);
-    x -= ix;
-    y -= iy;
-    ix &= 255;
-    iy &= 255;
-
-    const g00 = table[ix +     table[iy    ]];
-    const g10 = table[ix + 1 + table[iy    ]];
-    const g01 = table[ix +     table[iy + 1]];
-    const g11 = table[ix + 1 + table[iy + 1]];
-
-    const n00 = dot(gradients[g00], x,     y    );
-    const n10 = dot(gradients[g10], x - 1, y    );
-    const n01 = dot(gradients[g01], x,     y - 1);
-    const n11 = dot(gradients[g11], x - 1, y - 1);
-
-    const fx = fade(x);
-    const fy = fade(y);
-    const y1 = lerp(fx, n00, n10);
-    const y2 = lerp(fx, n01, n11);
-    return lerp(fy, y1, y2);
-  };
-
-  return noise;
+const perlin2D = (): (x: number, y: number) => number => {
+  const noise = new SimplexNoise();
+  return noise.noise2D.bind(noise);
 };
 
 const fractalPerlin2D = (
@@ -509,7 +453,7 @@ const main = () => {
   const trees = perlin2D();
   const valleys = perlin2D();
   const roughness = perlin2D();
-  const mountains = fractalPerlin2D(2, 8, 1.0, 6);
+  const mountains = fractalPerlin2D(0.5, 8, 1.0, 6);
   const heightmap = (x: int, z: int): number => {
     const a = valleys(x / 64, z / 64);
     const b = roughness(x / 64, z / 64);
