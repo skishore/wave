@@ -1,6 +1,5 @@
-import {SimplexNoise} from '../lib/simplex-noise.js';
 import {makeNoise2D} from '../lib/open-simplex-2d.js';
-import {int, Tensor3, Vec3} from './base.js';
+import {assert, int, Tensor3, Vec3} from './base.js';
 import {BlockId, Column, Env} from './engine.js';
 import {kChunkWidth, kEmptyBlock, kWorldHeight} from './engine.js';
 import {Component, ComponentState, ComponentStore, EntityId, kNoEntity} from './ecs.js';
@@ -375,7 +374,7 @@ const CameraTarget = (env: TypedEnv): Component => ({
 
 // Noise helpers:
 
-let noise_counter = 0;
+let noise_counter = (Math.random() * (1 << 30)) | 0;
 const perlin2D = (): (x: number, y: number) => number => {
   return makeNoise2D(noise_counter++);
 };
@@ -451,12 +450,12 @@ const main = () => {
   const tiles: [BlockId, int][] =
     [[dirt, S - 2], [sand, S], [grass, S + 4], [dirt, S + 36], [snow, H]];
 
-  const ridgeNoise = (scale: number) => {
-    const octaves = new Array(4).fill(null).map(perlin2D);
+  const baseRidgeNoise = (octaves: number, scale: number) => {
+    const components = new Array(4).fill(null).map(perlin2D);
     return (x: int, z: int) => {
       let result = 0, a = 1, s = scale;
-      for (const octave of octaves) {
-        result += (1 - Math.abs(octave(x * s, z * s))) * a;
+      for (const component of components) {
+        result += (1 - Math.abs(component(x * s, z * s))) * a;
         a /= 2;
         s *= 2;
       }
@@ -467,8 +466,8 @@ const main = () => {
   const trees = perlin2D();
   const valleys = perlin2D();
   const roughness = perlin2D();
-  const mountainA = ridgeNoise(0.005);
-  const mountainB = ridgeNoise(0.005);
+  const mountainA = baseRidgeNoise(4, 0.005);
+  const mountainB = baseRidgeNoise(4, 0.005);
 
   const heightmap = (x: int, z: int): number => {
     const a = valleys(x / 64, z / 64);
@@ -572,8 +571,8 @@ const main = () => {
 
   //env.world.setLoader(bedrock, loadChunkHack);
 
-  const noiseA = ridgeNoise(0.01);
-  const noiseB = ridgeNoise(0.01);
+  const noiseA = baseRidgeNoise(4, 0.01);
+  const noiseB = baseRidgeNoise(4, 0.01);
   const loadChunkRidge = (x: int, z: int, column: Column) => {
     const target = (1 + 0.2 * (noiseA(x, z) - noiseB(x, z))) * S;
     column.push(dirt, Math.min(target, S - 1));
@@ -583,12 +582,12 @@ const main = () => {
 
   //env.world.setLoader(bedrock, loadChunkRidge);
 
-  const kIslandRadius = 1024;
+  const kOldIslandRadius = 1024;
   const biomes: [BlockId, (x: int, y: int) => number][] =
     [bedrock, dirt, grass, rock, sand, snow, trunk, water]
       .map(x => [x, fractalPerlin2D(1, 16, 1, 4)]);
   const loadChunkBiome = (x: int, z: int, column: Column) => {
-    const base = Math.sqrt(x * x + z * z) / kIslandRadius;
+    const base = Math.sqrt(x * x + z * z) / kOldIslandRadius;
     if (base > 1) return column.push(water, S);
     let best_tile = bedrock;
     let best_value = Number.NEGATIVE_INFINITY;
@@ -625,35 +624,73 @@ const main = () => {
     };
   };
 
-  const mgv7_np_height_select = minetest_noise_2d(
-      0, 1, 512, 6, 0.7, 2.0);
-  const mgv7_np_terrain_base = minetest_noise_2d(
-      4, 64, 512, 6, 0.6, 2.0);
-  const mgv7_np_terrain_alt = minetest_noise_2d(
-      4, 16, 512, 6, 0.6, 2.0);
+  const ridgeNoise = (octaves: number, persistence: number, scale: number) => {
+    const components = new Array(4).fill(null).map(perlin2D);
+    return (x: int, z: int) => {
+      let result = 0, a = 1, s = scale;
+      for (const component of components) {
+        result += (1 - Math.abs(component(x * s, z * s))) * a;
+        a *= persistence;
+        s *= 2;
+      }
+      return result;
+    };
+  };
 
-  const mgv7_mountain_a = ridgeNoise(0.01);
-  const mgv7_mountain_b = ridgeNoise(0.01);
+  const mgv7_np_cliff_select = minetest_noise_2d(
+      0, 1, 512, 4, 0.7, 2.0);
+  const mgv7_np_mountain_select = minetest_noise_2d(
+      0, 1, 512, 4, 0.7, 2.0);
+  const mgv7_np_terrain_ground = minetest_noise_2d(
+      2, 8, 512, 6, 0.6, 2.0);
+  const mgv7_np_terrain_cliff = minetest_noise_2d(
+      8, 16, 512, 6, 0.6, 2.0);
+
+  const mgv7_mountain_ridge = ridgeNoise(8, 0.5, 0.002);
+
+  const kIslandRadius = 1024;
+  const kSeaLevel = (kWorldHeight / 4) | 0;
 
   const loadChunkMinetest = (x: int, z: int, column: Column) => {
-    const select = mgv7_np_height_select(x, z);
-    const factor = Math.max(Math.min(16 * Math.abs(select) - 4, 1), 0);
+    const base = Math.sqrt(x * x + z * z) / kIslandRadius;
+    const falloff = 16 * base * base;
+    if (falloff >= kSeaLevel) return column.push(water, kSeaLevel);
 
-    const height_alt = mgv7_np_terrain_alt(x, z);
-    const height_base = factor > 0 ? mgv7_np_terrain_base(x, z) : height_alt;
+    const cliff_select = mgv7_np_cliff_select(x, z);
+    const cliff_x = Math.max(Math.min(16 * Math.abs(cliff_select) - 4, 1), 0);
 
-    const height = height_base > height_alt
-      ? height_base * factor + height_alt * (1 - factor)
-      : height_alt;
+    const mountain_select = mgv7_np_mountain_select(x, z);
+    const mountain_x = Math.sqrt(Math.max(8 * mountain_select, 0));
 
-    const truncated = (height | 0);
+    const cliff = cliff_x - mountain_x;
+    const mountain = -cliff;
+
+    const height_ground = mgv7_np_terrain_ground(x, z);
+    const height_cliff = cliff > 0
+      ? mgv7_np_terrain_cliff(x, z)
+      : height_ground;
+    const height_mountain = mountain > 0
+      ? height_ground + 64 * Math.pow((mgv7_mountain_ridge(x, z) - 1.25), 1.5)
+      : height_ground;
+
+    const height = (() => {
+      if (height_mountain > height_ground) {
+        return height_mountain * mountain + height_ground * (1 - mountain);
+      } else if (height_cliff > height_ground) {
+        return height_cliff * cliff + height_ground * (1 - cliff);
+      }
+      return height_ground;
+    })();
+
+    const truncated = (height - falloff) | 0;
     const tile = (() => {
       if (truncated < -1) return dirt;
-      if (truncated < 1) return sand;
-      return factor > 0 && height_base > height_alt ? dirt : grass;
+      if (height_mountain > height_ground) return rock;
+      if (height_cliff > height_ground) return dirt;
+      return truncated < 1 ? sand : grass;
     })();
-    column.push(tile, truncated + S);
-    if (truncated < 0) column.push(water, S);
+    column.push(tile, truncated + kSeaLevel);
+    if (truncated < 0) column.push(water, kSeaLevel);
   };
 
   env.world.setLoader(bedrock, loadChunkMinetest);
