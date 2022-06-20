@@ -6,7 +6,7 @@
     "module": "es6",
     "moduleResolution": "node",
     "outDir": "target",
-    "rootDirs": ["src"],
+    "rootDirs": ["lib", "src"],
     "sourceMap": true,
     "strict": true,
     "suppressImplicitAnyIndexErrors": false,
