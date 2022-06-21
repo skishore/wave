@@ -651,6 +651,22 @@ const main = () => {
   const kIslandRadius = 1024;
   const kSeaLevel = (kWorldHeight / 4) | 0;
 
+  const hash_fnv32 = (k: int) => {
+    let result = 2166136261;
+    for (let i = 0; i < 4; i++) {
+      result ^= (k & 255);
+      result *= 16777619;
+      k = k >> 8;
+    }
+    return result;
+  };
+
+  const kMask = (1 << 15) - 1;
+  const has_tree = (x: int, z: int): boolean => {
+    const base = hash_fnv32(((x & kMask) << 15) | (z & kMask));
+    return (base & 63) <= 3;
+  };
+
   const loadChunkMinetest = (x: int, z: int, column: Column) => {
     const base = Math.sqrt(x * x + z * z) / kIslandRadius;
     const falloff = 16 * base * base;
@@ -689,8 +705,14 @@ const main = () => {
       if (height_cliff > height_ground) return dirt;
       return truncated < 1 ? sand : grass;
     })();
-    column.push(tile, truncated + kSeaLevel);
-    if (truncated < 0) column.push(water, kSeaLevel);
+
+    const abs_height = truncated + kSeaLevel;
+    column.push(tile, abs_height);
+    if (truncated < 0) {
+      column.push(water, kSeaLevel);
+    } else if (tile === grass && has_tree(x, z)) {
+      column.push(leaves, abs_height + 1);
+    }
   };
 
   env.world.setLoader(bedrock, loadChunkMinetest);
