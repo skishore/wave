@@ -6,7 +6,7 @@ import {TerrainMesher} from './mesher.js';
 //////////////////////////////////////////////////////////////////////////////
 // The game engine:
 
-type Input = 'up' | 'left' | 'down' | 'right' | 'space' | 'pointer';
+type Input = 'up' | 'left' | 'down' | 'right' | 'hover' | 'space' | 'pointer';
 
 class Container {
   element: Element;
@@ -25,6 +25,7 @@ class Container {
       left: false,
       down: false,
       right: false,
+      hover: false,
       space: false,
       pointer: false,
     };
@@ -35,6 +36,7 @@ class Container {
     this.bindings.set('A'.charCodeAt(0), 'left');
     this.bindings.set('S'.charCodeAt(0), 'down');
     this.bindings.set('D'.charCodeAt(0), 'right');
+    this.bindings.set('E'.charCodeAt(0), 'hover');
     this.bindings.set(' '.charCodeAt(0), 'space');
 
     const element = this.element;
