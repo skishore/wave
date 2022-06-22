@@ -315,17 +315,20 @@ class Timing {
 type Loader = (x: int, z: int, column: Column) => void;
 
 class Column {
+  private decorations: int[];
   private data: Uint16Array;
   private last: int;
   private size: int;
 
   constructor() {
+    this.decorations = [];
     this.data = new Uint16Array(2 * kWorldHeight);
     this.last = 0;
     this.size = 0;
   }
 
   clear(): void {
+    this.decorations.length = 0;
     this.last = 0;
     this.size = 0;
   }
@@ -339,6 +342,17 @@ class Column {
       chunk.setColumn(x, z, last, level - last, block);
       last = level;
     }
+    for (let i = 0; i < this.decorations.length; i += 2) {
+      const block = this.decorations[i + 0] as BlockId
+      const level = this.decorations[i + 1];
+      chunk.setColumn(x, z, level, 1, block);
+    }
+  }
+
+  overwrite(block: BlockId, y: int) {
+    if (!(0 <= y && y < kWorldHeight)) return;
+    this.decorations.push(block);
+    this.decorations.push(y);
   }
 
   push(block: BlockId, height: int): void {

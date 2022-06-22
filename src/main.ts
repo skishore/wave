@@ -334,8 +334,8 @@ const Movement = (env: TypedEnv): Component<MovementState> => ({
     heading: 0,
     running: false,
     jumping: false,
-    maxSpeed: 100,
-    moveForce: 300,
+    maxSpeed: 10,
+    moveForce: 30,
     swimPenalty: 0.5,
     responsiveness: 15,
     runningFriction: 0,
@@ -651,6 +651,34 @@ const main = () => {
   const kIslandRadius = 1024;
   const kSeaLevel = (kWorldHeight / 4) | 0;
 
+  const kCaveLevels = 3;
+  const kCaveDeltaY = 0;
+  const kCaveHeight = 8;
+  const kCaveRadius = 16;
+  const kCaveCutoff = 0.25;
+  const kCaveWaveHeight = 16;
+  const kCaveWaveRadius = 256;
+
+  const cave_noises = new Array(2 * kCaveLevels).fill(null).map(perlin2D);
+
+  const carve_caves = (x: int, z: int, column: Column) => {
+    const start = kSeaLevel - kCaveDeltaY * (kCaveLevels - 1) / 2;
+    for (let i = 0; i < kCaveLevels; i++) {
+      const carver_noise = cave_noises[2 * i + 0];
+      const height_noise = cave_noises[2 * i + 1];
+      const carver = carver_noise(x / kCaveRadius, z / kCaveRadius);
+      if (carver > kCaveCutoff) {
+        const dy = start + i * kCaveDeltaY;
+        const height = height_noise(x / kCaveWaveRadius, z / kCaveWaveRadius);
+        const offset = (dy + kCaveWaveHeight * height) | 0;
+        const blocks = ((carver - kCaveCutoff) * kCaveHeight) | 0;
+        for (let i = 0; i < 2 * blocks + 3; i++) {
+          column.overwrite(kEmptyBlock, offset + i - blocks);
+        }
+      }
+    }
+  }
+
   const hash_fnv32 = (k: int) => {
     let result = 2166136261;
     for (let i = 0; i < 4; i++) {
@@ -667,7 +695,7 @@ const main = () => {
     return (base & 63) <= 3;
   };
 
-  const loadChunkMinetest = (x: int, z: int, column: Column) => {
+  const loadChunkMinetest = (x: int, z: int, column: Column, lod: boolean) => {
     const base = Math.sqrt(x * x + z * z) / kIslandRadius;
     const falloff = 16 * base * base;
     if (falloff >= kSeaLevel) return column.push(water, kSeaLevel);
@@ -699,6 +727,7 @@ const main = () => {
     })();
 
     const truncated = (height - falloff) | 0;
+    const abs_height = truncated + kSeaLevel;
     const tile = (() => {
       if (truncated < -1) return dirt;
       if (height_mountain > height_ground) return rock;
@@ -706,16 +735,29 @@ const main = () => {
       return truncated < 1 ? sand : grass;
     })();
 
-    const abs_height = truncated + kSeaLevel;
-    column.push(tile, abs_height);
-    if (truncated < 0) {
+
+    if (lod) {
+      column.push(tile, abs_height);
       column.push(water, kSeaLevel);
-    } else if (tile === grass && has_tree(x, z)) {
+      return;
+    }
+
+    if (tile !== rock) {
+      column.push(rock, abs_height - 4);
+      column.push(dirt, abs_height - 1);
+    }
+    column.push(tile, abs_height);
+    column.push(water, kSeaLevel);
+    if (tile === grass && has_tree(x, z)) {
       column.push(leaves, abs_height + 1);
     }
+    carve_caves(x, z, column);
   };
 
-  env.world.setLoader(bedrock, loadChunkMinetest);
+  env.world.setLoader(
+    bedrock,
+    (x: int, z: int, c: Column) => loadChunkMinetest(x, z, c, false),
+    (x: int, z: int, c: Column) => loadChunkMinetest(x, z, c, true));
 
   env.refresh();
 };
