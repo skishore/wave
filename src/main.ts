@@ -454,163 +454,7 @@ const main = () => {
   const trunk = registry.addBlock(['trunk', 'trunk-side'], true);
   const leaves = registry.addBlock(['leaves'], true);
 
-  const H = kWorldHeight;
-  const S = Math.floor(kWorldHeight / 2);
-  const tiles: [BlockId, int][] =
-    [[dirt, S - 2], [sand, S], [grass, S + 4], [dirt, S + 36], [snow, H]];
-
-  const baseRidgeNoise = (octaves: number, scale: number) => {
-    const components = new Array(4).fill(null).map(perlin2D);
-    return (x: int, z: int) => {
-      let result = 0, a = 1, s = scale;
-      for (const component of components) {
-        result += (1 - Math.abs(component(x * s, z * s))) * a;
-        a /= 2;
-        s *= 2;
-      }
-      return result;
-    };
-  };
-
-  const trees = perlin2D();
-  const valleys = perlin2D();
-  const roughness = perlin2D();
-  const mountainA = baseRidgeNoise(4, 0.005);
-  const mountainB = baseRidgeNoise(4, 0.005);
-
-  const heightmap = (x: int, z: int): number => {
-    const a = valleys(x / 64, z / 64);
-    const b = roughness(x / 64, z / 64);
-    const s = 1 / (1 + Math.exp(-16 * (Math.abs(a) / 0.04 - 1)));
-    const t = 1 / (1 + Math.exp(-8 * (b - 0.1)));
-    const m = t * 0.4 * (mountainA(x, z) - mountainB(x, z)) * S;
-    const result = m > 0 ? m * s : m;
-    return Math.max(Math.min(Math.round(result + S), H), 0);
-  };
-
-  const tree = (x: int, z: int, height: int): boolean => {
-    return false;
-    if (height <= S) return false;
-    const result = trees(x / 17, z / 17);
-    return (((result + 1) * 0x10000) & 0x3ff) <= 8 - height + S;
-  };
-
-  const kTrunkHeight = 4;
-  const kTreeLeaves = 2;
-  const kTreeRadius = 2;
-
-  const kSideLength = kChunkWidth + 2 * kTreeRadius;
-  const kChunkCache: int[] = new Array(2 * kSideLength * kSideLength).fill(0);
-  let kLastCX = Number.NaN;
-  let kLastCZ = Number.NaN;
-
-  const loadChunk = (x: int, z: int, column: Column) => {
-    const cx = Math.floor(x / kChunkWidth);
-    const cz = Math.floor(z / kChunkWidth);
-    const ax = cx * kChunkWidth - kTreeRadius;
-    const az = cz * kChunkWidth - kTreeRadius;
-
-    if (cx !== kLastCX || cz !== kLastCZ) {
-      for (let i = 0; i < kSideLength; i++) {
-        for (let j = 0; j < kSideLength; j++) {
-          const index = i + kSideLength * j;
-          const target = heightmap(ax + i, az + j);
-          const has_tree = tree(ax + i, az + j, target);
-          kChunkCache[2 * index + 0] = target;
-          kChunkCache[2 * index + 1] = has_tree ? 1 : 0;
-        }
-      }
-      kLastCX = cx;
-      kLastCZ = cz;
-    }
-
-    const index = (x - ax) + kSideLength * (z - az);
-    const target = kChunkCache[2 * index + 0];
-    const has_tree = kChunkCache[2 * index + 1];
-
-    for (const [tile, height] of tiles) {
-      if (target > height) continue;
-      column.push(rock, target - 4);
-      column.push(dirt, target - 1);
-      column.push(tile, target);
-      column.push(water, S);
-
-      if (has_tree) {
-        column.push(trunk, target + kTrunkHeight);
-        column.push(leaves, target + kTrunkHeight + 1);
-      }
-      for (let dx = -kTreeRadius; dx <= kTreeRadius; dx++) {
-        for (let dz = -kTreeRadius; dz <= kTreeRadius; dz++) {
-          if (dx === 0 && dz === 0) continue;
-          const neighbor_index = index + dx + kSideLength * dz;
-          const neighbor_target = kChunkCache[2 * neighbor_index + 0];
-          const neighbor_has_tree = kChunkCache[2 * neighbor_index + 1];
-          if (neighbor_has_tree) {
-            const adjacent = Math.abs(dx) <= 1 && Math.abs(dz) <= 1;
-            const start = neighbor_target + kTreeLeaves;
-            const end = neighbor_target + kTrunkHeight  + (adjacent ? 1 : 0);
-            column.push(kEmptyBlock, start);
-            column.push(leaves, end);
-          }
-        }
-      }
-      return;
-    }
-  };
-
-  const loadFrontier = (x: int, z: int, column: Column) => {
-    const target = heightmap(x, z);
-    for (const [tile, height] of tiles) {
-      if (target > height) continue;
-      column.push(tile, target);
-      column.push(water, S);
-      return;
-    }
-  };
-
-  env.world.setLoader(bedrock, loadChunk, loadFrontier);
-
-  const perlin = perlin2D();
-  const loadChunkHack = (x: int, z: int, column: Column) => {
-    const target = Math.round(4 * perlin(x / 32, z / 32) + S);
-    column.push(dirt, Math.min(target, S - 1));
-    column.push(sand, Math.min(target, S));
-    column.push(grass, target);
-  };
-
-  //env.world.setLoader(bedrock, loadChunkHack);
-
-  const noiseA = baseRidgeNoise(4, 0.01);
-  const noiseB = baseRidgeNoise(4, 0.01);
-  const loadChunkRidge = (x: int, z: int, column: Column) => {
-    const target = (1 + 0.2 * (noiseA(x, z) - noiseB(x, z))) * S;
-    column.push(dirt, Math.min(target, S - 1));
-    column.push(sand, Math.min(target, S));
-    column.push(grass, target);
-  };
-
-  //env.world.setLoader(bedrock, loadChunkRidge);
-
-  const kOldIslandRadius = 1024;
-  const biomes: [BlockId, (x: int, y: int) => number][] =
-    [bedrock, dirt, grass, rock, sand, snow, trunk, water]
-      .map(x => [x, fractalPerlin2D(1, 16, 1, 4)]);
-  const loadChunkBiome = (x: int, z: int, column: Column) => {
-    const base = Math.sqrt(x * x + z * z) / kOldIslandRadius;
-    if (base > 1) return column.push(water, S);
-    let best_tile = bedrock;
-    let best_value = Number.NEGATIVE_INFINITY;
-    for (const [tile, noise] of biomes) {
-      const bonus = (tile === water ? 16 * (base - 0.5) : 0);
-      const value = noise(x, z) + bonus;
-      if (value < best_value) continue;
-      best_tile = tile;
-      best_value = value;
-    }
-    column.push(best_tile, S);
-  };
-
-  //env.world.setLoader(bedrock, loadChunkBiome);
+  // Composite noise functions.
 
   const minetest_noise_2d = (
       offset: number, scale: number, spread: number,
@@ -657,6 +501,8 @@ const main = () => {
 
   const mgv7_mountain_ridge = ridgeNoise(8, 0.5, 0.002);
 
+  // Cave generation.
+
   const kIslandRadius = 1024;
   const kSeaLevel = (kWorldHeight / 4) | 0;
 
@@ -688,6 +534,8 @@ const main = () => {
     }
   }
 
+  // Tree generation.
+
   const hash_fnv32 = (k: int) => {
     let result = 2166136261;
     for (let i = 0; i < 4; i++) {
@@ -704,7 +552,9 @@ const main = () => {
     return (base & 63) <= 3;
   };
 
-  const loadChunkMinetest = (x: int, z: int, column: Column, lod: boolean) => {
+  // Terrain generation.
+
+  const loadChunk = (x: int, z: int, column: Column, lod: boolean) => {
     const base = Math.sqrt(x * x + z * z) / kIslandRadius;
     const falloff = 16 * base * base;
     if (falloff >= kSeaLevel) return column.push(water, kSeaLevel);
@@ -765,8 +615,8 @@ const main = () => {
 
   env.world.setLoader(
     bedrock,
-    (x: int, z: int, c: Column) => loadChunkMinetest(x, z, c, false),
-    (x: int, z: int, c: Column) => loadChunkMinetest(x, z, c, true));
+    (x: int, z: int, column: Column) => loadChunk(x, z, column, false),
+    (x: int, z: int, column: Column) => loadChunk(x, z, column, true));
 
   env.refresh();
 };
