@@ -589,7 +589,10 @@ const main = () => {
     const abs_height = truncated + kSeaLevel;
     const tile = (() => {
       if (truncated < -1) return dirt;
-      if (height_mountain > height_ground) return rock;
+      if (height_mountain > height_ground) {
+        const base = height - (72 - 8 * mountain);
+        return base > 0 ? snow : rock;
+      }
       if (height_cliff > height_ground) return dirt;
       return truncated < 1 ? sand : grass;
     })();
@@ -601,7 +604,11 @@ const main = () => {
       return;
     }
 
-    if (tile !== rock) {
+    if (tile === snow) {
+      const base = height - (72 - 8 * mountain);
+      const depth = Math.min(3, Math.floor(base / 8) + 1);
+      column.push(rock, abs_height - depth);
+    } else if (tile !== rock) {
       column.push(rock, abs_height - 4);
       column.push(dirt, abs_height - 1);
     }
