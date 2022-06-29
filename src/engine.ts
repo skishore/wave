@@ -381,6 +381,98 @@ class Column {
 
 //////////////////////////////////////////////////////////////////////////////
 
+interface CircleElement {
+  cx: int;
+  cz: int;
+  dispose(): void;
+};
+
+class Circle<T extends CircleElement> {
+  private center_x: int = 0;
+  private center_z: int = 0;
+  private deltas: Int32Array;
+  private points: Int32Array;
+  private elements: (T | null)[];
+  private shift: int;
+  private mask: int;
+
+  constructor(radius: number) {
+    const bound = radius * radius;
+    const floor = Math.floor(radius);
+
+    const points = [];
+    for (let i = -floor; i <= floor; i++) {
+      for (let j = -floor; j <= floor; j++) {
+        const distance = i * i + j * j;
+        if (distance > bound) continue;
+        points.push({i, j, distance});
+      }
+    }
+    points.sort((a, b) => a.distance - b.distance);
+
+    let current = 0;
+    this.deltas = new Int32Array(floor + 1);
+    this.points = new Int32Array(2 * points.length);
+    for (const {i, j} of points) {
+      this.points[current++] = i;
+      this.points[current++] = j;
+      const ai = Math.abs(i), aj = Math.abs(j);
+      this.deltas[ai] = Math.max(this.deltas[ai], aj);
+    }
+    assert(current === this.points.length);
+
+    let shift = 0;
+    while ((1 << shift) < 2 * floor + 1) shift++;
+    this.elements = new Array(1 << (2 * shift)).fill(null);
+    this.shift = shift;
+    this.mask = (1 << shift) - 1;
+  }
+
+  center(center_x: int, center_z: int): void {
+    this.each((cx: int, cz: int): boolean => {
+      const ax = Math.abs(cx - center_x);
+      const az = Math.abs(cz - center_z);
+      if (az <= this.deltas[ax]) return false;
+
+      const index = this.index(cx, cz);
+      const value = this.elements[index];
+      if (value === null) return false;
+      value.dispose();
+      this.elements[index] = null;
+      return false;
+    });
+    this.center_x = center_x;
+    this.center_z = center_z;
+  }
+
+  each(fn: (cx: int, cz: int) => boolean) {
+    const {center_x, center_z, points} = this;
+    const length = points.length;
+    for (let i = 0; i < length; i += 2) {
+      const done = fn(points[i] + center_x, points[i + 1] + center_z);
+      if (done) break;
+    }
+  }
+
+  get(cx: int, cz: int): T | null {
+    const value = this.elements[this.index(cx, cz)];
+    return value && value.cx === cx && value.cz === cz ? value : null;
+  }
+
+  set(cx: int, cz: int, value: T): void {
+    const index = this.index(cx, cz);
+    assert(this.elements[index] === null);
+    this.elements[index] = value;
+  }
+
+  private index(cx: int, cz: int): int {
+    const {mask, shift} = this;
+    return ((cz & mask) << shift) | (cx & mask);
+  }
+};
+
+//////////////////////////////////////////////////////////////////////////////
+
 const kChunkBits = 4;
 const kChunkWidth = 1 << kChunkBits;
 const kChunkMask = kChunkWidth - 1;
@@ -420,58 +512,84 @@ const kNeighborOffsets = ((): [Point, Point, Point, Point][] => {
 class Chunk {
   cx: int;
   cz: int;
-  world: World;
-  active: boolean;
-  enabled: boolean;
-  finished: boolean;
-  requested: boolean;
-  distance: number;
-  private neighbors: int;
-  private dirty: boolean;
-  private solid: Mesh | null;
-  private water: Mesh | null;
-  private voxels: Tensor3 | null;
+  private dirty: boolean = false;
+  private ready: boolean = false;
+  private neighbors: int = 0;
+  private solid: Mesh | null = null;
+  private water: Mesh | null = null;
+  private world: World;
+  private voxels: Tensor3;
 
-  constructor(world: World, cx: int, cz: int) {
+  constructor(cx: int, cz: int, world: World, loader: Loader) {
     this.cx = cx;
     this.cz = cz;
     this.world = world;
-    this.active = false;
-    this.enabled = false;
-    this.finished = false;
-    this.requested = false;
-    this.distance = 0;
-    this.neighbors = kNeighbors;
-    this.dirty = true;
-    this.solid = null;
-    this.water = null;
-    this.voxels = null;
-  }
-
-  disable() {
-    if (!this.enabled) return;
-    this.world.enabled.delete(this);
-
-    if (this.solid) this.solid.dispose();
-    if (this.water) this.water.dispose();
-    this.solid = null;
-    this.water = null;
-
-    this.active = false;
-    this.enabled = false;
-    this.dirty = true;
-  }
-
-  enable() {
-    this.world.enabled.add(this);
-    this.enabled = true;
-    this.active = this.checkActive();
-  }
-
-  load(loader: Loader) {
-    assert(!this.voxels);
     this.voxels = new Tensor3(kChunkWidth, kWorldHeight, kChunkWidth);
+    this.load(loader);
+  }
 
+  dispose() {
+    this.dropMeshes();
+
+    const {cx, cz} = this;
+    const neighbor = (x: int, z: int) => {
+      const chunk = this.world.chunks.get(x + cx, z + cz);
+      if (chunk) chunk.notifyNeighborDisposed();
+    };
+    neighbor(1, 0); neighbor(-1, 0);
+    neighbor(0, 1); neighbor(0, -1);
+  }
+
+  getBlock(x: int, y: int, z: int): BlockId {
+    const voxels = this.voxels;
+    if (!voxels) return kEmptyBlock;
+    const xm = x & kChunkMask, zm = z & kChunkMask;
+    return voxels.get(xm, y, zm) as BlockId;
+  }
+
+  setBlock(x: int, y: int, z: int, block: BlockId) {
+    const voxels = this.voxels;
+    const xm = x & kChunkMask, zm = z & kChunkMask;
+
+    const old = voxels.get(xm, y, zm) as BlockId;
+    if (old === block) return;
+    voxels.set(xm, y, zm, block);
+    this.dirty = true;
+
+    const neighbor = (x: int, y: int, z: int) => {
+      const {cx, cz} = this;
+      const chunk = this.world.chunks.get(x + cx, z + cz);
+      if (chunk) chunk.dirty = true;
+    };
+    if (xm === 0) neighbor(-1, 0, 0);
+    if (xm === kChunkMask) neighbor(1, 0, 0);
+    if (zm === 0) neighbor(0, 0, -1);
+    if (zm === kChunkMask) neighbor(0, 0, 1);
+  }
+
+  setColumn(x: int, z: int, start: int, count: int, block: BlockId) {
+    const voxels = this.voxels;
+    assert(voxels.stride[1] === 1);
+    const sindex = voxels.index(x & kChunkMask, start, z & kChunkMask);
+    voxels.data.fill(block, sindex, sindex + count);
+  }
+
+  hasMesh(): boolean {
+    return !!(this.solid || this.water);
+  }
+
+  needsRemesh(): boolean {
+    return this.dirty && this.ready;
+  }
+
+  remeshChunk() {
+    assert(this.dirty);
+    this.world.frontier.chunkShown(this);
+    this.remeshTerrain();
+    this.dirty = false;
+  }
+
+  private load(loader: Loader) {
     const {cx, cz} = this;
     const dx = cx << kChunkBits;
     const dz = cz << kChunkBits;
@@ -484,88 +602,44 @@ class Chunk {
       }
     }
 
-    this.finish();
-  }
-
-  finish() {
-    assert(!this.finished);
-    this.finished = true;
-
-    const {cx, cz} = this;
     const neighbor = (x: int, z: int) => {
-      const chunk = this.world.getChunk(x + cx, z + cz, false);
-      if (!(chunk && chunk.finished)) return;
-      chunk.notifyNeighborFinished();
-      this.neighbors--;
+      const chunk = this.world.chunks.get(x + cx, z + cz);
+      if (!chunk) return;
+      chunk.notifyNeighborLoaded();
+      this.neighbors++;
     };
     neighbor(1, 0); neighbor(-1, 0);
     neighbor(0, 1); neighbor(0, -1);
 
-    this.active = this.checkActive();
-    this.dirty = !!this.voxels;
-  }
-
-  getBlock(x: int, y: int, z: int): BlockId {
-    const voxels = this.voxels;
-    if (!voxels) return kEmptyBlock;
-    const xm = x & kChunkMask, zm = z & kChunkMask;
-    return voxels.get(xm, y, zm) as BlockId;
-  }
-
-  setBlock(x: int, y: int, z: int, block: BlockId) {
-    const voxels = this.voxels;
-    if (!voxels) return;
-    const xm = x & kChunkMask, zm = z & kChunkMask;
-    if (!this.finished) return voxels.set(xm, y, zm, block);
-
-    const old = voxels.get(xm, y, zm) as BlockId;
-    if (old === block) return;
-    voxels.set(xm, y, zm, block);
     this.dirty = true;
-
-    const neighbor = (x: int, y: int, z: int) => {
-      const {cx, cz} = this;
-      const chunk = this.world.getChunk(x + cx, z + cz, false);
-      if (chunk) chunk.dirty = true;
-    };
-    if (xm === 0) neighbor(-1, 0, 0);
-    if (xm === kChunkMask) neighbor(1, 0, 0);
-    if (zm === 0) neighbor(0, 0, -1);
-    if (zm === kChunkMask) neighbor(0, 0, 1);
+    this.ready = this.checkReady();
   }
 
-  setColumn(x: int, z: int, start: int, count: int, block: BlockId) {
-    const voxels = this.voxels;
-    if (!voxels) throw new Error(`setColumn called pre-load`);;
-    assert(voxels.stride[1] === 1);
-    assert(!this.finished);
-
-    const sindex = voxels.index(x & kChunkMask, start, z & kChunkMask);
-    voxels.data.fill(block, sindex, sindex + count);
+  private checkReady(): boolean {
+    return this.neighbors === kNeighbors;
   }
 
-  hasMesh(): boolean {
-    return !!(this.solid || this.water);
+  private dropMeshes() {
+    this.world.frontier.chunkHidden(this);
+    if (this.solid) this.solid.dispose();
+    if (this.water) this.water.dispose();
+    this.solid = null;
+    this.water = null;
+    this.dirty = true;
   }
 
-  needsRemesh(): boolean {
-    return this.active && this.dirty;
-  }
-
-  remeshChunk() {
-    assert(this.dirty);
-    this.remeshTerrain();
-    this.dirty = false;
-  }
-
-  private checkActive(): boolean {
-    return this.enabled && this.finished && this.neighbors === 0;
-  }
-
-  private notifyNeighborFinished() {
+  private notifyNeighborDisposed() {
     assert(this.neighbors > 0);
     this.neighbors--;
-    this.active = this.checkActive();
+    const old = this.ready;
+    this.ready = this.checkReady();
+    if (old && !this.ready) this.dropMeshes();
+  }
+
+  private notifyNeighborLoaded() {
+    assert(this.neighbors < 4);
+    this.neighbors++;
+    this.ready = this.checkReady();
   }
 
   private remeshTerrain() {
@@ -573,7 +647,7 @@ class Chunk {
     const {bedrock, buffer} = world;
     for (const offset of kNeighborOffsets) {
       const [c, dstPos, srcPos, size] = offset;
-      const chunk = world.getChunk(cx + c[0], cz + c[2], false);
+      const chunk = world.chunks.get(cx + c[0], cz + c[2]);
       chunk && chunk.voxels
         ? this.copyVoxels(buffer, dstPos, chunk.voxels, srcPos, size)
         : this.zeroVoxels(buffer, dstPos, size);
@@ -804,7 +878,7 @@ class Frontier {
         const chunk = this.getFrontierChunk(dx, dz, level - 1);
         return chunk && chunk.mesh.meshed[chunk.mesh.index(chunk)];
       } else {
-        const chunk = this.world.getChunk(dx, dz, false);
+        const chunk = this.world.chunks.get(dx, dz);
         return chunk && chunk.hasMesh();
       }
     };
@@ -962,8 +1036,7 @@ class Frontier {
 };
 
 class World {
-  chunks: Map<int, Chunk>;
-  enabled: Set<Chunk>;
+  chunks: Circle<Chunk>;
   renderer: Renderer;
   registry: Registry;
   frontier: Frontier;
@@ -974,8 +1047,7 @@ class World {
   buffer: Tensor3;
 
   constructor(registry: Registry, renderer: Renderer) {
-    this.chunks = new Map();
-    this.enabled = new Set();
+    this.chunks = new Circle(kChunkRadius + 0.5);
     this.renderer = renderer;
     this.registry = registry;
     this.frontier = new Frontier(this);
@@ -999,25 +1071,15 @@ class World {
     if (y < 0) return this.bedrock;
     if (y >= kWorldHeight) return kEmptyBlock;
     const cx = x >> kChunkBits, cz = z >> kChunkBits;
-    const chunk = this.getChunk(cx, cz, false);
-    return chunk && chunk.finished ? chunk.getBlock(x, y, z) : kUnknownBlock;
+    const chunk = this.chunks.get(cx, cz);
+    return chunk ? chunk.getBlock(x, y, z) : kUnknownBlock;
   }
 
   setBlock(x: int, y: int, z: int, block: BlockId) {
     if (!(0 <= y && y < kWorldHeight)) return;
     const cx = x >> kChunkBits, cz = z >> kChunkBits;
-    const chunk = this.getChunk(cx, cz, false);
-    if (chunk && chunk.active) chunk.setBlock(x, y, z, block);
-  }
-
-  getChunk(cx: int, cz: int, add: boolean): Chunk | null {
-    const key = this.getChunkKey(cx, cz);
-    const result = this.chunks.get(key);
-    if (result) return result;
-    if (!add) return null;
-    const chunk = new Chunk(this, cx, cz);
-    this.chunks.set(key, chunk);
-    return chunk;
+    const chunk = this.chunks.get(cx, cz);
+    if (chunk) chunk.setBlock(x, y, z, block);
   }
 
   getChunkKey(cx: int, cz: int): int {
@@ -1039,73 +1101,32 @@ class World {
   }
 
   recenter(x: number, y: number, z: number) {
-    const dx = (x >> kChunkBits);
-    const dz = (z >> kChunkBits);
+    const {chunks, loadChunk} = this;
+    const cx = (x >> kChunkBits);
+    const cz = (z >> kChunkBits);
+    chunks.center(cx, cz);
 
-    const area = kChunkWidth * kChunkWidth;
-    const base = kChunkRadius * kChunkRadius;
-    const lo = (base + 1) * area;
-    const hi = (base + 9) * area;
-    const limit = kChunkRadius + 1;
-    const frontier = this.frontier;
+    if (!loadChunk) return;
 
-    for (const chunk of this.enabled) {
-      const {cx, cz} = chunk;
-      const ax = Math.abs(cx - dx);
-      const az = Math.abs(cz - dz);
-      if (ax + az <= 1) continue;
-      const disable = ax > limit || az > limit ||
-                      this.distance(cx, cz, x, z) > hi;
-      if (!disable) continue;
-      frontier.chunkHidden(chunk);
-      chunk.disable();
-    }
-
-    const loader = this.loadChunk;
-    if (!loader) return;
-
-    const requests = [];
-    for (let i = dx - kChunkRadius; i <= dx + kChunkRadius; i++) {
-      const ax = Math.abs(i - dx);
-      for (let k = dz - kChunkRadius; k <= dz + kChunkRadius; k++) {
-        const az = Math.abs(k - dz);
-        const distance = this.distance(i, k, x, z);
-        if (ax + az > 1 && distance > lo) continue;
-        const chunk = nonnull(this.getChunk(i, k, true));
-        if (!chunk.requested) requests.push(chunk);
-        chunk.distance = distance;
-        chunk.enable();
-      }
-    }
-
-    const n = kNumChunksToLoadPerFrame;
-    const m = Math.min(requests.length, n);
-    if (requests.length > n) {
-      requests.sort((x, y) => x.distance - y.distance);
-    }
-    for (let i = 0; i < m; i++) {
-      const chunk = requests[i];
-      chunk.requested = true;
-      chunk.load(loader);
-    }
+    let loaded = 0;
+    chunks.each((cx: int, cz: int): boolean => {
+      const existing = chunks.get(cx, cz);
+      if (existing) return false;
+      const chunk = new Chunk(cx, cz, this, loadChunk);
+      chunks.set(cx, cz, chunk);
+      return (++loaded) === kNumChunksToLoadPerFrame;
+    });
   }
 
   remesh() {
-    const queued = [];
-    for (const chunk of this.chunks.values()) {
-      if (chunk.needsRemesh()) queued.push(chunk);
-    }
-    const n = kNumChunksToMeshPerFrame;
-    const m = Math.min(queued.length, kNumChunksToMeshPerFrame);
-    if (queued.length > n) queued.sort((x, y) => x.distance - y.distance);
-
-    const frontier = this.frontier;
-    for (let i = 0; i < m; i++) {
-      const chunk = queued[i];
-      frontier.chunkShown(chunk);
+    const {chunks, frontier} = this;
+    let meshed = 0;
+    chunks.each((cx: int, cz: int): boolean => {
+      const chunk = chunks.get(cx, cz);
+      if (!chunk || !chunk.needsRemesh()) return false;
       chunk.remeshChunk();
-    }
-
+      return (++meshed) === kNumChunksToMeshPerFrame;
+    });
     frontier.remeshFrontier();
   }
 
