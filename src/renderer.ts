@@ -536,19 +536,20 @@ const kBasicShader = `
 
     int dim = int(a_dim);
     v_uvw = vec3(0, 0, a_texture);
+    const float kTextureBuffer = 0.01;
     if (dim == 2) {
       if (index == 1 || index == 2) {
-        v_uvw[0] = -a_dir * a_size[0];
+        v_uvw[0] = -a_dir * (a_size[0] - kTextureBuffer);
       }
       if (index == 0 || index == 1) {
-        v_uvw[1] = a_size[1];
+        v_uvw[1] = a_size[1] - kTextureBuffer;
       }
     } else {
       if (index == 2 || index == 3) {
-        v_uvw[0] = a_dir * a_size[1];
+        v_uvw[0] = a_dir * (a_size[1] - kTextureBuffer);
       }
       if (index == 0 || index == 3) {
-        v_uvw[1] = a_size[0];
+        v_uvw[1] = a_size[0] - kTextureBuffer;
       }
     }
 
