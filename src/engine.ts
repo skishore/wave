@@ -235,14 +235,14 @@ const kTicksPerFrame = 4;
 const kTicksPerSecond = 30;
 
 class Timing {
-  now: any;
-  render: (dt: int, fraction: number) => void;
-  update: (dt: int) => void;
-  renderBinding: () => void;
-  updateDelay: number;
-  updateLimit: number;
-  lastRender: int;
-  lastUpdate: int;
+  private now: any;
+  private render: (dt: int, fraction: number) => void;
+  private update: (dt: int) => void;
+  private renderBinding: () => void;
+  private updateDelay: number;
+  private updateLimit: number;
+  private lastRender: int;
+  private lastUpdate: int;
   renderPerf: Performance;
   updatePerf: Performance;
 
@@ -590,10 +590,10 @@ class Chunk {
   }
 
   private load(loader: Loader) {
-    const {cx, cz} = this;
+    const {cx, cz, world} = this;
+    const column = world.column;
     const dx = cx << kChunkBits;
     const dz = cz << kChunkBits;
-    const column = new Column();
     for (let x = 0; x < kChunkWidth; x++) {
       for (let z = 0; z < kChunkWidth; z++) {
         loader(x + dx, z + dz, column);
@@ -807,7 +807,6 @@ class Frontier {
   private xs: Counters;
   private zs: Counters;
   private world: World;
-  private column: Column;
   private chunks: Map<int, FrontierChunk>;
   private meshes: Map<int, LODMultiMesh>;
   private levels: FrontierLevel[];
@@ -819,7 +818,6 @@ class Frontier {
     this.xs = new Counters();
     this.zs = new Counters();
     this.world = world;
-    this.column = new Column();
     this.chunks = new Map();
     this.meshes = new Map();
 
@@ -933,9 +931,9 @@ class Frontier {
   }
 
   private createLODMeshes(chunk: FrontierChunk): void {
-    const {column, side, world} = this;
+    const {side, world} = this;
     const {cx, cz, level, mesh} = chunk;
-    const {bedrock, loadFrontier, registry} = world;
+    const {bedrock, column, loadFrontier, registry} = world;
     const {solid_heightmap, water_heightmap} = this;
     if (!loadFrontier) return;
 
@@ -1037,6 +1035,7 @@ class Frontier {
 
 class World {
   chunks: Circle<Chunk>;
+  column: Column;
   renderer: Renderer;
   registry: Registry;
   frontier: Frontier;
@@ -1048,6 +1047,7 @@ class World {
 
   constructor(registry: Registry, renderer: Renderer) {
     this.chunks = new Circle(kChunkRadius + 0.5);
+    this.column = new Column();
     this.renderer = renderer;
     this.registry = registry;
     this.frontier = new Frontier(this);
