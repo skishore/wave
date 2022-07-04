@@ -119,7 +119,7 @@ class TerrainMesher {
       old.setGeometry(geo);
       return old;
     }
-    return this.renderer.addBasicMesh(Geometry.clone(geo), solid);
+    return this.renderer.addVoxelMesh(Geometry.clone(geo), solid);
   }
 
   private computeChunkGeometry(

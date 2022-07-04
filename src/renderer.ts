@@ -508,7 +508,7 @@ class Geometry {
 
 //////////////////////////////////////////////////////////////////////////////
 
-const kBasicShader = `
+const kVoxelShader = `
   uniform ivec2 u_mask;
   uniform float u_move;
   uniform float u_wave;
@@ -610,7 +610,7 @@ const kBasicShader = `
   }
 `;
 
-class BasicShader extends Shader {
+class VoxelShader extends Shader {
   u_mask:      WebGLUniformLocation | null;
   u_move:      WebGLUniformLocation | null;
   u_wave:      WebGLUniformLocation | null;
@@ -631,7 +631,7 @@ class BasicShader extends Shader {
   a_indices: number | null;
 
   constructor(gl: WebGL2RenderingContext) {
-    super(gl, kBasicShader);
+    super(gl, kVoxelShader);
     this.u_mask      = this.getUniformLocation('u_mask');
     this.u_move      = this.getUniformLocation('u_move');
     this.u_wave      = this.getUniformLocation('u_wave');
@@ -655,12 +655,12 @@ class BasicShader extends Shader {
 
 const kDefaultMask = new Int32Array(2);
 
-class BasicMesh {
+class VoxelMesh {
   private gl: WebGL2RenderingContext;
-  private shader: BasicShader;
+  private shader: VoxelShader;
   private geo: Geometry;
-  private meshes: BasicMesh[];
-  private hidden_meshes: BasicMesh[];
+  private meshes: VoxelMesh[];
+  private hidden_meshes: VoxelMesh[];
   private vao: WebGLVertexArrayObject | null;
   private quads: WebGLBuffer | null;
   private position: Vec3;
@@ -668,8 +668,8 @@ class BasicMesh {
   private shown: boolean;
   private mask: Int32Array;
 
-  constructor(gl: WebGL2RenderingContext, shader: BasicShader, geo: Geometry,
-              meshes: BasicMesh[], hidden_meshes: BasicMesh[]) {
+  constructor(gl: WebGL2RenderingContext, shader: VoxelShader, geo: Geometry,
+              meshes: VoxelMesh[], hidden_meshes: VoxelMesh[]) {
     const index = meshes.length;
     meshes.push(this);
 
@@ -911,10 +911,10 @@ class Renderer {
   atlas: TextureAtlas;
   private gl: WebGL2RenderingContext;
   private overlay: ScreenOverlay;
-  private shader: BasicShader;
-  private solid_meshes: BasicMesh[];
-  private water_meshes: BasicMesh[];
-  private hidden_meshes: BasicMesh[];
+  private shader: VoxelShader;
+  private solid_meshes: VoxelMesh[];
+  private water_meshes: VoxelMesh[];
+  private hidden_meshes: VoxelMesh[];
 
   constructor(canvas: HTMLCanvasElement) {
     const params = new URLSearchParams(window.location.search);
@@ -941,16 +941,16 @@ class Renderer {
     this.gl = gl;
     this.overlay = new ScreenOverlay(gl);
     this.atlas = new TextureAtlas(gl);
-    this.shader = new BasicShader(gl);
+    this.shader = new VoxelShader(gl);
     this.solid_meshes = [];
     this.water_meshes = [];
     this.hidden_meshes = [];
   }
 
-  addBasicMesh(geo: Geometry, solid: boolean): Mesh {
+  addVoxelMesh(geo: Geometry, solid: boolean): Mesh {
     const {gl, atlas, shader, hidden_meshes} = this;
     const meshes = solid ? this.solid_meshes : this.water_meshes;
-    return new BasicMesh(gl, shader, geo, meshes, hidden_meshes);
+    return new VoxelMesh(gl, shader, geo, meshes, hidden_meshes);
   }
 
   render(move: number, wave: number): string {
