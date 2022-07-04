@@ -1052,12 +1052,15 @@ class World {
 
   remesh() {
     const {chunks, frontier} = this;
-    let meshed = 0;
+    let meshed = 0, total = 0;
     chunks.each((cx: int, cz: int): boolean => {
+      total++;
+      if (total > 9 && meshed >= kNumChunksToMeshPerFrame) return true;
       const chunk = chunks.get(cx, cz);
       if (!chunk || !chunk.needsRemesh()) return false;
       chunk.remeshChunk();
-      return (++meshed) === kNumChunksToMeshPerFrame;
+      meshed++;
+      return false;
     });
     frontier.remeshFrontier();
   }
