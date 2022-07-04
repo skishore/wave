@@ -2,7 +2,7 @@ import {assert, drop, int, nonnull, Color, Tensor3, Vec3} from './base.js';
 import {EntityComponentSystem} from './ecs.js';
 import {Mesh, Renderer, Texture} from './renderer.js';
 import {TerrainMesher} from './mesher.js';
-import {sweep} from './sweep.js';
+import {kSweepResolution, sweep} from './sweep.js';
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -1078,6 +1078,8 @@ class Env {
   private cameraAlpha = 0;
   private cameraBlock = kEmptyBlock;
   private cameraColor = kWhite;
+  private highlight: Mesh | null = null;
+  private highlightPosition: Vec3;
   private shouldMesh = true;
   private timing: Timing;
   private frame: int = 0;
@@ -1088,10 +1090,15 @@ class Env {
     this.registry = new Registry();
     this.renderer = new Renderer(this.container.canvas);
     this.world = new World(this.registry, this.renderer);
+    this.highlightPosition = Vec3.create();
     this.timing = new Timing(this.render.bind(this), this.update.bind(this));
   }
 
-  refresh() {
+  getTargetedBlock(): Vec3 | null {
+    return this.highlight ? this.highlightPosition : null;
+  }
+
+  refresh(): void {
     const saved = this.container.inputs.pointer;
     this.container.inputs.pointer = true;
     this.update(0);
@@ -1099,7 +1106,7 @@ class Env {
     this.container.inputs.pointer = saved;
   }
 
-  render(dt: int) {
+  render(dt: int): void {
     if (!this.container.inputs.pointer) return;
 
     this.frame += 1;
@@ -1116,6 +1123,7 @@ class Env {
 
     this.entities.render(dt);
     this.setSafeZoomDistance();
+    this.updateHighlightMesh();
     this.updateOverlayColor(wave);
     const renderer_stats = this.renderer.render(move, wave);
     this.shouldMesh = true;
@@ -1128,7 +1136,7 @@ class Env {
     this.container.displayStats(stats);
   }
 
-  update(dt: int) {
+  update(dt: int): void {
     if (!this.container.inputs.pointer) return;
     this.entities.update(dt);
 
@@ -1167,6 +1175,44 @@ class Env {
     Vec3.scale(kTmpDelta, kTmpDelta, 0.5);
     Vec3.sub(kTmpDelta, kTmpDelta, target);
     camera.setSafeZoomDistance(Vec3.length(kTmpDelta));
+  }
+
+  private updateHighlightMesh(): void {
+    const camera = this.renderer.camera;
+    const {direction, target, zoom} = camera;
+
+    let remesh = false;
+    let shown = false;
+
+    const check = (pos: Vec3) => {
+      const block = this.world.getBlock(pos[0], pos[1], pos[2]);
+      if (!this.registry.solid[block]) return true;
+      remesh = pos[0] !== this.highlightPosition[0] ||
+               pos[1] !== this.highlightPosition[1] ||
+               pos[2] !== this.highlightPosition[2] ||
+               this.highlight === null;
+      shown = true;
+      Vec3.copy(this.highlightPosition, pos);
+      return false;
+    };
+
+    const buffer = 1 / kSweepResolution;
+    const x = ((target[0] * kSweepResolution) | 0) / kSweepResolution;
+    const y = ((target[1] * kSweepResolution) | 0) / kSweepResolution;
+    const z = ((target[2] * kSweepResolution) | 0) / kSweepResolution;
+
+    Vec3.set(kTmpMin, x - buffer, y - buffer, z - buffer);
+    Vec3.set(kTmpMax, x + buffer, y + buffer, z + buffer);
+    Vec3.scale(kTmpDelta, direction, 10);
+    sweep(kTmpMin, kTmpMax, kTmpDelta, kTmpImpacts, check, true);
+
+    if (this.highlight && !shown) {
+      this.highlight.dispose();
+      this.highlight = null;
+    } else if (remesh) {
+      const pos = this.highlightPosition;
+      this.highlight = this.world.mesher.meshHighlight(pos, this.highlight);
+    }
   }
 
   private updateOverlayColor(wave: int): void {

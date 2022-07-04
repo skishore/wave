@@ -96,4 +96,4 @@ const sweep = (min: Vec3, max: Vec3, delta: Vec3, impacts: Vec3,
 
 //////////////////////////////////////////////////////////////////////////////
 
-export {sweep};
+export {kSweepResolution, sweep};
