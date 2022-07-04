@@ -6,7 +6,8 @@ import {kSweepResolution, sweep} from './sweep.js';
 
 //////////////////////////////////////////////////////////////////////////////
 
-type Input = 'up' | 'left' | 'down' | 'right' | 'hover' | 'space' | 'pointer';
+type Input = 'up' | 'left' | 'down' | 'right' | 'hover' |
+             'mouse0' | 'mouse1' | 'space' | 'pointer';
 
 class Container {
   element: Element;
@@ -27,6 +28,8 @@ class Container {
       right: false,
       hover: false,
       space: false,
+      mouse0: false,
+      mouse1: false,
       pointer: false,
     };
     this.deltas = {x: 0, y: 0, scroll: 0};
@@ -43,6 +46,7 @@ class Container {
     element.addEventListener('click', () => element.requestPointerLock());
     document.addEventListener('keydown', e => this.onKeyInput(e, true));
     document.addEventListener('keyup', e => this.onKeyInput(e, false));
+    document.addEventListener('mousedown', e => this.onMouseDown(e));
     document.addEventListener('mousemove', e => this.onMouseMove(e));
     document.addEventListener('touchmove', e => this.onMouseMove(e));
     document.addEventListener('pointerlockchange', e => this.onPointerInput(e));
@@ -55,14 +59,21 @@ class Container {
 
   onKeyInput(e: Event, down: boolean) {
     if (!this.inputs.pointer) return;
-    const input = this.bindings.get((e as any).keyCode);
+    const input = this.bindings.get((e as KeyboardEvent).keyCode);
     if (input) this.onInput(e, input, down);
+  }
+
+  onMouseDown(e: Event) {
+    if (!this.inputs.pointer) return;
+    const button = (e as MouseEvent).button;
+    if (button === 0) this.inputs.mouse0 = true;
+    if (button !== 0) this.inputs.mouse1 = true;
   }
 
   onMouseMove(e: Event) {
     if (!this.inputs.pointer) return;
-    this.deltas.x += (e as any).movementX;
-    this.deltas.y += (e as any).movementY;
+    this.deltas.x += (e as MouseEvent).movementX;
+    this.deltas.y += (e as MouseEvent).movementY;
   }
 
   onMouseWheel(e: Event) {
@@ -1079,6 +1090,7 @@ class Env {
   private cameraBlock = kEmptyBlock;
   private cameraColor = kWhite;
   private highlight: Mesh | null = null;
+  private highlightSide: int = 0;
   private highlightPosition: Vec3;
   private shouldMesh = true;
   private timing: Timing;
@@ -1096,6 +1108,10 @@ class Env {
 
   getTargetedBlock(): Vec3 | null {
     return this.highlight ? this.highlightPosition : null;
+  }
+
+  getTargetedBlockSide(): int {
+    return this.highlightSide;
   }
 
   refresh(): void {
@@ -1205,6 +1221,13 @@ class Env {
     Vec3.set(kTmpMax, x + buffer, y + buffer, z + buffer);
     Vec3.scale(kTmpDelta, direction, 10);
     sweep(kTmpMin, kTmpMax, kTmpDelta, kTmpImpacts, check, true);
+
+    for (let i = 0; i < 3; i++) {
+      const impact = kTmpImpacts[i];
+      if (impact === 0) continue;
+      this.highlightSide = 2 * i + (impact < 0 ? 0 : 1);
+      break;
+    }
 
     if (this.highlight && !shown) {
       this.highlight.dispose();

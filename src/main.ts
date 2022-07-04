@@ -9,6 +9,7 @@ import {sweep} from './sweep.js';
 // The game code:
 
 class TypedEnv extends Env {
+  addedBlock: BlockId = kEmptyBlock;
   position: ComponentStore<PositionState>;
   movement: ComponentStore<MovementState>;
   physics: ComponentStore<PhysicsState>;
@@ -289,6 +290,21 @@ const handleRunning =
   Vec3.add(body.forces, body.forces, kTmpPush);
 };
 
+const tryToModifyBlock =
+    (env: TypedEnv, body: PhysicsState, remove: boolean) => {
+  const target = env.getTargetedBlock();
+  if (target === null) return;
+
+  Vec3.copy(kTmpPos, target);
+  if (!remove) {
+    const side = env.getTargetedBlockSide();
+    kTmpPos[side >> 1] += (side & 1) ? -1 : 1;
+  }
+  const block = remove ? kEmptyBlock : env.addedBlock;
+  // TODO(skishore): When adding a block, check for a collision with body.
+  env.world.setBlock(kTmpPos[0], kTmpPos[1], kTmpPos[2], block);
+};
+
 const runMovement = (env: TypedEnv, dt: int, state: MovementState) => {
   dt = dt / 1000;
 
@@ -331,6 +347,13 @@ const runMovement = (env: TypedEnv, dt: int, state: MovementState) => {
     body.friction = state.runningFriction;
   } else {
     body.friction = state.standingFriction;
+  }
+
+  // Turn mouse inputs into actions.
+  if (inputs.mouse0 || inputs.mouse1) {
+    tryToModifyBlock(env, body, inputs.mouse0);
+    inputs.mouse0 = false;
+    inputs.mouse1 = false;
   }
 };
 
@@ -453,6 +476,8 @@ const main = () => {
   const water = registry.addBlock(['water', 'blue', 'blue'], false);
   const trunk = registry.addBlock(['trunk', 'trunk-side'], true);
   const leaves = registry.addBlock(['leaves'], true);
+
+  env.addedBlock = dirt;
 
   // Composite noise functions.
 
