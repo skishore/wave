@@ -541,40 +541,24 @@ const kVoxelShader = `
     v_color = vec4(ao * vec3(a_color), a_color[3]);
 
     int dim = int(a_dim);
+    float w = float(((index + 1) & 3) >> 1);
+    float h = float(((index + 0) & 3) >> 1);
+
     v_uvw = vec3(0, 0, a_texture);
     const float kTextureBuffer = 0.01;
     if (dim == 2) {
-      if (index == 1 || index == 2) {
-        v_uvw[0] = -a_dir * (a_size[0] - kTextureBuffer);
-      }
-      if (index == 0 || index == 1) {
-        v_uvw[1] = a_size[1] - kTextureBuffer;
-      }
+      v_uvw[0] = (a_size[0] - kTextureBuffer) * w * -a_dir;
+      v_uvw[1] = (a_size[1] - kTextureBuffer) * (1.0 - h);
     } else {
-      if (index == 2 || index == 3) {
-        v_uvw[0] = a_dir * (a_size[1] - kTextureBuffer);
-      }
-      if (index == 0 || index == 3) {
-        v_uvw[1] = a_size[0] - kTextureBuffer;
-      }
+      v_uvw[0] = (a_size[1] - kTextureBuffer) * h * a_dir;
+      v_uvw[1] = (a_size[0] - kTextureBuffer) * (1.0 - w);
     }
 
     v_move = a_wave * u_move;
 
-    const vec3 kShift[6] = vec3[6](
-      vec3(1, 0, 0),
-      vec3(0, 1, 0),
-      vec3(0, 0, 1),
-      vec3(1, 0, 0),
-      vec3(0, 1, 0),
-      vec3(0, 0, 1)
-    );
-    float w = float(((index + 1) & 3) >> 1);
-    float h = float(((index + 0) & 3) >> 1);
-
     vec3 pos = a_pos;
-    pos += w * a_size[0] * kShift[dim + 1];
-    pos += h * a_size[1] * kShift[dim + 2];
+    pos[(dim + 1) % 3] += w * a_size[0];
+    pos[(dim + 2) % 3] += h * a_size[1];
     pos -= vec3(0, a_wave * u_wave, 0);
     gl_Position = u_transform * vec4(pos, 1.0);
 
