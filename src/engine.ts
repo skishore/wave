@@ -2,6 +2,7 @@ import {assert, drop, int, nonnull, Color, Tensor3, Vec3} from './base.js';
 import {EntityComponentSystem} from './ecs.js';
 import {Mesh, Renderer, Texture} from './renderer.js';
 import {TerrainMesher} from './mesher.js';
+import {sweep} from './sweep.js';
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -1060,6 +1061,14 @@ class World {
 
 //////////////////////////////////////////////////////////////////////////////
 
+const kTmpMin     = Vec3.create();
+const kTmpMax     = Vec3.create();
+const kTmpDelta   = Vec3.create();
+const kTmpImpacts = Vec3.create();
+
+const kMinZLowerBound = 0.001;
+const kMinZUpperBound = 0.1;
+
 class Env {
   container: Container;
   entities: EntityComponentSystem;
@@ -1106,6 +1115,7 @@ class Env {
     deltas.x = deltas.y = deltas.scroll = 0;
 
     this.entities.render(dt);
+    this.setSafeZoomDistance();
     this.updateOverlayColor(wave);
     const renderer_stats = this.renderer.render(move, wave);
     this.shouldMesh = true;
@@ -1137,7 +1147,29 @@ class Env {
     return result === kUnknownBlock ? kEmptyBlock : result;
   }
 
-  private updateOverlayColor(wave: int) {
+  private setSafeZoomDistance(): void {
+    const camera = this.renderer.camera;
+    const {direction, target, zoom} = camera;
+
+    const check = (pos: Vec3) => {
+      const block = this.world.getBlock(pos[0], pos[1], pos[2]);
+      return !this.registry.solid[block];
+    };
+
+    const [x, y, z] = target;
+    const buffer = kMinZUpperBound;
+    Vec3.set(kTmpMin, x - buffer, y - buffer, z - buffer);
+    Vec3.set(kTmpMax, x + buffer, y + buffer, z + buffer);
+    Vec3.scale(kTmpDelta, direction, -zoom);
+    sweep(kTmpMin, kTmpMax, kTmpDelta, kTmpImpacts, check, true);
+
+    Vec3.add(kTmpDelta, kTmpMin, kTmpMax);
+    Vec3.scale(kTmpDelta, kTmpDelta, 0.5);
+    Vec3.sub(kTmpDelta, kTmpDelta, target);
+    camera.setSafeZoomDistance(Vec3.length(kTmpDelta));
+  }
+
+  private updateOverlayColor(wave: int): void {
     const [x, y, z] = this.renderer.camera.position;
     const xi = Math.floor(x), zi = Math.floor(z);
     const yi = Math.floor(y + wave);
@@ -1147,9 +1179,11 @@ class Env {
     const new_block = this.getRenderBlock(xi, yi, zi);
     this.cameraBlock = new_block;
 
-    const focus = new_block === kEmptyBlock && yf < 0.2 &&
+    const max = kMinZUpperBound;
+    const min = kMinZLowerBound;
+    const focus = new_block === kEmptyBlock && yf < 2 * max &&
                   this.getRenderBlock(xi, yi - 1, zi) !== kEmptyBlock;
-    this.renderer.camera.setMinZ(focus ? Math.max(yf / 2, 0.001) : 0.1);
+    this.renderer.camera.setMinZ(focus ? Math.max(yf / 2, min) : max);
 
     if (new_block === kEmptyBlock) {
       const changed = new_block !== old_block;

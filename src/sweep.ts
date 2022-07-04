@@ -12,7 +12,8 @@ const kSpeeds = [0, 0, 0, 0];
 const kDistances = [0, 0, 0, kSweepResolution];
 const kVoxel = Vec3.create();
 
-const sweep = (min: Vec3, max: Vec3, delta: Vec3, impacts: Vec3, check: Check) => {
+const sweep = (min: Vec3, max: Vec3, delta: Vec3, impacts: Vec3,
+               check: Check, stop_on_impact: boolean = false) => {
   for (let i = 0; i < 3; i++) {
     min[i] = (min[i] * kSweepResolution) | 0;
     max[i] = (max[i] * kSweepResolution) | 0;
@@ -82,6 +83,8 @@ const sweep = (min: Vec3, max: Vec3, delta: Vec3, impacts: Vec3, check: Check) =
           done = true;
         }
       }
+
+      if (done && stop_on_impact) break;
     }
   }
 

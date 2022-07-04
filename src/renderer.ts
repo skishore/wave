@@ -20,6 +20,7 @@ class Camera {
   zoom: number;
   direction: Vec3;
   position: Vec3;
+  target: Vec3;
 
   // Used to smooth out mouse inputs.
   private last_dx: number;
@@ -43,6 +44,7 @@ class Camera {
     this.zoom = 0;
     this.direction = Vec3.from(0, 0, 1);
     this.position = Vec3.create();
+    this.target = Vec3.create();
 
     this.last_dx = 0;
     this.last_dy = 0;
@@ -140,9 +142,13 @@ class Camera {
     this.minZ = minZ;
   }
 
+  setSafeZoomDistance(zoom: number) {
+    zoom = Math.max(Math.min(zoom, this.zoom), 0);
+    Vec3.scaleAndAdd(this.position, this.target, this.direction, -zoom);
+  }
+
   setTarget(x: number, y: number, z: number) {
-    Vec3.set(this.position, x, y, z);
-    Vec3.scaleAndAdd(this.position, this.position, this.direction, -this.zoom);
+    Vec3.set(this.target, x, y, z);
   }
 };
 
