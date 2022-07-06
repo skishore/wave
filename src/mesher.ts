@@ -1,4 +1,4 @@
-import {assert, int, Color, Tensor3, Vec3} from './base.js';
+import {assert, int, nonnull, Color, Tensor3, Vec3} from './base.js';
 import {Geometry, Mesh, Renderer, Texture} from './renderer.js';
 
 //////////////////////////////////////////////////////////////////////////////
@@ -117,25 +117,32 @@ class TerrainMesher {
     return this.buildMesh(geo, old, solid);
   }
 
-  meshHighlight(pos: Vec3, old: Mesh | null): Mesh | null {
-    const geo = old ? old.getGeometry() : kCachedGeometryA;
+  meshHighlight(): Mesh {
+    const geo = kCachedGeometryA;
     geo.clear();
 
     const forwards = 1 << 8
     const backward = -forwards;
     const epsilon = 1 / 256;
     const w = 1 + 2 * epsilon;
+    const pos = -epsilon;
 
-    Vec3.set(kTmpPos, pos[0] - epsilon, pos[1] - epsilon, pos[2] - epsilon);
+    Vec3.set(kTmpPos, pos, pos, pos);
 
     for (let d = 0; d < 3; d++) {
       const u = (d + 1) % 3, v = (d + 2) % 3;
+      kTmpPos[d] = pos + w;
       this.addQuad(geo, kHighlightMaterial, d, u, v, w, w, forwards, kTmpPos);
-      kTmpPos[d] += w;
+      kTmpPos[d] = pos;
       this.addQuad(geo, kHighlightMaterial, d, u, v, w, w, backward, kTmpPos);
-      kTmpPos[d] = pos[d] - epsilon;
     }
-    return this.buildMesh(geo, old, false);
+
+    assert(geo.num_quads === 6);
+    const {OffsetMask, Stride} = Geometry;
+    for (let i = 0; i < 6; i++) {
+      geo.quads[i * Stride + OffsetMask] = i;
+    }
+    return nonnull(this.buildMesh(geo, null, false));
   }
 
   private buildMesh(
