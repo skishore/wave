@@ -559,7 +559,7 @@ const kVoxelShader = `
     vec3 pos = a_pos;
     pos[(dim + 1) % 3] += w * a_size[0];
     pos[(dim + 2) % 3] += h * a_size[1];
-    pos -= vec3(0, a_wave * u_wave, 0);
+    pos[1] -= a_wave * u_wave;
     gl_Position = u_transform * vec4(pos, 1.0);
 
     int mask = int(a_mask);
@@ -956,9 +956,15 @@ class Renderer {
     let drawn = 0;
     const camera = this.camera;
     const planes = camera.getCullingPlanes();
+
+    // Opaque and alpha-tested voxel meshes.
+    gl.disable(gl.BLEND);
     for (const mesh of this.solid_meshes) {
       if (mesh.draw(camera, planes)) drawn++;
     }
+    gl.enable(gl.BLEND);
+
+    // Alpha-blended voxel meshes. (Should we sort them?)
     gl.depthMask(false);
     gl.disable(gl.CULL_FACE);
     gl.uniform1i(this.shader.u_alphaTest, 0);
@@ -967,6 +973,7 @@ class Renderer {
     }
     gl.enable(gl.CULL_FACE);
     gl.depthMask(true);
+
     this.overlay.draw();
 
     const total = this.solid_meshes.length + this.water_meshes.length;
