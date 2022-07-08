@@ -508,6 +508,83 @@ class Geometry {
 
 //////////////////////////////////////////////////////////////////////////////
 
+class Buffer {
+  freeList: Buffer[];
+  buffer: WebGLBuffer;
+  length: int;
+  usage: int = 0;
+
+  constructor(gl: WebGL2RenderingContext, length: int, freeList: Buffer[]) {
+    const buffer = nonnull(gl.createBuffer());
+    gl.bindBuffer(ARRAY_BUFFER, buffer);
+    gl.bufferData(ARRAY_BUFFER, length, gl.STATIC_DRAW);
+
+    this.freeList = freeList;
+    this.buffer = buffer;
+    this.length = length;
+  }
+};
+
+class BufferAllocator {
+  private freeLists: Buffer[][];
+  private bytes_total: int = 0;
+  private bytes_alloc: int = 0;
+  private bytes_usage: int = 0;
+
+  constructor() {
+    this.freeLists = new Array(32).fill(null).map(() => []);
+  }
+
+  alloc(gl: WebGL2RenderingContext, data: Float32Array): Buffer {
+    const bytes = 4 * data.length;
+    const sizeClass = this.sizeClass(bytes);
+    const freeList = this.freeLists[sizeClass];
+    const length = 1 << sizeClass;
+
+    let buffer = freeList.pop();
+    if (buffer) {
+      gl.bindBuffer(ARRAY_BUFFER, buffer.buffer);
+    } else {
+      buffer = new Buffer(gl, length, freeList);
+      this.bytes_total += length;
+    }
+
+    buffer.usage = bytes;
+    gl.bufferSubData(ARRAY_BUFFER, 0, data, 0, data.length);
+    this.bytes_alloc += buffer.length;
+    this.bytes_usage += buffer.usage;
+    return buffer;
+  }
+
+  free(buffer: Buffer): void {
+    buffer.freeList.push(buffer);
+    this.bytes_alloc -= buffer.length;
+    this.bytes_usage -= buffer.usage;
+  }
+
+  stats(): string {
+    const {bytes_usage, bytes_alloc, bytes_total} = this;
+    const usage = this.formatSize(bytes_usage);
+    const alloc = this.formatSize(bytes_alloc);
+    const total = this.formatSize(bytes_total);
+    return `VRAM: ${usage} / ${alloc} / ${total}Mb`;
+  }
+
+  private formatSize(bytes: int): string {
+    return `${(bytes / (1024 * 1024)).toFixed(2)}`;
+  }
+
+  private sizeClass(bytes: int): int {
+    const result = 32 - Math.clz32(bytes - 1);
+    assert((1 << result) >= bytes);
+    return result;
+  }
+};
+
+const kAllocator = new BufferAllocator();
+
+//////////////////////////////////////////////////////////////////////////////
+
 const kVoxelShader = `
   uniform ivec2 u_mask;
   uniform float u_move;
@@ -646,7 +723,7 @@ class VoxelMesh {
   private meshes: VoxelMesh[];
   private hidden_meshes: VoxelMesh[];
   private vao: WebGLVertexArrayObject | null;
-  private quads: WebGLBuffer | null;
+  private quads: Buffer | null;
   private position: Vec3;
   private index: int;
   private shown: boolean;
@@ -718,9 +795,10 @@ class VoxelMesh {
   }
 
   private destroyBuffers() {
-    const gl = this.gl;
+    const {gl, quads} = this;
+    const n = this.geo.num_quads * Geometry.Stride;
     gl.deleteVertexArray(this.vao);
-    gl.deleteBuffer(this.quads);
+    if (quads) kAllocator.free(quads);
     this.vao = null;
     this.quads = null;
   }
@@ -755,11 +833,9 @@ class VoxelMesh {
   }
 
   private prepareQuads(data: Float32Array) {
-    const gl = this.gl;
-    const buffer = nonnull(gl.createBuffer());
-    gl.bindBuffer(ARRAY_BUFFER, buffer);
-    gl.bufferData(ARRAY_BUFFER, data, gl.STATIC_DRAW);
-    this.quads = buffer;
+    const n = this.geo.num_quads * Geometry.Stride;
+    const subarray = data.length > n ? data.subarray(0, n) : data;
+    this.quads = kAllocator.alloc(this.gl, subarray);
   }
 
   private removeFromMeshes() {
@@ -932,6 +1008,7 @@ class Renderer {
   }
 
   addVoxelMesh(geo: Geometry, solid: boolean): Mesh {
+    assert(geo.num_quads > 0);
     const {gl, atlas, shader, hidden_meshes} = this;
     const meshes = solid ? this.solid_meshes : this.water_meshes;
     return new VoxelMesh(gl, shader, geo, meshes, hidden_meshes);
@@ -977,7 +1054,7 @@ class Renderer {
     this.overlay.draw();
 
     const total = this.solid_meshes.length + this.water_meshes.length;
-    return `Draw calls: ${drawn} / ${total}`;
+    return `${kAllocator.stats()}\r\nDraw calls: ${drawn} / ${total}`;
   }
 
   setOverlayColor(color: Color) {
