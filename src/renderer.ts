@@ -381,6 +381,85 @@ class TextureAtlas {
 
 //////////////////////////////////////////////////////////////////////////////
 
+interface Sprite {
+  url: string,
+  x: int,
+  y: int,
+};
+
+class SpriteAtlas {
+  private gl: WebGL2RenderingContext;
+  private canvas: CanvasRenderingContext2D | null;
+  private sprites: Map<string, WebGLTexture>;
+
+  constructor(gl: WebGL2RenderingContext) {
+    this.gl = gl;
+    this.canvas = null;
+    this.sprites = new Map();
+  }
+
+  addSprite(sprite: Sprite): WebGLTexture {
+    const url = sprite.url;
+    const existing = this.sprites.get(url);
+    if (existing) return existing;
+
+    const created = nonnull(this.gl.createTexture());
+    this.sprites.set(url, created);
+
+    const image = new Image();
+    image.src = url;
+    image.addEventListener('load', () => this.loaded(sprite, image, created));
+    return created;
+  }
+
+  private loaded(
+      sprite: Sprite, image: HTMLImageElement, texture: WebGLTexture): void {
+    assert(image.complete);
+    const {x, y} = sprite;
+
+    const w = image.width;
+    const h = image.height;
+    if (w % x !== 0 || h % y !== 0) {
+      throw new Error(`({w} x ${h}) image cannot fit (${x} x ${y}) frames.`);
+    }
+    const cols = w / x, rows = h / y;
+    const frames = cols * rows;
+
+    if (this.canvas === null) {
+      const element = document.createElement('canvas');
+      const canvas = nonnull(element.getContext('2d'));
+      this.canvas = canvas;
+    }
+
+    const canvas = this.canvas;
+    canvas.canvas.width = x;
+    canvas.canvas.height = y * frames;
+
+    const length = w * h * 4;
+    canvas.clearRect(0, 0, x, y * frames);
+    for (let i = 0; i < frames; i++) {
+      const sx = x * (i % cols);
+      const sy = y * Math.floor(i / cols);
+      canvas.drawImage(image, sx, sy, x, y, 0, y * i, x, y);
+    }
+    const pixels = canvas.getImageData(0, 0, x, y * frames).data;
+    assert(pixels.length === length);
+
+    const gl = this.gl;
+    gl.bindTexture(TEXTURE_2D_ARRAY, texture);
+    gl.texImage3D(TEXTURE_2D_ARRAY, 0, gl.RGBA, x, y, frames, 0,
+                  gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+
+    const id = TEXTURE_2D_ARRAY;
+    gl.texParameteri(id, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(id, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(id, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(id, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  }
+};
+
+//////////////////////////////////////////////////////////////////////////////
+
 class Geometry {
   // position: vec3
   static OffsetPos: int = 0;
@@ -747,6 +826,12 @@ class VoxelMesh {
     this.mask = kDefaultMask;
   }
 
+  dispose(): void {
+    this.destroyBuffers();
+    this.removeFromMeshes();
+    this.mask = kDefaultMask;
+  }
+
   draw(camera: Camera, planes: CullingPlane[]): boolean {
     const position = this.position;
     Vec3.sub(kTmpDelta, position, camera.position);
@@ -762,12 +847,6 @@ class VoxelMesh {
     gl.uniformMatrix4fv(this.shader.u_transform, false, transform);
     gl.drawArraysInstanced(gl.TRIANGLES, 0, 3, n * 2);
     return true;
-  }
-
-  dispose(): void {
-    this.destroyBuffers();
-    this.removeFromMeshes();
-    this.mask = kDefaultMask;
   }
 
   getGeometry(): Geometry {
@@ -840,6 +919,137 @@ class VoxelMesh {
 
   private removeFromMeshes() {
     const meshes = this.shown ? this.meshes : this.hidden_meshes;
+    assert(this === meshes[this.index]);
+    const last = meshes.length - 1;
+    if (this.index !== last) {
+      const swap = meshes[last];
+      meshes[this.index] = swap;
+      swap.index = this.index;
+    }
+    meshes.pop();
+  }
+};
+
+//////////////////////////////////////////////////////////////////////////////
+
+const kSpriteShader = `
+  uniform float u_size;
+  uniform vec2 u_billboard;
+  uniform mat4 u_transform;
+  out vec2 v_uv;
+
+  void main() {
+    int index = gl_VertexID + (gl_VertexID > 0 ? gl_InstanceID : 0);
+
+    float w = float(((index + 1) & 3) >> 1);
+    float h = float(((index + 0) & 3) >> 1);
+    v_uv = vec2(w, 1.0 - h);
+
+    float x = u_size * (w - 0.5);
+    vec4 pos = vec4(x * u_billboard[0], u_size * h, x * u_billboard[1], 1);
+    gl_Position = u_transform * pos;
+  }
+#split
+  precision highp float;
+  precision highp sampler2DArray;
+
+  uniform float u_frame;
+  uniform sampler2DArray u_texture;
+  in vec2 v_uv;
+  out vec4 o_color;
+
+  void main() {
+    o_color = texture(u_texture, vec3(v_uv, u_frame));
+    if (o_color[3] < 0.5) discard;
+    o_color[3] = 1.0;
+  }
+`;
+
+class SpriteShader extends Shader {
+  u_size:      WebGLUniformLocation | null;
+  u_billboard: WebGLUniformLocation | null;
+  u_transform: WebGLUniformLocation | null;
+  u_frame:     WebGLUniformLocation | null;
+
+  constructor(gl: WebGL2RenderingContext) {
+    super(gl, kSpriteShader);
+    this.u_size      = this.getUniformLocation('u_size');
+    this.u_billboard = this.getUniformLocation('u_billboard');
+    this.u_transform = this.getUniformLocation('u_transform');
+    this.u_frame     = this.getUniformLocation('u_frame');
+  }
+};
+
+class SpriteMesh {
+  private gl: WebGL2RenderingContext;
+  private texture: WebGLTexture;
+  private shader: SpriteShader;
+  private meshes: SpriteMesh[];
+  private position: Vec3;
+  private size: number;
+  private frame: int;
+  private index: int;
+
+  constructor(gl: WebGL2RenderingContext, shader: SpriteShader,
+              meshes: SpriteMesh[], size: number, texture: WebGLTexture) {
+    const index = meshes.length;
+    meshes.push(this);
+
+    this.gl = gl;
+    this.texture = texture;
+    this.shader = shader;
+    this.meshes = meshes;
+    this.position = Vec3.create();
+    this.size = size;
+    this.frame = 0;
+    this.index = 0;
+  }
+
+  dispose() {
+    this.removeFromMeshes();
+  }
+
+  draw(camera: Camera, planes: CullingPlane[]): boolean {
+    const position = this.position;
+    Vec3.sub(kTmpDelta, position, camera.position);
+    if (this.cull(kTmpDelta, planes)) return false;
+
+    const transform = camera.getTransformFor(position);
+
+    const {gl, shader} = this;
+    gl.bindTexture(TEXTURE_2D_ARRAY, this.texture);
+    gl.uniform1f(shader.u_size, this.size);
+    gl.uniform1f(shader.u_frame, this.frame);
+    gl.uniformMatrix4fv(shader.u_transform, false, transform);
+    gl.drawArraysInstanced(gl.TRIANGLES, 0, 3, 2);
+    return true;
+  }
+
+  setFrame(frame: int): void {
+    this.frame = frame;
+  }
+
+  setPosition(x: int, y: int, z: int): void {
+    Vec3.set(this.position, x, y, z);
+  }
+
+  private cull(delta: Vec3, planes: CullingPlane[]) {
+    const size = this.size;
+    const half_size = 0.5 * size;
+    const dx = delta[0], dy = delta[1], dz = delta[2];
+    for (const plane of planes) {
+      const {x, y, z, index} = plane;
+      const bx = (index & 1) ? half_size : -half_size;
+      const by = (index & 2) ? half_size : -half_size;
+      const bz = (index & 4) ? size : 0;
+      const value = (bx + dx) * x + (by + dy) * y + (bz + dz) * z;
+      if (value < 0) return true;
+    }
+    return false;
+  }
+
+  private removeFromMeshes() {
+    const meshes = this.meshes;
     assert(this === meshes[this.index]);
     const last = meshes.length - 1;
     if (this.index !== last) {
@@ -958,20 +1168,31 @@ class ScreenOverlay {
 
 //////////////////////////////////////////////////////////////////////////////
 
-interface Mesh {
+interface IMesh {
   dispose: () => void,
+  setPosition: (x: number, y: number, z: number) => void,
+};
+
+interface ISpriteMesh extends IMesh {
+  setFrame: (frame: int) => void,
+};
+
+interface IVoxelMesh extends IMesh {
   getGeometry: () => Geometry,
   setGeometry: (geo: Geometry) => void,
-  setPosition: (x: number, y: number, z: number) => void,
   show: (mask: Int32Array, shown: boolean) => void,
 };
 
 class Renderer {
   camera: Camera;
   atlas: TextureAtlas;
+  sprite_atlas: SpriteAtlas;
   private gl: WebGL2RenderingContext;
   private overlay: ScreenOverlay;
-  private shader: VoxelShader;
+  private sprite_shader: SpriteShader;
+  private voxels_shader: VoxelShader;
+  private sprite_billboard: Float32Array;
+  private sprites: SpriteMesh[];
   private solid_meshes: VoxelMesh[];
   private water_meshes: VoxelMesh[];
   private hidden_meshes: VoxelMesh[];
@@ -995,23 +1216,33 @@ class Renderer {
     gl.depthFunc(gl.LEQUAL);
     gl.enable(gl.CULL_FACE);
     gl.cullFace(gl.BACK);
-    gl.enable(gl.BLEND);
+    gl.disable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
     this.gl = gl;
     this.overlay = new ScreenOverlay(gl);
     this.atlas = new TextureAtlas(gl);
-    this.shader = new VoxelShader(gl);
+    this.sprite_atlas = new SpriteAtlas(gl);
+    this.sprite_shader = new SpriteShader(gl);
+    this.voxels_shader = new VoxelShader(gl);
+    this.sprite_billboard = new Float32Array(2);
+
+    this.sprites = [];
     this.solid_meshes = [];
     this.water_meshes = [];
     this.hidden_meshes = [];
   }
 
-  addVoxelMesh(geo: Geometry, solid: boolean): Mesh {
+  addSpriteMesh(size: number, texture: WebGLTexture): ISpriteMesh {
+    const {gl, sprite_shader, sprites} = this;
+    return new SpriteMesh(gl, sprite_shader, sprites, size, texture);
+  }
+
+  addVoxelMesh(geo: Geometry, solid: boolean): IVoxelMesh {
     assert(geo.num_quads > 0);
-    const {gl, atlas, shader, hidden_meshes} = this;
+    const {gl, atlas, voxels_shader, hidden_meshes} = this;
     const meshes = solid ? this.solid_meshes : this.water_meshes;
-    return new VoxelMesh(gl, shader, geo, meshes, hidden_meshes);
+    return new VoxelMesh(gl, voxels_shader, geo, meshes, hidden_meshes);
   }
 
   render(move: number, wave: number): string {
@@ -1020,40 +1251,51 @@ class Renderer {
     gl.clearColor(r, g, b, 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-    this.atlas.bind();
-    this.shader.bind();
-    const fog_color = this.overlay.getFogColor();
-    const fog_depth = this.overlay.getFogDepth();
-    gl.uniform1f(this.shader.u_move, move);
-    gl.uniform1f(this.shader.u_wave, wave);
-    gl.uniform1i(this.shader.u_alphaTest, 1);
-    gl.uniform3fv(this.shader.u_fogColor, fog_color);
-    gl.uniform1f(this.shader.u_fogDepth, fog_depth);
-
     let drawn = 0;
     const camera = this.camera;
     const planes = camera.getCullingPlanes();
 
+    // Alpha-tested sprite meshes.
+    this.sprite_shader.bind();
+    this.sprite_billboard[0] = Math.cos(camera.heading);
+    this.sprite_billboard[1] = -Math.sin(camera.heading);
+    gl.uniform2fv(this.sprite_shader.u_billboard, this.sprite_billboard);
+    for (const mesh of this.sprites) {
+      if (mesh.draw(camera, planes)) drawn++;
+    }
+
+    this.atlas.bind();
+    this.voxels_shader.bind();
+    const fog_color = this.overlay.getFogColor();
+    const fog_depth = this.overlay.getFogDepth();
+    gl.uniform1f(this.voxels_shader.u_move, move);
+    gl.uniform1f(this.voxels_shader.u_wave, wave);
+    gl.uniform1i(this.voxels_shader.u_alphaTest, 1);
+    gl.uniform3fv(this.voxels_shader.u_fogColor, fog_color);
+    gl.uniform1f(this.voxels_shader.u_fogDepth, fog_depth);
+
     // Opaque and alpha-tested voxel meshes.
-    gl.disable(gl.BLEND);
     for (const mesh of this.solid_meshes) {
       if (mesh.draw(camera, planes)) drawn++;
     }
-    gl.enable(gl.BLEND);
 
     // Alpha-blended voxel meshes. (Should we sort them?)
     gl.depthMask(false);
+    gl.enable(gl.BLEND);
     gl.disable(gl.CULL_FACE);
-    gl.uniform1i(this.shader.u_alphaTest, 0);
+    gl.uniform1i(this.voxels_shader.u_alphaTest, 0);
     for (const mesh of this.water_meshes) {
       if (mesh.draw(camera, planes)) drawn++;
     }
     gl.enable(gl.CULL_FACE);
     gl.depthMask(true);
 
+    // Alpha-blended overlay.
     this.overlay.draw();
+    gl.disable(gl.BLEND);
 
-    const total = this.solid_meshes.length + this.water_meshes.length;
+    const voxel = this.solid_meshes.length + this.water_meshes.length;
+    const total = this.sprites.length + voxel;
     return `${kAllocator.stats()}\r\nDraw calls: ${drawn} / ${total}`;
   }
 
@@ -1064,4 +1306,5 @@ class Renderer {
 
 //////////////////////////////////////////////////////////////////////////////
 
-export {Geometry, Mesh, Renderer, Texture};
+export {Geometry, Renderer, Texture};
+export {IMesh as Mesh, ISpriteMesh as SpriteMesh, IVoxelMesh as VoxelMesh};

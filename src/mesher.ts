@@ -1,5 +1,5 @@
 import {assert, int, nonnull, Color, Tensor3, Vec3} from './base.js';
-import {Geometry, Mesh, Renderer, Texture} from './renderer.js';
+import {Geometry, Renderer, Texture, VoxelMesh} from './renderer.js';
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -83,8 +83,8 @@ class TerrainMesher {
     this.renderer = renderer;
   }
 
-  meshChunk(voxels: Tensor3, solid: Mesh | null,
-            water: Mesh | null): [Mesh | null, Mesh | null] {
+  meshChunk(voxels: Tensor3, solid: VoxelMesh | null,
+            water: VoxelMesh | null): [VoxelMesh | null, VoxelMesh | null] {
     const solid_geo = solid ? solid.getGeometry() : kCachedGeometryA;
     const water_geo = water ? water.getGeometry() : kCachedGeometryB;
     solid_geo.clear();
@@ -99,7 +99,7 @@ class TerrainMesher {
 
   meshFrontier(
       heightmap: Uint32Array, mask: int, px: int, pz: int, sx: int, sz: int,
-      scale: int, old: Mesh | null, solid: boolean): Mesh | null {
+      scale: int, old: VoxelMesh | null, solid: boolean): VoxelMesh | null {
     const geo = old ? old.getGeometry() : kCachedGeometryA;
     if (old) geo.dirty = true;
     if (!old) geo.clear();
@@ -117,7 +117,7 @@ class TerrainMesher {
     return this.buildMesh(geo, old, solid);
   }
 
-  meshHighlight(): Mesh {
+  meshHighlight(): VoxelMesh {
     const geo = kCachedGeometryA;
     geo.clear();
 
@@ -146,7 +146,7 @@ class TerrainMesher {
   }
 
   private buildMesh(
-      geo: Geometry, old: Mesh | null, solid: boolean): Mesh | null {
+      geo: Geometry, old: VoxelMesh | null, solid: boolean): VoxelMesh | null {
     if (geo.num_quads === 0) {
       if (old) old.dispose();
       return null;

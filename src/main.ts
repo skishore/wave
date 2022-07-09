@@ -2,7 +2,9 @@ import {makeNoise2D} from '../lib/open-simplex-2d.js';
 import {assert, int, Tensor3, Vec3} from './base.js';
 import {BlockId, Column, Env} from './engine.js';
 import {kChunkWidth, kEmptyBlock, kWorldHeight} from './engine.js';
-import {Component, ComponentState, ComponentStore, EntityId, kNoEntity} from './ecs.js';
+import {Component, ComponentState, ComponentStore} from './ecs.js';
+import {EntityId, kNoEntity} from './ecs.js';
+import {SpriteMesh} from './renderer.js';
 import {sweep} from './sweep.js';
 
 //////////////////////////////////////////////////////////////////////////////
@@ -13,6 +15,7 @@ class TypedEnv extends Env {
   position: ComponentStore<PositionState>;
   movement: ComponentStore<MovementState>;
   physics: ComponentStore<PhysicsState>;
+  meshes: ComponentStore<MeshState>;
   target: ComponentStore;
 
   constructor(id: string) {
@@ -21,6 +24,7 @@ class TypedEnv extends Env {
     this.position = ents.registerComponent('position', Position);
     this.movement = ents.registerComponent('movement', Movement(this));
     this.physics = ents.registerComponent('physics', Physics(this));
+    this.meshes = ents.registerComponent('meshes', Meshes(this));
     this.target = ents.registerComponent('camera-target', CameraTarget(this));
   }
 };
@@ -395,6 +399,45 @@ const Movement = (env: TypedEnv): Component<MovementState> => ({
   }
 });
 
+// An entity with a MeshState keeps a renderer mesh at its position.
+
+interface MeshState {
+  id: EntityId,
+  index: int,
+  mesh: SpriteMesh | null,
+  frame: number,
+};
+
+
+const Meshes = (env: TypedEnv): Component<MeshState> => ({
+  init: () => ({id: kNoEntity, index: 0, mesh: null, frame: 0}),
+  onRemove: (state: MeshState) => { if (state.mesh) state.mesh.dispose(); },
+  onRender: (dt: int, states: MeshState[]) => {
+    for (const state of states) {
+      if (!state.mesh) continue;
+      const {x, y, z, h} = env.position.getX(state.id);
+      state.mesh.setPosition(x, y - h / 2, z);
+    }
+  },
+  onUpdate: (dt: int, states: MeshState[]) => {
+    for (const state of states) {
+      if (!state.mesh) return;
+      const body = env.physics.get(state.id);
+      if (!body) return;
+
+      const setting = (() => {
+        if (!body.resting[1]) return 1;
+        const speed = Vec3.length(body.vel);
+        state.frame = speed ? (state.frame + 0.025 * speed) % 4 : 0;
+        if (!speed) return 0;
+        const value = Math.floor(state.frame);
+        return value & 1 ? 0 : (value + 2) >> 1;
+      })();
+      state.mesh.setFrame(setting);
+    }
+  },
+});
+
 // CameraTarget signifies that the camera will follow an entity.
 
 const CameraTarget = (env: TypedEnv): Component => ({
@@ -446,8 +489,13 @@ const main = () => {
   position.x = 1;
   position.y = kWorldHeight;
   position.z = 1;
-  position.w = 0.8;
-  position.h = 1.6;
+  position.w = 0.7;
+  position.h = 1.4;
+
+  const mesh = env.meshes.add(player);
+  const sprite = {url: 'images/player.png', x: 32, y: 32};
+  const sprite_texture = env.renderer.sprite_atlas.addSprite(sprite);
+  mesh.mesh = env.renderer.addSpriteMesh(1.25 * position.h, sprite_texture);
 
   env.physics.add(player);
   env.movement.add(player);

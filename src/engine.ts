@@ -1,6 +1,6 @@
 import {assert, drop, int, nonnull, Color, Tensor3, Vec3} from './base.js';
 import {EntityComponentSystem} from './ecs.js';
-import {Mesh, Renderer, Texture} from './renderer.js';
+import {Renderer, Texture, VoxelMesh} from './renderer.js';
 import {TerrainMesher} from './mesher.js';
 import {kSweepResolution, sweep} from './sweep.js';
 
@@ -521,8 +521,8 @@ class Chunk {
   private dirty: boolean = false;
   private ready: boolean = false;
   private neighbors: int = 0;
-  private solid: Mesh | null = null;
-  private water: Mesh | null = null;
+  private solid: VoxelMesh | null = null;
+  private water: VoxelMesh | null = null;
   private world: World;
   private voxels: Tensor3;
 
@@ -709,8 +709,8 @@ const kMultiMeshArea = kMultiMeshSide * kMultiMeshSide;
 const kLODSingleMask = (1 << 4) - 1;
 
 class LODMultiMesh {
-  solid: Mesh | null;
-  water: Mesh | null;
+  solid: VoxelMesh | null;
+  water: VoxelMesh | null;
   meshed: boolean[];
 
   private mask: Int32Array;
@@ -1092,7 +1092,7 @@ class Env {
   private cameraAlpha = 0;
   private cameraBlock = kEmptyBlock;
   private cameraColor = kWhite;
-  private highlight: Mesh;
+  private highlight: VoxelMesh;
   private highlightMask: Int32Array;
   private highlightSide: int = -1;
   private highlightPosition: Vec3;
