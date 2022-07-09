@@ -492,10 +492,10 @@ const main = () => {
   position.w = 0.7;
   position.h = 1.4;
 
+  const size = 1.25 * position.h
   const mesh = env.meshes.add(player);
-  const sprite = {url: 'images/player.png', x: 32, y: 32};
-  const sprite_texture = env.renderer.sprite_atlas.addSprite(sprite);
-  mesh.mesh = env.renderer.addSpriteMesh(1.25 * position.h, sprite_texture);
+  const sprite = {url: 'images/player.png', size, x: 32, y: 32};
+  mesh.mesh = env.renderer.addSpriteMesh(sprite);
 
   env.physics.add(player);
   env.movement.add(player);

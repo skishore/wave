@@ -2,7 +2,6 @@ import {assert, drop, int, nonnull} from './base.js';
 import {Color, Mat4, Tensor3, Vec3} from './base.js';
 
 //////////////////////////////////////////////////////////////////////////////
-// The graphics engine:
 
 interface CullingPlane {
   x: number;
@@ -383,6 +382,7 @@ class TextureAtlas {
 
 interface Sprite {
   url: string,
+  size: number,
   x: int,
   y: int,
 };
@@ -516,21 +516,13 @@ class Geometry {
     this.quads = expanded;
   }
 
-  cull(delta: Vec3, planes: CullingPlane[]): boolean {
+  getBounds(): Vec3[] {
     if (this.dirty) this.computeBounds();
-    const bounds = this.bounds;
-    for (const plane of planes) {
-      const {x, y, z, index} = plane;
-      const bound = bounds[index];
-      const value = (bound[0] + delta[0]) * x +
-                    (bound[1] + delta[1]) * y +
-                    (bound[2] + delta[2]) * z;
-      if (value < 0) return true;
-    }
-    return false;
+    return this.bounds;
   }
 
   private computeBounds() {
+    if (!this.dirty) return this.bounds;
     const {lower_bound, upper_bound} = this;
     Vec3.set(lower_bound, Infinity, Infinity, Infinity);
     Vec3.set(upper_bound, -Infinity, -Infinity, -Infinity);
@@ -660,6 +652,73 @@ class BufferAllocator {
     const result = 32 - Math.clz32(bytes - 1);
     assert((1 << result) >= bytes);
     return result;
+  }
+};
+
+//////////////////////////////////////////////////////////////////////////////
+
+interface MeshManager<S extends Shader, T extends Mesh<S, T>> {
+  gl: WebGL2RenderingContext;
+  shader: S;
+};
+
+class Mesh<S extends Shader, T extends Mesh<S, T>> {
+  protected gl: WebGL2RenderingContext;
+  protected shader: S;
+  protected index: int = -1;
+  protected meshes: Mesh<S, T>[];
+  protected position: Vec3;
+
+  constructor(manager: MeshManager<S, T>, meshes: T[]) {
+    this.gl = manager.gl;
+    this.shader = manager.shader;
+    this.meshes = meshes;
+    this.position = Vec3.create();
+    this.addToMeshes();
+  }
+
+  cull(bounds: Vec3[], camera: Camera, planes: CullingPlane[]): boolean {
+    const position = this.position;
+    const camera_position = camera.position;
+    const dx = position[0] - camera_position[0];
+    const dy = position[1] - camera_position[1];
+    const dz = position[2] - camera_position[2];
+
+    for (const plane of planes) {
+      const {x, y, z, index} = plane;
+      const bound = bounds[index];
+      const bx = bound[0], by = bound[1], bz = bound[2];
+      const value = (bx + dx) * x + (by + dy) * y + (bz + dz) * z;
+      if (value < 0) return true;
+    }
+    return false;
+  }
+
+  setPosition(x: number, y: number, z: number): void {
+    Vec3.set(this.position, x, y, z);
+  }
+
+  protected addToMeshes(): void {
+    assert(this.index === -1);
+    this.index = this.meshes.length;
+    this.meshes.push(this);
+  }
+
+  protected removeFromMeshes(): void {
+    const meshes = this.meshes;
+    assert(this === meshes[this.index]);
+    const last = meshes.length - 1;
+    if (this.index !== last) {
+      const swap = meshes[last];
+      meshes[this.index] = swap;
+      swap.index = this.index;
+    }
+    meshes.pop();
+    this.index = -1;
+  }
+
+  protected shown(): boolean {
+    return this.index >= 0;
   }
 };
 
@@ -796,31 +855,17 @@ class VoxelShader extends Shader {
 
 const kDefaultMask = new Int32Array(2);
 
-class VoxelMesh {
-  private gl: WebGL2RenderingContext;
-  private shader: VoxelShader;
-  private geo: Geometry;
-  private meshes: VoxelMesh[];
+class VoxelMesh extends Mesh<VoxelShader, VoxelMesh> {
   private allocator: BufferAllocator;
-  private vao: WebGLVertexArrayObject | null;
-  private quads: Buffer | null;
-  private position: Vec3;
-  private index: int;
-  private mask: Int32Array;
+  private geo: Geometry;
+  private vao: WebGLVertexArrayObject | null = null;
+  private quads: Buffer | null = null;
+  private mask: Int32Array = kDefaultMask;
 
-  constructor(gl: WebGL2RenderingContext, shader: VoxelShader, geo: Geometry,
-              meshes: VoxelMesh[], allocator: BufferAllocator) {
-    this.gl = gl;
-    this.shader = shader;
+  constructor(manager: VoxelManager, meshes: VoxelMesh[], geo: Geometry) {
+    super(manager, meshes);
+    this.allocator = manager.allocator;
     this.geo = geo;
-    this.meshes = meshes;
-    this.allocator = allocator;
-    this.vao = null;
-    this.quads = null;
-    this.position = Vec3.create();
-    this.index = -1;
-    this.mask = kDefaultMask;
-    this.show(this.mask, true);
   }
 
   dispose(): void {
@@ -830,12 +875,11 @@ class VoxelMesh {
   }
 
   draw(camera: Camera, planes: CullingPlane[]): boolean {
-    const position = this.position;
-    Vec3.sub(kTmpDelta, position, camera.position);
-    if (this.geo.cull(kTmpDelta, planes)) return false;
+    const bounds = this.geo.getBounds();
+    if (this.cull(bounds, camera, planes)) return false;
 
     this.prepareBuffers();
-    const transform = camera.getTransformFor(position);
+    const transform = camera.getTransformFor(this.position);
 
     const gl = this.gl;
     const n = this.geo.num_quads;
@@ -909,28 +953,65 @@ class VoxelMesh {
     const subarray = data.length > n ? data.subarray(0, n) : data;
     this.quads = this.allocator.alloc(subarray);
   }
+};
 
-  private addToMeshes() {
-    assert(this.index === -1);
-    this.index = this.meshes.length;
-    this.meshes.push(this);
+class VoxelManager implements MeshManager<VoxelShader, VoxelMesh> {
+  gl: WebGL2RenderingContext;
+  shader: VoxelShader;
+  atlas: TextureAtlas;
+  allocator: BufferAllocator;
+  private solid_meshes: VoxelMesh[];
+  private water_meshes: VoxelMesh[];
+
+  constructor(gl: WebGL2RenderingContext) {
+    this.gl = gl;
+    this.shader = new VoxelShader(gl);
+    this.atlas = new TextureAtlas(gl);
+    this.allocator = new BufferAllocator(gl);
+    this.solid_meshes = [];
+    this.water_meshes = [];
   }
 
-  private removeFromMeshes() {
-    const meshes = this.meshes;
-    assert(this === meshes[this.index]);
-    const last = meshes.length - 1;
-    if (this.index !== last) {
-      const swap = meshes[last];
-      meshes[this.index] = swap;
-      swap.index = this.index;
+  addMesh(geo: Geometry, solid: boolean): VoxelMesh {
+    assert(geo.num_quads > 0);
+    const meshes = solid ? this.solid_meshes : this.water_meshes;
+    return new VoxelMesh(this, meshes, geo);
+  }
+
+  render(camera: Camera, planes: CullingPlane[], stats: Stats,
+         overlay: ScreenOverlay, move: number, wave: number): void {
+    const {atlas, gl, shader} = this;
+    let drawn = 0;
+
+    atlas.bind();
+    shader.bind();
+    const fog_color = overlay.getFogColor();
+    const fog_depth = overlay.getFogDepth();
+    gl.uniform1f(shader.u_move, move);
+    gl.uniform1f(shader.u_wave, wave);
+    gl.uniform1i(shader.u_alphaTest, 1);
+    gl.uniform3fv(shader.u_fogColor, fog_color);
+    gl.uniform1f(shader.u_fogDepth, fog_depth);
+
+    // Opaque and alpha-tested voxel meshes.
+    for (const mesh of this.solid_meshes) {
+      if (mesh.draw(camera, planes)) drawn++;
     }
-    meshes.pop();
-    this.index = -1;
-  }
 
-  private shown() {
-    return this.index >= 0;
+    // Alpha-blended voxel meshes. (Should we sort them?)
+    gl.depthMask(false);
+    gl.enable(gl.BLEND);
+    gl.disable(gl.CULL_FACE);
+    gl.uniform1i(shader.u_alphaTest, 0);
+    for (const mesh of this.water_meshes) {
+      if (mesh.draw(camera, planes)) drawn++;
+    }
+    gl.enable(gl.CULL_FACE);
+    gl.disable(gl.BLEND);
+    gl.depthMask(true);
+
+    stats.drawn += drawn;
+    stats.total += this.solid_meshes.length + this.water_meshes.length;
   }
 };
 
@@ -984,41 +1065,29 @@ class SpriteShader extends Shader {
   }
 };
 
-class SpriteMesh {
-  private gl: WebGL2RenderingContext;
-  private texture: WebGLTexture;
-  private shader: SpriteShader;
-  private meshes: SpriteMesh[];
-  private position: Vec3;
-  private size: number;
+class SpriteMesh extends Mesh<SpriteShader, SpriteMesh> {
   private frame: int;
-  private index: int;
+  private manager: SpriteManager;
+  private size: number;
+  private texture: WebGLTexture;
 
-  constructor(gl: WebGL2RenderingContext, shader: SpriteShader,
-              meshes: SpriteMesh[], size: number, texture: WebGLTexture) {
-    const index = meshes.length;
-    meshes.push(this);
-
-    this.gl = gl;
-    this.texture = texture;
-    this.shader = shader;
-    this.meshes = meshes;
-    this.position = Vec3.create();
-    this.size = size;
+  constructor(manager: SpriteManager, meshes: SpriteMesh[], sprite: Sprite) {
+    super(manager, meshes);
     this.frame = 0;
-    this.index = 0;
+    this.manager = manager;
+    this.size = sprite.size;
+    this.texture = manager.atlas.addSprite(sprite);
   }
 
   dispose() {
-    this.removeFromMeshes();
+    if (this.shown()) this.removeFromMeshes();
   }
 
   draw(camera: Camera, planes: CullingPlane[]): boolean {
-    const position = this.position;
-    Vec3.sub(kTmpDelta, position, camera.position);
-    if (this.cull(kTmpDelta, planes)) return false;
+    const bounds = this.manager.getBounds(this.size);
+    if (this.cull(bounds, camera, planes)) return false;
 
-    const transform = camera.getTransformFor(position);
+    const transform = camera.getTransformFor(this.position);
 
     const {gl, shader} = this;
     gl.bindTexture(TEXTURE_2D_ARRAY, this.texture);
@@ -1036,32 +1105,56 @@ class SpriteMesh {
   setPosition(x: int, y: int, z: int): void {
     Vec3.set(this.position, x, y, z);
   }
+};
 
-  private cull(delta: Vec3, planes: CullingPlane[]) {
-    const size = this.size;
-    const half_size = 0.5 * size;
-    const dx = delta[0], dy = delta[1], dz = delta[2];
-    for (const plane of planes) {
-      const {x, y, z, index} = plane;
-      const bx = (index & 1) ? half_size : -half_size;
-      const by = (index & 2) ? half_size : -half_size;
-      const bz = (index & 4) ? size : 0;
-      const value = (bx + dx) * x + (by + dy) * y + (bz + dz) * z;
-      if (value < 0) return true;
-    }
-    return false;
+class SpriteManager implements MeshManager<SpriteShader, SpriteMesh> {
+  gl: WebGL2RenderingContext;
+  shader: SpriteShader;
+  atlas: SpriteAtlas;
+  private billboard: Float32Array;
+  private bounds: Vec3[];
+  private meshes: SpriteMesh[];
+
+  constructor(gl: WebGL2RenderingContext) {
+    this.gl = gl;
+    this.shader = new SpriteShader(gl);
+    this.atlas = new SpriteAtlas(gl);
+    this.billboard = new Float32Array(2);
+    this.bounds = Array(8).fill(null).map(() => Vec3.create());
+    this.meshes = [];
   }
 
-  private removeFromMeshes() {
-    const meshes = this.meshes;
-    assert(this === meshes[this.index]);
-    const last = meshes.length - 1;
-    if (this.index !== last) {
-      const swap = meshes[last];
-      meshes[this.index] = swap;
-      swap.index = this.index;
+  addMesh(sprite: Sprite): SpriteMesh {
+    return new SpriteMesh(this, this.meshes, sprite);
+  }
+
+  getBounds(size: number): Vec3[] {
+    const result = this.bounds;
+    const half_size = 0.5 * size;
+    for (let i = 0; i < 8; i++) {
+      const bound = result[i];
+      bound[0] = (i & 1) ? half_size : -half_size;
+      bound[1] = (i & 2) ? half_size : -half_size;
+      bound[2] = (i & 4) ? size : 0;
     }
-    meshes.pop();
+    return result;
+  }
+
+  render(camera: Camera, planes: CullingPlane[], stats: Stats): void {
+    const {billboard, gl, shader} = this;
+    let drawn = 0;
+
+    // All sprite meshes are alpha-tested for now.
+    shader.bind();
+    billboard[0] = Math.cos(camera.heading);
+    billboard[1] = -Math.sin(camera.heading);
+    gl.uniform2fv(shader.u_billboard, billboard);
+    for (const mesh of this.meshes) {
+      if (mesh.draw(camera, planes)) drawn++;
+    }
+
+    stats.drawn += drawn;
+    stats.total += this.meshes.length;
   }
 };
 
@@ -1172,6 +1265,8 @@ class ScreenOverlay {
 
 //////////////////////////////////////////////////////////////////////////////
 
+interface Stats { drawn: int; total: int; };
+
 interface IMesh {
   dispose: () => void,
   setPosition: (x: number, y: number, z: number) => void,
@@ -1189,17 +1284,10 @@ interface IVoxelMesh extends IMesh {
 
 class Renderer {
   camera: Camera;
-  atlas: TextureAtlas;
-  sprite_atlas: SpriteAtlas;
   private gl: WebGL2RenderingContext;
-  private allocator: BufferAllocator;
   private overlay: ScreenOverlay;
-  private sprite_shader: SpriteShader;
-  private voxels_shader: VoxelShader;
-  private sprite_billboard: Float32Array;
-  private sprites: SpriteMesh[];
-  private solid_meshes: VoxelMesh[];
-  private water_meshes: VoxelMesh[];
+  private sprite_manager: SpriteManager;
+  private voxels_manager: VoxelManager;
 
   constructor(canvas: HTMLCanvasElement) {
     const params = new URLSearchParams(window.location.search);
@@ -1224,83 +1312,43 @@ class Renderer {
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
     this.gl = gl;
-    this.allocator = new BufferAllocator(gl);
     this.overlay = new ScreenOverlay(gl);
-    this.atlas = new TextureAtlas(gl);
-    this.sprite_atlas = new SpriteAtlas(gl);
-    this.sprite_shader = new SpriteShader(gl);
-    this.voxels_shader = new VoxelShader(gl);
-    this.sprite_billboard = new Float32Array(2);
-
-    this.sprites = [];
-    this.solid_meshes = [];
-    this.water_meshes = [];
+    this.sprite_manager = new SpriteManager(gl);
+    this.voxels_manager = new VoxelManager(gl);
   }
 
-  addSpriteMesh(size: number, texture: WebGLTexture): ISpriteMesh {
-    const {gl, sprite_shader, sprites} = this;
-    return new SpriteMesh(gl, sprite_shader, sprites, size, texture);
+  addTexture(texture: Texture): int {
+    return this.voxels_manager.atlas.addTexture(texture);
+  }
+
+  addSpriteMesh(sprite: Sprite): ISpriteMesh {
+    return this.sprite_manager.addMesh(sprite);
   }
 
   addVoxelMesh(geo: Geometry, solid: boolean): IVoxelMesh {
-    assert(geo.num_quads > 0);
-    const {gl, allocator, atlas, voxels_shader} = this;
-    const meshes = solid ? this.solid_meshes : this.water_meshes;
-    return new VoxelMesh(gl, voxels_shader, geo, meshes, allocator);
+    return this.voxels_manager.addMesh(geo, solid);
   }
 
   render(move: number, wave: number): string {
-    const gl = this.gl;
+    const {gl, overlay} = this;
     const [r, g, b] = kDefaultSkyColor;
     gl.clearColor(r, g, b, 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-    let drawn = 0;
     const camera = this.camera;
     const planes = camera.getCullingPlanes();
 
-    // Alpha-tested sprite meshes.
-    this.sprite_shader.bind();
-    this.sprite_billboard[0] = Math.cos(camera.heading);
-    this.sprite_billboard[1] = -Math.sin(camera.heading);
-    gl.uniform2fv(this.sprite_shader.u_billboard, this.sprite_billboard);
-    for (const mesh of this.sprites) {
-      if (mesh.draw(camera, planes)) drawn++;
-    }
-
-    this.atlas.bind();
-    this.voxels_shader.bind();
-    const fog_color = this.overlay.getFogColor();
-    const fog_depth = this.overlay.getFogDepth();
-    gl.uniform1f(this.voxels_shader.u_move, move);
-    gl.uniform1f(this.voxels_shader.u_wave, wave);
-    gl.uniform1i(this.voxels_shader.u_alphaTest, 1);
-    gl.uniform3fv(this.voxels_shader.u_fogColor, fog_color);
-    gl.uniform1f(this.voxels_shader.u_fogDepth, fog_depth);
-
-    // Opaque and alpha-tested voxel meshes.
-    for (const mesh of this.solid_meshes) {
-      if (mesh.draw(camera, planes)) drawn++;
-    }
-
-    // Alpha-blended voxel meshes. (Should we sort them?)
-    gl.depthMask(false);
-    gl.enable(gl.BLEND);
-    gl.disable(gl.CULL_FACE);
-    gl.uniform1i(this.voxels_shader.u_alphaTest, 0);
-    for (const mesh of this.water_meshes) {
-      if (mesh.draw(camera, planes)) drawn++;
-    }
-    gl.enable(gl.CULL_FACE);
-    gl.depthMask(true);
+    const stats = {drawn: 0, total: 0};
+    this.sprite_manager.render(camera, planes, stats);
+    this.voxels_manager.render(camera, planes, stats, overlay, move, wave);
 
     // Alpha-blended overlay.
-    this.overlay.draw();
+    gl.enable(gl.BLEND);
+    overlay.draw();
     gl.disable(gl.BLEND);
 
-    const voxel = this.solid_meshes.length + this.water_meshes.length;
-    const total = this.sprites.length + voxel;
-    return `${this.allocator.stats()}\r\nDraw calls: ${drawn} / ${total}`;
+    return `${this.voxels_manager.allocator.stats()}\r\n` +
+           `Draw calls: ${stats.drawn} / ${stats.total}`;
   }
 
   setOverlayColor(color: Color) {

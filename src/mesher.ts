@@ -408,7 +408,7 @@ class TerrainMesher {
 
     let textureIndex = material.textureIndex;
     if (textureIndex === 0 && material.texture) {
-      textureIndex = this.renderer.atlas.addTexture(material.texture);
+      textureIndex = this.renderer.addTexture(material.texture);
       material.textureIndex = textureIndex;
       assert(textureIndex !== 0);
     }
