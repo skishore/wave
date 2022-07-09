@@ -605,16 +605,19 @@ class Buffer {
 };
 
 class BufferAllocator {
+  private gl: WebGL2RenderingContext;
   private freeLists: Buffer[][];
   private bytes_total: int = 0;
   private bytes_alloc: int = 0;
   private bytes_usage: int = 0;
 
-  constructor() {
+  constructor(gl: WebGL2RenderingContext) {
+    this.gl = gl;
     this.freeLists = new Array(32).fill(null).map(() => []);
   }
 
-  alloc(gl: WebGL2RenderingContext, data: Float32Array): Buffer {
+  alloc(data: Float32Array): Buffer {
+    const gl = this.gl;
     const bytes = 4 * data.length;
     const sizeClass = this.sizeClass(bytes);
     const freeList = this.freeLists[sizeClass];
@@ -659,8 +662,6 @@ class BufferAllocator {
     return result;
   }
 };
-
-const kAllocator = new BufferAllocator();
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -800,36 +801,32 @@ class VoxelMesh {
   private shader: VoxelShader;
   private geo: Geometry;
   private meshes: VoxelMesh[];
-  private hidden_meshes: VoxelMesh[];
+  private allocator: BufferAllocator;
   private vao: WebGLVertexArrayObject | null;
   private quads: Buffer | null;
   private position: Vec3;
   private index: int;
-  private shown: boolean;
   private mask: Int32Array;
 
   constructor(gl: WebGL2RenderingContext, shader: VoxelShader, geo: Geometry,
-              meshes: VoxelMesh[], hidden_meshes: VoxelMesh[]) {
-    const index = meshes.length;
-    meshes.push(this);
-
+              meshes: VoxelMesh[], allocator: BufferAllocator) {
     this.gl = gl;
     this.shader = shader;
     this.geo = geo;
     this.meshes = meshes;
-    this.hidden_meshes = hidden_meshes;
+    this.allocator = allocator;
     this.vao = null;
     this.quads = null;
     this.position = Vec3.create();
-    this.index = index;
-    this.shown = true;
+    this.index = -1;
     this.mask = kDefaultMask;
+    this.show(this.mask, true);
   }
 
   dispose(): void {
     this.destroyBuffers();
-    this.removeFromMeshes();
     this.mask = kDefaultMask;
+    if (this.shown()) this.removeFromMeshes();
   }
 
   draw(camera: Camera, planes: CullingPlane[]): boolean {
@@ -864,20 +861,16 @@ class VoxelMesh {
 
   show(mask: Int32Array, shown: boolean): void {
     this.mask = mask;
-    if (shown === this.shown) return;
-
-    this.removeFromMeshes();
-    const meshes = shown ? this.meshes : this.hidden_meshes;
-    this.index = meshes.length;
-    this.shown = shown;
-    meshes.push(this);
+    if (shown === this.shown()) return;
+    shown ? this.addToMeshes() : this.removeFromMeshes();
+    assert(shown === this.shown());
   }
 
   private destroyBuffers() {
     const {gl, quads} = this;
     const n = this.geo.num_quads * Geometry.Stride;
     gl.deleteVertexArray(this.vao);
-    if (quads) kAllocator.free(quads);
+    if (quads) this.allocator.free(quads);
     this.vao = null;
     this.quads = null;
   }
@@ -914,11 +907,17 @@ class VoxelMesh {
   private prepareQuads(data: Float32Array) {
     const n = this.geo.num_quads * Geometry.Stride;
     const subarray = data.length > n ? data.subarray(0, n) : data;
-    this.quads = kAllocator.alloc(this.gl, subarray);
+    this.quads = this.allocator.alloc(subarray);
+  }
+
+  private addToMeshes() {
+    assert(this.index === -1);
+    this.index = this.meshes.length;
+    this.meshes.push(this);
   }
 
   private removeFromMeshes() {
-    const meshes = this.shown ? this.meshes : this.hidden_meshes;
+    const meshes = this.meshes;
     assert(this === meshes[this.index]);
     const last = meshes.length - 1;
     if (this.index !== last) {
@@ -927,6 +926,11 @@ class VoxelMesh {
       swap.index = this.index;
     }
     meshes.pop();
+    this.index = -1;
+  }
+
+  private shown() {
+    return this.index >= 0;
   }
 };
 
@@ -1188,6 +1192,7 @@ class Renderer {
   atlas: TextureAtlas;
   sprite_atlas: SpriteAtlas;
   private gl: WebGL2RenderingContext;
+  private allocator: BufferAllocator;
   private overlay: ScreenOverlay;
   private sprite_shader: SpriteShader;
   private voxels_shader: VoxelShader;
@@ -1195,7 +1200,6 @@ class Renderer {
   private sprites: SpriteMesh[];
   private solid_meshes: VoxelMesh[];
   private water_meshes: VoxelMesh[];
-  private hidden_meshes: VoxelMesh[];
 
   constructor(canvas: HTMLCanvasElement) {
     const params = new URLSearchParams(window.location.search);
@@ -1220,6 +1224,7 @@ class Renderer {
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
     this.gl = gl;
+    this.allocator = new BufferAllocator(gl);
     this.overlay = new ScreenOverlay(gl);
     this.atlas = new TextureAtlas(gl);
     this.sprite_atlas = new SpriteAtlas(gl);
@@ -1230,7 +1235,6 @@ class Renderer {
     this.sprites = [];
     this.solid_meshes = [];
     this.water_meshes = [];
-    this.hidden_meshes = [];
   }
 
   addSpriteMesh(size: number, texture: WebGLTexture): ISpriteMesh {
@@ -1240,9 +1244,9 @@ class Renderer {
 
   addVoxelMesh(geo: Geometry, solid: boolean): IVoxelMesh {
     assert(geo.num_quads > 0);
-    const {gl, atlas, voxels_shader, hidden_meshes} = this;
+    const {gl, allocator, atlas, voxels_shader} = this;
     const meshes = solid ? this.solid_meshes : this.water_meshes;
-    return new VoxelMesh(gl, voxels_shader, geo, meshes, hidden_meshes);
+    return new VoxelMesh(gl, voxels_shader, geo, meshes, allocator);
   }
 
   render(move: number, wave: number): string {
@@ -1296,7 +1300,7 @@ class Renderer {
 
     const voxel = this.solid_meshes.length + this.water_meshes.length;
     const total = this.sprites.length + voxel;
-    return `${kAllocator.stats()}\r\nDraw calls: ${drawn} / ${total}`;
+    return `${this.allocator.stats()}\r\nDraw calls: ${drawn} / ${total}`;
   }
 
   setOverlayColor(color: Color) {
