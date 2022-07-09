@@ -9,33 +9,37 @@
       body {
         background-color: #888;
         font-family: monospace;
+        overflow: hidden;
+        position: absolute;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        right: 0;
         margin: 0;
         padding: 0;
-        overflow: hidden;
-        text-align: center;
       }
 
       #container {
-        display: inline-block;
         overflow: hidden;
         position: relative;
-        text-align: left;
+        transform: translate(-50%, -50%);
+        top: 50%;
+        left: 50%;
       }
 
       #container.small {
-        margin: 32px;
         height: 360px;
         width: 640px;
       }
 
       #container.large {
-        margin: 64px;
         height: 720px;
         width: 1080px;
       }
 
       #container.fullscreen {
         position: absolute;
+        transform: none;
         left: 0;
         top: 0;
         bottom: 0;
