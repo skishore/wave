@@ -164,11 +164,39 @@ class TerrainMesher {
 
     for (let d = 0; d < 3; d++) {
       const dir = d * 2;
-      const u = (d + 1) % 3;
-      const v = (d + 2) % 3;
+      const v = (d === 1 ? 0 : 1);
+      const u = 3 - d - v;
       const ld = shape[d] - 1,  lu = shape[u] - 2,  lv = shape[v] - 2;
       const sd = stride[d], su = stride[u], sv = stride[v];
       const base = su + sv;
+
+      // d is the dimension that the quad faces. A d of {0, 1, 2} corresponds
+      // to a quad with a normal that's a unit vector on the {x, y, z} axis,
+      // respectively. u and v are the orthogonal dimensions along which we
+      // compute the quad's width and height.
+      //
+      // The simplest way to handle coordinates here is to let (d, u, v)
+      // be consecutive dimensions mod 3. That's how VoxelShader interprets
+      // data for a quad facing a given dimension d.
+      //
+      // However, to optimize greedy meshing, we want to take advantage of
+      // the fact that the y-axis is privileged in multiple ways:
+      //
+      //    1. Our chunks are limited in the x- and z-dimensions, but span
+      //       the entire world in the y-dimension, so this axis is longer.
+      //
+      //    2. The caller may have a heightmap limiting the maximum height
+      //       of a voxel by (x, z) coordinate, which we can use to cut the
+      //       greedy meshing inner loop short.
+      //
+      // As a result, we tweak the d = 0 case to use (u, v) = (2, 1) instead
+      // of (u, v) = (1, 2). To map back to the standard coordinates used by
+      // the shader, we only need to fix up two inputs to addQuad: (w, h) and
+      // the bit-packed AO mask. w_fixed, h_fixed, su_fixed, and sv_fixed are
+      // the standard-coordinates versions of these values.
+      //
+      const su_fixed = d > 0 ? su : sv;
+      const sv_fixed = d > 0 ? sv : su;
 
       const area = lu * lv;
       if (kMaskData.length < area) {
@@ -201,8 +229,8 @@ class TerrainMesher {
               ?  this.getBlockFaceMaterial(block0, dir)
               : -this.getBlockFaceMaterial(block1, dir + 1);
             const ao = facing > 0
-              ? this.packAOMask(data, index + sd, index, su, sv)
-              : this.packAOMask(data, index, index + sd, su, sv)
+              ? this.packAOMask(data, index + sd, index, su_fixed, sv_fixed)
+              : this.packAOMask(data, index, index + sd, su_fixed, sv_fixed);
             const mask = (material << 8) | ao;
 
             kMaskData[n] = mask;
@@ -256,10 +284,12 @@ class TerrainMesher {
             const id = Math.abs(mask >> 8) as MaterialId;
             const material = this.getMaterialData(id);
             const geo = material.color[3] < 1 ? water_geo : solid_geo;
-            this.addQuad(geo, material, d, w, h, mask, kTmpPos);
+            const w_fixed = d > 0 ? w : h;
+            const h_fixed = d > 0 ? h : w;
+            this.addQuad(geo, material, d, w_fixed, h_fixed, mask, kTmpPos);
             if (material.texture && material.texture.alphaTest) {
               const alt = (-1 * (mask & ~0xff)) | (mask & 0xff);
-              this.addQuad(geo, material, d, w, h, alt, kTmpPos);
+              this.addQuad(geo, material, d, w_fixed, h_fixed, alt, kTmpPos);
             }
 
             nw = n;
