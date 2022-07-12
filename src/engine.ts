@@ -1,4 +1,5 @@
-import {assert, drop, int, nonnull, Color, Tensor3, Vec3} from './base.js';
+import {assert, drop, int, nonnull} from './base.js';
+import {Color, Tensor2, Tensor3, Vec3} from './base.js';
 import {EntityComponentSystem} from './ecs.js';
 import {Renderer, Texture, VoxelMesh} from './renderer.js';
 import {TerrainMesher} from './mesher.js';
@@ -500,7 +501,7 @@ const kFrontierRadius = 8;
 const kFrontierLevels = 6;
 
 // List of neighboring chunks to include when meshing.
-type Point = [number, number, number];
+type Point = [int, int, int];
 const kNeighborOffsets = ((): [Point, Point, Point, Point][] => {
   const W = kChunkWidth;
   const H = kWorldHeight;
@@ -525,12 +526,14 @@ class Chunk {
   private water: VoxelMesh | null = null;
   private world: World;
   private voxels: Tensor3;
+  private heightmap: Tensor2;
 
   constructor(cx: int, cz: int, world: World, loader: Loader) {
     this.cx = cx;
     this.cz = cz;
     this.world = world;
     this.voxels = new Tensor3(kChunkWidth, kWorldHeight, kChunkWidth);
+    this.heightmap = new Tensor2(kChunkWidth, kChunkWidth);
     this.load(loader);
   }
 
@@ -559,8 +562,11 @@ class Chunk {
 
     const old = voxels.get(xm, y, zm) as BlockId;
     if (old === block) return;
-    voxels.set(xm, y, zm, block);
+    const index = voxels.index(xm, y, zm);
+    voxels.data[index] = block;
     this.dirty = true;
+
+    this.updateHeightmap(xm, zm, index, y, 1, block);
 
     const neighbor = (x: int, y: int, z: int) => {
       const {cx, cz} = this;
@@ -575,9 +581,13 @@ class Chunk {
 
   setColumn(x: int, z: int, start: int, count: int, block: BlockId) {
     const voxels = this.voxels;
+    const xm = x & kChunkMask, zm = z & kChunkMask;
+
     assert(voxels.stride[1] === 1);
-    const sindex = voxels.index(x & kChunkMask, start, z & kChunkMask);
-    voxels.data.fill(block, sindex, sindex + count);
+    const index = voxels.index(xm, start, zm);
+    voxels.data.fill(block, index, index + count);
+
+    this.updateHeightmap(xm, zm, index, start, count, block);
   }
 
   hasMesh(): boolean {
@@ -648,17 +658,22 @@ class Chunk {
 
   private remeshTerrain() {
     const {cx, cz, world} = this;
-    const {bedrock, buffer} = world;
+    const {bedrock, buffer, heightmap} = world;
     for (const offset of kNeighborOffsets) {
       const [c, dstPos, srcPos, size] = offset;
       const chunk = world.chunks.get(cx + c[0], cz + c[2]);
-      chunk && chunk.voxels
-        ? this.copyVoxels(buffer, dstPos, chunk.voxels, srcPos, size)
-        : this.zeroVoxels(buffer, dstPos, size);
+      if (chunk) {
+        this.copyHeightmap(heightmap, dstPos, chunk.heightmap, srcPos, size);
+        this.copyVoxels(buffer, dstPos, chunk.voxels, srcPos, size);
+      } else {
+        this.zeroHeightmap(heightmap, dstPos, size, dstPos[1] - srcPos[1]);
+        this.zeroVoxels(buffer, dstPos, size);
+      }
     }
 
     const x = cx << kChunkBits, z = cz << kChunkBits;
-    const meshed = world.mesher.meshChunk(buffer, this.solid, this.water);
+    const meshed = world.mesher.meshChunk(
+        buffer, heightmap, this.solid, this.water);
     const [solid, water] = meshed;
     if (solid) solid.setPosition(x, -1, z);
     if (water) water.setPosition(x, -1, z);
@@ -666,9 +681,45 @@ class Chunk {
     this.water = water;
   }
 
-  private copyVoxels(dst: Tensor3, dstPos: [number, number, number],
-                     src: Tensor3, srcPos: [number, number, number],
-                     size: [number, number, number]) {
+  private updateHeightmap(xm: int, zm: int, index: int,
+                          start: int, count: int, block: BlockId) {
+    const end = start + count;
+    const offset = this.heightmap.index(xm, zm);
+    const height = this.heightmap.data[offset]
+    const voxels = this.voxels;
+
+    if (block === kEmptyBlock && start < height && height <= end) {
+      assert(voxels.stride[1] === 1);
+      let i = 0;
+      for (; i < start; i++) {
+        if (voxels.data[index - i - 1] !== kEmptyBlock) break;
+      }
+      this.heightmap.data[offset] = start - i;
+    } else if (block !== kEmptyBlock && height <= end) {
+      this.heightmap.data[offset] = end;
+    }
+  }
+
+  private copyHeightmap(dst: Tensor2, dstPos: [int, int, int],
+                        src: Tensor2, srcPos: [int, int, int],
+                        size: [int, int, int]) {
+    const ni = size[0], nk = size[2];
+    const di = dstPos[0], dk = dstPos[2];
+    const si = srcPos[0], sk = srcPos[2];
+    const offset = dstPos[1] - srcPos[1];
+
+    for (let i = 0; i < ni; i++) {
+      for (let k = 0; k < nk; k++) {
+        const sindex = src.index(si + i, sk + k);
+        const dindex = dst.index(di + i, dk + k);
+        dst.data[dindex] = src.data[sindex] + offset;
+      }
+    }
+  }
+
+  private copyVoxels(dst: Tensor3, dstPos: [int, int, int],
+                     src: Tensor3, srcPos: [int, int, int],
+                     size: [int, int, int]) {
     const [ni, nj, nk] = size;
     const [di, dj, dk] = dstPos;
     const [si, sj, sk] = srcPos;
@@ -684,8 +735,20 @@ class Chunk {
     }
   }
 
-  private zeroVoxels(dst: Tensor3, dstPos: [number, number, number],
-                     size: [number, number, number]) {
+  private zeroHeightmap(dst: Tensor2, dstPos: [int, int, int],
+                        size: [int, int, int], offset: int) {
+    const ni = size[0], nk = size[2];
+    const di = dstPos[0], dk = dstPos[2];
+
+    for (let i = 0; i < ni; i++) {
+      for (let k = 0; k < nk; k++) {
+        dst.set(di + i, dk + k, offset);
+      }
+    }
+  }
+
+  private zeroVoxels(dst: Tensor3, dstPos: [int, int, int],
+                     size: [int, int, int]) {
     const [ni, nj, nk] = size;
     const [di, dj, dk] = dstPos;
     const dsj = dst.stride[1];
@@ -978,6 +1041,7 @@ class World {
   loadChunk: Loader | null;
   loadFrontier: Loader | null;
   buffer: Tensor3;
+  heightmap: Tensor2;
 
   constructor(registry: Registry, renderer: Renderer) {
     const radius = (kChunkRadius | 0) + 0.5;
@@ -1000,6 +1064,7 @@ class World {
     const w = kChunkWidth + 2;
     const h = kWorldHeight + 3;
     this.buffer = new Tensor3(w, h, w);
+    this.heightmap = new Tensor2(w, w);
   }
 
   getBlock(x: int, y: int, z: int): BlockId {

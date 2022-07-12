@@ -1,8 +1,9 @@
-import {assert, int, nonnull, Color, Tensor3, Vec3} from './base.js';
+import {assert, int, nonnull, Color, Tensor2, Tensor3, Vec3} from './base.js';
 import {Geometry, Renderer, Texture, VoxelMesh} from './renderer.js';
 
 //////////////////////////////////////////////////////////////////////////////
 
+type Mesh = VoxelMesh | null;
 type BlockId = int & {__type__: 'BlockId'};
 type MaterialId = int & {__type__: 'MaterialId'};
 
@@ -44,6 +45,7 @@ const kCachedGeometryA: Geometry = Geometry.empty();
 const kCachedGeometryB: Geometry = Geometry.empty();
 
 const kTmpPos = Vec3.create();
+const kTmpShape: [int, int, int] = [0, 0, 0];
 let kMaskData = new Int32Array();
 let kMaskUnion = new Int32Array();
 
@@ -83,23 +85,22 @@ class TerrainMesher {
     this.renderer = renderer;
   }
 
-  meshChunk(voxels: Tensor3, solid: VoxelMesh | null,
-            water: VoxelMesh | null): [VoxelMesh | null, VoxelMesh | null] {
+  meshChunk(voxels: Tensor3, heightmap: Tensor2,
+            solid: Mesh, water: Mesh): [Mesh, Mesh] {
     const solid_geo = solid ? solid.getGeometry() : kCachedGeometryA;
     const water_geo = water ? water.getGeometry() : kCachedGeometryB;
     solid_geo.clear();
     water_geo.clear();
 
-    this.computeChunkGeometry(solid_geo, water_geo, voxels);
+    this.computeChunkGeometry(solid_geo, water_geo, voxels, heightmap);
     return [
       this.buildMesh(solid_geo, solid, true),
       this.buildMesh(water_geo, water, false),
     ];
   }
 
-  meshFrontier(
-      heightmap: Uint32Array, mask: int, px: int, pz: int, sx: int, sz: int,
-      scale: int, old: VoxelMesh | null, solid: boolean): VoxelMesh | null {
+  meshFrontier(heightmap: Uint32Array, mask: int, px: int, pz: int,
+               sx: int, sz: int, scale: int, old: Mesh, solid: boolean): Mesh {
     const geo = old ? old.getGeometry() : kCachedGeometryA;
     if (old) geo.dirty = true;
     if (!old) geo.clear();
@@ -145,8 +146,7 @@ class TerrainMesher {
     return nonnull(this.buildMesh(geo, null, false));
   }
 
-  private buildMesh(
-      geo: Geometry, old: VoxelMesh | null, solid: boolean): VoxelMesh | null {
+  private buildMesh(geo: Geometry, old: Mesh, solid: boolean): Mesh {
     if (geo.num_quads === 0) {
       if (old) old.dispose();
       return null;
@@ -157,16 +157,27 @@ class TerrainMesher {
     return this.renderer.addVoxelMesh(Geometry.clone(geo), solid);
   }
 
-  private computeChunkGeometry(
-      solid_geo: Geometry, water_geo: Geometry, voxels: Tensor3): void {
+  private computeChunkGeometry(solid_geo: Geometry, water_geo: Geometry,
+                               voxels: Tensor3, heightmap: Tensor2): void {
 
     const {data, shape, stride} = voxels;
+
+    assert(heightmap.shape[0] === shape[0]);
+    assert(heightmap.shape[1] === shape[2]);
+    let max = 0;
+    const heightmap_data = heightmap.data;
+    for (let i = 0; i < heightmap_data.length; i++) {
+      max = Math.max(max, heightmap_data[i]);
+    }
+    kTmpShape[0] = shape[0];
+    kTmpShape[2] = shape[2];
+    kTmpShape[1] = Math.min(shape[1], max + 1);
 
     for (let d = 0; d < 3; d++) {
       const dir = d * 2;
       const v = (d === 1 ? 0 : 1);
       const u = 3 - d - v;
-      const ld = shape[d] - 1,  lu = shape[u] - 2,  lv = shape[v] - 2;
+      const ld = kTmpShape[d] - 1, lu = kTmpShape[u] - 2, lv = kTmpShape[v] - 2;
       const sd = stride[d], su = stride[u], sv = stride[v];
       const base = su + sv;
 
@@ -244,7 +255,7 @@ class TerrainMesher {
           for (let i = 0; i < area; i++) {
             if (kMaskData[i] > 0) kMaskData[i] = 0;
           }
-        } else if (id === ld - 1) {
+        } else if (id === shape[d] - 2) {
           for (let i = 0; i < area; i++) {
             if (kMaskData[i] < 0) kMaskData[i] = 0;
           }

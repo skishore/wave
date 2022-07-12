@@ -204,6 +204,30 @@ const Mat4 = {
   },
 };
 
+class Tensor2 {
+  data: Int16Array;
+  shape: [int, int];
+  stride: [int, int];
+
+  constructor(x: int, y: int) {
+    this.data = new Int16Array(x * y);
+    this.shape = [x, y];
+    this.stride = [1, x];
+  }
+
+  get(x: int, y: int): int {
+    return this.data[this.index(x, y)];
+  }
+
+  set(x: int, y: int, value: int) {
+    this.data[this.index(x, y)] = value;
+  }
+
+  index(x: int, y: int): int {
+    return x * this.stride[0] + y * this.stride[1];
+  }
+};
+
 class Tensor3 {
   data: Int16Array;
   shape: [int, int, int];
@@ -230,4 +254,4 @@ class Tensor3 {
 
 //////////////////////////////////////////////////////////////////////////////
 
-export {assert, drop, int, nonnull, Color, Mat4, Tensor3, Vec3};
+export {assert, drop, int, nonnull, Color, Mat4, Tensor2, Tensor3, Vec3};
