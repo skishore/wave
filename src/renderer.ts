@@ -983,9 +983,9 @@ class VoxelManager implements MeshManager<VoxelShader, VoxelMesh> {
   }
 
   render(camera: Camera, planes: CullingPlane[], stats: Stats,
-         overlay: ScreenOverlay, move: number, wave: number): void {
+         overlay: ScreenOverlay, move: number, wave: number, phase: int): void {
     const {atlas, gl, shader} = this;
-    let drawn = 0;
+    let drawn = 0, total = 0;
 
     atlas.bind();
     shader.bind();
@@ -997,25 +997,29 @@ class VoxelManager implements MeshManager<VoxelShader, VoxelMesh> {
     gl.uniform3fv(shader.u_fogColor, fog_color);
     gl.uniform1f(shader.u_fogDepth, fog_depth);
 
-    // Opaque and alpha-tested voxel meshes.
-    for (const mesh of this.solid_meshes) {
-      if (mesh.draw(camera, planes)) drawn++;
+    if (phase === 0) {
+      // Opaque and alpha-tested voxel meshes.
+      for (const mesh of this.solid_meshes) {
+        if (mesh.draw(camera, planes)) drawn++;
+      }
+      total = this.solid_meshes.length;
+    } else {
+      // Alpha-blended voxel meshes. (Should we sort them?)
+      gl.depthMask(false);
+      gl.enable(gl.BLEND);
+      gl.disable(gl.CULL_FACE);
+      gl.uniform1i(shader.u_alphaTest, 0);
+      for (const mesh of this.water_meshes) {
+        if (mesh.draw(camera, planes)) drawn++;
+      }
+      total = this.water_meshes.length;
+      gl.enable(gl.CULL_FACE);
+      gl.disable(gl.BLEND);
+      gl.depthMask(true);
     }
-
-    // Alpha-blended voxel meshes. (Should we sort them?)
-    gl.depthMask(false);
-    gl.enable(gl.BLEND);
-    gl.disable(gl.CULL_FACE);
-    gl.uniform1i(shader.u_alphaTest, 0);
-    for (const mesh of this.water_meshes) {
-      if (mesh.draw(camera, planes)) drawn++;
-    }
-    gl.enable(gl.CULL_FACE);
-    gl.disable(gl.BLEND);
-    gl.depthMask(true);
 
     stats.drawn += drawn;
-    stats.total += this.solid_meshes.length + this.water_meshes.length;
+    stats.total += total;
   }
 };
 
@@ -1157,6 +1161,122 @@ class SpriteManager implements MeshManager<SpriteShader, SpriteMesh> {
 
 //////////////////////////////////////////////////////////////////////////////
 
+const kShadowShader = `
+  uniform float u_size;
+  uniform mat4 u_transform;
+  out vec2 v_pos;
+
+  void main() {
+    int index = gl_VertexID + (gl_VertexID > 0 ? gl_InstanceID : 0);
+
+    float w = float(((index + 1) & 3) >> 1);
+    float h = float(((index + 0) & 3) >> 1);
+    v_pos = vec2(w - 0.5, h - 0.5);
+
+    float x = 2.0 * u_size * v_pos[0];
+    float z = 2.0 * u_size * v_pos[1];
+    gl_Position = u_transform * vec4(x , 0, z, 1);
+  }
+#split
+  in vec2 v_pos;
+  out vec4 o_color;
+
+  void main() {
+    float radius = length(v_pos);
+    if (radius > 0.5) discard;
+    o_color = vec4(0, 0, 0, 0.5);
+  }
+`;
+
+class ShadowShader extends Shader {
+  u_size:      WebGLUniformLocation | null;
+  u_transform: WebGLUniformLocation | null;
+
+  constructor(gl: WebGL2RenderingContext) {
+    super(gl, kShadowShader);
+    this.u_size      = this.getUniformLocation('u_size');
+    this.u_transform = this.getUniformLocation('u_transform');
+  }
+};
+
+class ShadowMesh extends Mesh<ShadowShader, ShadowMesh> {
+  private manager: ShadowManager;
+  private size: number = 0;
+
+  constructor(manager: ShadowManager, meshes: ShadowMesh[]) {
+    super(manager, meshes);
+    this.manager = manager;
+  }
+
+  draw(camera: Camera, planes: CullingPlane[]): boolean {
+    const bounds = this.manager.getBounds(this.size);
+    if (this.cull(bounds, camera, planes)) return false;
+
+    const transform = camera.getTransformFor(this.position);
+
+    const {gl, shader} = this;
+    gl.uniform1f(shader.u_size, this.size);
+    gl.uniformMatrix4fv(shader.u_transform, false, transform);
+    gl.drawArraysInstanced(gl.TRIANGLES, 0, 3, 2);
+    return true;
+  }
+
+  setPosition(x: int, y: int, z: int): void {
+    Vec3.set(this.position, x, y, z);
+  }
+
+  setSize(size: number) {
+    this.size = size;
+  }
+};
+
+class ShadowManager implements MeshManager<ShadowShader, ShadowMesh> {
+  gl: WebGL2RenderingContext;
+  shader: ShadowShader;
+  private bounds: Vec3[];
+  private meshes: ShadowMesh[];
+
+  constructor(gl: WebGL2RenderingContext) {
+    this.gl = gl;
+    this.shader = new ShadowShader(gl);
+    this.bounds = Array(8).fill(null).map(() => Vec3.create());
+    this.meshes = [];
+  }
+
+  addMesh(): ShadowMesh {
+    return new ShadowMesh(this, this.meshes);
+  }
+
+  getBounds(size: number): Vec3[] {
+    const result = this.bounds;
+    const half_size = 0.5 * size;
+    for (let i = 0; i < 8; i++) {
+      const bound = result[i];
+      bound[0] = (i & 1) ? size : -size;
+      bound[2] = (i & 1) ? size : -size;
+    }
+    return result;
+  }
+
+  render(camera: Camera, planes: CullingPlane[], stats: Stats): void {
+    const {gl, shader} = this;
+    let drawn = 0;
+
+    // All sprite meshes are alpha-blended.
+    shader.bind();
+    gl.enable(gl.BLEND);
+    for (const mesh of this.meshes) {
+      if (mesh.draw(camera, planes)) drawn++;
+    }
+    gl.disable(gl.BLEND);
+
+    stats.drawn += drawn;
+    stats.total += this.meshes.length;
+  }
+};
+
+//////////////////////////////////////////////////////////////////////////////
+
 const kDefaultFogColor = [0.6, 0.8, 1.0];
 const kDefaultSkyColor = [0.6, 0.8, 1.0];
 
@@ -1267,6 +1387,10 @@ interface IMesh {
   setPosition: (x: number, y: number, z: number) => void,
 };
 
+interface IShadowMesh extends IMesh {
+  setSize: (size: number) => void,
+};
+
 interface ISpriteMesh extends IMesh {
   setFrame: (frame: int) => void,
 };
@@ -1281,6 +1405,7 @@ class Renderer {
   camera: Camera;
   private gl: WebGL2RenderingContext;
   private overlay: ScreenOverlay;
+  private shadow_manager: ShadowManager;
   private sprite_manager: SpriteManager;
   private voxels_manager: VoxelManager;
 
@@ -1308,12 +1433,17 @@ class Renderer {
 
     this.gl = gl;
     this.overlay = new ScreenOverlay(gl);
+    this.shadow_manager = new ShadowManager(gl);
     this.sprite_manager = new SpriteManager(gl);
     this.voxels_manager = new VoxelManager(gl);
   }
 
   addTexture(texture: Texture): int {
     return this.voxels_manager.atlas.addTexture(texture);
+  }
+
+  addShadowMesh(): IShadowMesh {
+    return this.shadow_manager.addMesh();
   }
 
   addSpriteMesh(sprite: Sprite): ISpriteMesh {
@@ -1335,7 +1465,9 @@ class Renderer {
 
     const stats = {drawn: 0, total: 0};
     this.sprite_manager.render(camera, planes, stats);
-    this.voxels_manager.render(camera, planes, stats, overlay, move, wave);
+    this.voxels_manager.render(camera, planes, stats, overlay, move, wave, 0);
+    this.shadow_manager.render(camera, planes, stats);
+    this.voxels_manager.render(camera, planes, stats, overlay, move, wave, 1);
 
     // Alpha-blended overlay.
     gl.enable(gl.BLEND);
@@ -1354,4 +1486,4 @@ class Renderer {
 //////////////////////////////////////////////////////////////////////////////
 
 export {Geometry, Renderer, Texture};
-export {IMesh as Mesh, ISpriteMesh as SpriteMesh, IVoxelMesh as VoxelMesh};
+export {IMesh as Mesh, IShadowMesh as ShadowMesh, ISpriteMesh as SpriteMesh, IVoxelMesh as VoxelMesh};
