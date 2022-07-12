@@ -66,7 +66,6 @@ class Camera {
     const jerkx = Math.abs(dx) > 400 && Math.abs(dx / (this.last_dx || 1)) > 4;
     const jerky = Math.abs(dy) > 400 && Math.abs(dy / (this.last_dy || 1)) > 4;
     if (jerkx || jerky) {
-      console.log(`Smoothing out update: ${dx} x ${dy}`);
       const saved_x = this.last_dx;
       const saved_y = this.last_dy;
       this.last_dx = (dx + this.last_dx) / 2;
@@ -215,7 +214,10 @@ class Shader {
   private compile(source: string, type: number): WebGLShader {
     const gl = this.gl;
     const result = nonnull(gl.createShader(type));
-    gl.shaderSource(result, `#version 300 es\n${source}`);
+    gl.shaderSource(result, `#version 300 es
+                             precision highp float;
+                             precision highp sampler2DArray;
+                             ${source}`);
     gl.compileShader(result);
     if (!gl.getShaderParameter(result, gl.COMPILE_STATUS)) {
       const info = gl.getShaderInfoLog(result);
@@ -270,7 +272,7 @@ class TextureAtlas {
     this.bind();
     const id = TEXTURE_2D_ARRAY;
     gl.texParameteri(id, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    gl.texParameteri(id, gl.TEXTURE_MIN_FILTER, gl.NEAREST_MIPMAP_NEAREST);
+    gl.texParameteri(id, gl.TEXTURE_MIN_FILTER, gl.NEAREST_MIPMAP_LINEAR);
   }
 
   addTexture(texture: Texture): int {
@@ -449,10 +451,11 @@ class SpriteAtlas {
     gl.bindTexture(TEXTURE_2D_ARRAY, texture);
     gl.texImage3D(TEXTURE_2D_ARRAY, 0, gl.RGBA, x, y, frames, 0,
                   gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    gl.generateMipmap(TEXTURE_2D_ARRAY);
 
     const id = TEXTURE_2D_ARRAY;
     gl.texParameteri(id, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    gl.texParameteri(id, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(id, gl.TEXTURE_MIN_FILTER, gl.NEAREST_MIPMAP_LINEAR);
     gl.texParameteri(id, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(id, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
   }
@@ -694,6 +697,10 @@ class Mesh<S extends Shader, T extends Mesh<S, T>> {
     return false;
   }
 
+  dispose(): void {
+    if (this.shown()) this.removeFromMeshes();
+  }
+
   setPosition(x: number, y: number, z: number): void {
     Vec3.set(this.position, x, y, z);
   }
@@ -785,9 +792,6 @@ const kVoxelShader = `
     if (hide) gl_Position[3] = 0.0;
   }
 #split
-  precision highp float;
-  precision highp sampler2DArray;
-
   uniform int u_alphaTest;
   uniform vec3 u_fogColor;
   uniform float u_fogDepth;
@@ -869,9 +873,9 @@ class VoxelMesh extends Mesh<VoxelShader, VoxelMesh> {
   }
 
   dispose(): void {
+    super.dispose();
     this.destroyBuffers();
     this.mask = kDefaultMask;
-    if (this.shown()) this.removeFromMeshes();
   }
 
   draw(camera: Camera, planes: CullingPlane[]): boolean {
@@ -1035,9 +1039,6 @@ const kSpriteShader = `
     gl_Position = u_transform * pos;
   }
 #split
-  precision highp float;
-  precision highp sampler2DArray;
-
   uniform float u_frame;
   uniform sampler2DArray u_texture;
   in vec2 v_uv;
@@ -1077,10 +1078,6 @@ class SpriteMesh extends Mesh<SpriteShader, SpriteMesh> {
     this.manager = manager;
     this.size = sprite.size;
     this.texture = manager.atlas.addSprite(sprite);
-  }
-
-  dispose() {
-    if (this.shown()) this.removeFromMeshes();
   }
 
   draw(camera: Camera, planes: CullingPlane[]): boolean {
@@ -1134,8 +1131,8 @@ class SpriteManager implements MeshManager<SpriteShader, SpriteMesh> {
     for (let i = 0; i < 8; i++) {
       const bound = result[i];
       bound[0] = (i & 1) ? half_size : -half_size;
-      bound[1] = (i & 2) ? half_size : -half_size;
-      bound[2] = (i & 4) ? size : 0;
+      bound[1] = (i & 2) ? size : 0;
+      bound[2] = (i & 4) ? half_size : -half_size;
     }
     return result;
   }
@@ -1170,8 +1167,6 @@ const kScreenOverlayShader = `
     gl_Position = vec4(a_position, 1);
   }
 #split
-  precision highp float;
-
   uniform vec4 u_color;
 
   out vec4 o_color;
