@@ -6,6 +6,7 @@ import {Component, ComponentState, ComponentStore} from './ecs.js';
 import {EntityId, kNoEntity} from './ecs.js';
 import {SpriteMesh, ShadowMesh} from './renderer.js';
 import {sweep} from './sweep.js';
+import {Blocks, loadChunk, loadFrontier} from './worldgen.js';
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -14,7 +15,7 @@ const kSpriteSize = 1.25;
 //////////////////////////////////////////////////////////////////////////////
 
 class TypedEnv extends Env {
-  addedBlock: BlockId = kEmptyBlock;
+  blocks: Blocks | null = null;
   position: ComponentStore<PositionState>;
   movement: ComponentStore<MovementState>;
   physics: ComponentStore<PhysicsState>;
@@ -319,7 +320,7 @@ const tryToModifyBlock =
     if (intersect) return;
   }
 
-  const block = add ? env.addedBlock : kEmptyBlock;
+  const block = add && env.blocks ? env.blocks.dirt : kEmptyBlock;
   env.world.setBlock(kTmpPos[0], kTmpPos[1], kTmpPos[2], block);
 };
 
@@ -502,30 +503,6 @@ const CameraTarget = (env: TypedEnv): Component => ({
   },
 });
 
-// Noise helpers:
-
-let noise_counter = (Math.random() * (1 << 30)) | 0;
-const perlin2D = (): (x: number, y: number) => number => {
-  return makeNoise2D(noise_counter++);
-};
-
-const fractalPerlin2D = (
-    amplitude: number, radius: number, growth: number, count: int) => {
-  const factor = Math.pow(2, growth);
-  const components = new Array(count).fill(null).map(perlin2D);
-  return (x: int, y: int): number => {
-    let result = 0;
-    let r = radius;
-    let a = amplitude;
-    for (const component of components) {
-      result += a * component(x / r, y / r);
-      a *= factor;
-      r *= 2;
-    }
-    return result;
-  };
-};
-
 // Putting it all together:
 
 const main = () => {
@@ -562,198 +539,32 @@ const main = () => {
     ['dirt', 2, 0],
     ['grass', 0, 0],
     ['grass-side', 3, 0],
+    ['rock', 1, 0],
     ['sand', 0, 11],
     ['snow', 2, 4],
-    ['stone', 1, 0],
     ['trunk', 5, 1],
     ['trunk-side', 4, 1],
   ];
   for (const [name, x, y] of textures) {
     registry.addMaterialOfTexture(name, texture(x, y));
   }
-  const rock = registry.addBlock(['stone'], true);
-  const dirt = registry.addBlock(['dirt'], true);
-  const sand = registry.addBlock(['sand'], true);
-  const snow = registry.addBlock(['snow'], true);
-  const grass = registry.addBlock(['grass', 'dirt', 'grass-side'], true);
-  const bedrock = registry.addBlock(['bedrock'], true);
-  const water = registry.addBlock(['water', 'blue', 'blue'], false);
-  const trunk = registry.addBlock(['trunk', 'trunk-side'], true);
-  const leaves = registry.addBlock(['leaves'], true);
 
-  env.addedBlock = dirt;
-
-  // Composite noise functions.
-
-  const minetest_noise_2d = (
-      offset: number, scale: number, spread: number,
-      octaves: int, persistence: number, lacunarity: number) => {
-    const components = new Array(octaves).fill(null).map(perlin2D);
-
-    return (x: number, y: number): number => {
-      let f = 1, g = 1;
-      let result = 0;
-
-      x /= spread;
-      y /= spread;
-
-      for (let i = 0; i < octaves; i++) {
-        result += g * components[i](x * f, y * f);
-        f *= lacunarity;
-        g *= persistence;
-      }
-      return scale * result + offset;
-    };
+  const blocks = {
+    bedrock: registry.addBlock(['bedrock'], true),
+    dirt:    registry.addBlock(['dirt'], true),
+    grass:   registry.addBlock(['grass', 'dirt', 'grass-side'], true),
+    leaves:  registry.addBlock(['leaves'], true),
+    rock:    registry.addBlock(['rock'], true),
+    sand:    registry.addBlock(['sand'], true),
+    snow:    registry.addBlock(['snow'], true),
+    trunk:   registry.addBlock(['trunk', 'trunk-side'], true),
+    water:   registry.addBlock(['water', 'blue', 'blue'], false),
   };
 
-  const ridgeNoise = (octaves: number, persistence: number, scale: number) => {
-    const components = new Array(4).fill(null).map(perlin2D);
-    return (x: int, z: int) => {
-      let result = 0, a = 1, s = scale;
-      for (const component of components) {
-        result += (1 - Math.abs(component(x * s, z * s))) * a;
-        a *= persistence;
-        s *= 2;
-      }
-      return result;
-    };
-  };
-
-  const mgv7_np_cliff_select = minetest_noise_2d(
-      0, 1, 512, 4, 0.7, 2.0);
-  const mgv7_np_mountain_select = minetest_noise_2d(
-      0, 1, 512, 4, 0.7, 2.0);
-  const mgv7_np_terrain_ground = minetest_noise_2d(
-      2, 8, 512, 6, 0.6, 2.0);
-  const mgv7_np_terrain_cliff = minetest_noise_2d(
-      8, 16, 512, 6, 0.6, 2.0);
-
-  const mgv7_mountain_ridge = ridgeNoise(8, 0.5, 0.002);
-
-  // Cave generation.
-
-  const kIslandRadius = 1024;
-  const kSeaLevel = (kWorldHeight / 4) | 0;
-
-  const kCaveLevels = 3;
-  const kCaveDeltaY = 0;
-  const kCaveHeight = 8;
-  const kCaveRadius = 16;
-  const kCaveCutoff = 0.25;
-  const kCaveWaveHeight = 16;
-  const kCaveWaveRadius = 256;
-
-  const cave_noises = new Array(2 * kCaveLevels).fill(null).map(perlin2D);
-
-  const carve_caves = (x: int, z: int, column: Column) => {
-    const start = kSeaLevel - kCaveDeltaY * (kCaveLevels - 1) / 2;
-    for (let i = 0; i < kCaveLevels; i++) {
-      const carver_noise = cave_noises[2 * i + 0];
-      const height_noise = cave_noises[2 * i + 1];
-      const carver = carver_noise(x / kCaveRadius, z / kCaveRadius);
-      if (carver > kCaveCutoff) {
-        const dy = start + i * kCaveDeltaY;
-        const height = height_noise(x / kCaveWaveRadius, z / kCaveWaveRadius);
-        const offset = (dy + kCaveWaveHeight * height) | 0;
-        const blocks = ((carver - kCaveCutoff) * kCaveHeight) | 0;
-        for (let i = 0; i < 2 * blocks + 3; i++) {
-          column.overwrite(kEmptyBlock, offset + i - blocks);
-        }
-      }
-    }
-  }
-
-  // Tree generation.
-
-  const hash_fnv32 = (k: int) => {
-    let result = 2166136261;
-    for (let i = 0; i < 4; i++) {
-      result ^= (k & 255);
-      result *= 16777619;
-      k = k >> 8;
-    }
-    return result;
-  };
-
-  const kMask = (1 << 15) - 1;
-  const has_tree = (x: int, z: int): boolean => {
-    const base = hash_fnv32(((x & kMask) << 15) | (z & kMask));
-    return (base & 63) <= 3;
-  };
-
-  // Terrain generation.
-
-  const loadChunk = (x: int, z: int, column: Column, lod: boolean) => {
-    const base = Math.sqrt(x * x + z * z) / kIslandRadius;
-    const falloff = 16 * base * base;
-    if (falloff >= kSeaLevel) return column.push(water, kSeaLevel);
-
-    const cliff_select = mgv7_np_cliff_select(x, z);
-    const cliff_x = Math.max(Math.min(16 * Math.abs(cliff_select) - 4, 1), 0);
-
-    const mountain_select = mgv7_np_mountain_select(x, z);
-    const mountain_x = Math.sqrt(Math.max(8 * mountain_select, 0));
-
-    const cliff = cliff_x - mountain_x;
-    const mountain = -cliff;
-
-    const height_ground = mgv7_np_terrain_ground(x, z);
-    const height_cliff = cliff > 0
-      ? mgv7_np_terrain_cliff(x, z)
-      : height_ground;
-    const height_mountain = mountain > 0
-      ? height_ground + 64 * Math.pow((mgv7_mountain_ridge(x, z) - 1.25), 1.5)
-      : height_ground;
-
-    const height = (() => {
-      if (height_mountain > height_ground) {
-        return height_mountain * mountain + height_ground * (1 - mountain);
-      } else if (height_cliff > height_ground) {
-        return height_cliff * cliff + height_ground * (1 - cliff);
-      }
-      return height_ground;
-    })();
-
-    const truncated = (height - falloff) | 0;
-    const abs_height = truncated + kSeaLevel;
-    const tile = (() => {
-      if (truncated < -1) return dirt;
-      if (height_mountain > height_ground) {
-        const base = height - (72 - 8 * mountain);
-        return base > 0 ? snow : rock;
-      }
-      if (height_cliff > height_ground) return dirt;
-      return truncated < 1 ? sand : grass;
-    })();
-
-
-    if (lod) {
-      column.push(tile, abs_height);
-      column.push(water, kSeaLevel);
-      return;
-    }
-
-    if (tile === snow) {
-      const base = height - (72 - 8 * mountain);
-      const depth = Math.min(3, Math.floor(base / 8) + 1);
-      column.push(rock, abs_height - depth);
-    } else if (tile !== rock) {
-      column.push(rock, abs_height - 4);
-      column.push(dirt, abs_height - 1);
-    }
-    column.push(tile, abs_height);
-    column.push(water, kSeaLevel);
-    if (tile === grass && has_tree(x, z)) {
-      column.push(leaves, abs_height + 1);
-    }
-    carve_caves(x, z, column);
-  };
-
-  env.world.setLoader(
-    bedrock,
-    (x: int, z: int, column: Column) => loadChunk(x, z, column, false),
-    (x: int, z: int, column: Column) => loadChunk(x, z, column, true));
-
+  env.blocks = blocks;
+  const loadChunkFn = loadChunk(blocks);
+  const loadFrontierFn = loadFrontier(blocks);
+  env.world.setLoader(blocks.bedrock, loadChunkFn, loadFrontierFn);
   env.refresh();
 };
 
