@@ -88,27 +88,34 @@ const cave_noises = new Array(2 * kCaveLevels).fill(null).map(noise2D);
 
 // Cave generation.
 
-const carve_caves = (x: int, z: int, column: Column) => {
+const carve_caves = (x: int, z: int, column: Column, limit: int): int => {
+  let result = 0;
   const start = kSeaLevel - kCaveDeltaY * (kCaveLevels - 1) / 2;
   for (let i = 0; i < kCaveLevels; i++) {
     const carver_noise = cave_noises[2 * i + 0];
     const height_noise = cave_noises[2 * i + 1];
     const carver = carver_noise(x / kCaveRadius, z / kCaveRadius);
+
     if (carver > kCaveCutoff) {
       const dy = start + i * kCaveDeltaY;
       const height = height_noise(x / kCaveWaveRadius, z / kCaveWaveRadius);
       const offset = (dy + kCaveWaveHeight * height) | 0;
       const blocks = ((carver - kCaveCutoff) * kCaveHeight) | 0;
-      for (let i = 0; i < 2 * blocks + 3; i++) {
-        column.overwrite(kEmptyBlock, offset + i - blocks);
+
+      const ay = offset - blocks;
+      const by = Math.min(offset + blocks + 3, limit);
+      for (let i = ay; i < by; i++) {
+        column.overwrite(kEmptyBlock, i);
       }
+      result = Math.max(result, by);
     }
   }
+  return result;
 }
 
 // Tree generation.
 
-const hash_fnv32 = (k: int) => {
+const hash_fnv32 = (k: int): int => {
   let result = 2166136261;
   for (let i = 0; i < 4; i++) {
     result ^= (k & 255);
@@ -190,8 +197,38 @@ const heightmap = (x: int, z: int, blocks: Blocks): HeightmapResult => {
   return kHeightmapResult;
 };
 
+//////////////////////////////////////////////////////////////////////////////
+
+const kBuffer = 1;
+const kExpandedWidth = kChunkWidth + 2 * kBuffer;
+const kChunkHeightmap = new Int16Array(3 * kExpandedWidth * kExpandedWidth);
+const kCurrentChunk: {cx: int, cz: int} = {cx: Math.PI, cz: Math.PI};
+const kNeighborOffsets = [0, 1, -1, kExpandedWidth, -kExpandedWidth];
+
 const loadChunk = (blocks: Blocks) => (x: int, z: int, column: Column) => {
-  const {height, tile, snow_depth} = heightmap(x, z, blocks);
+  const cx = Math.floor(x / kChunkWidth);
+  const cz = Math.floor(z / kChunkWidth);
+  const dx = cx * kChunkWidth - kBuffer;
+  const dz = cz * kChunkWidth - kBuffer;
+  if (cx !== kCurrentChunk.cx || cz !== kCurrentChunk.cz) {
+    for (let i = 0; i < kExpandedWidth; i++) {
+      for (let j = 0; j < kExpandedWidth; j++) {
+        const offset = 3 * (i + j * kExpandedWidth);
+        const {height, tile, snow_depth} = heightmap(i + dx, j + dz, blocks);
+        kChunkHeightmap[offset + 0] = height;
+        kChunkHeightmap[offset + 1] = tile;
+        kChunkHeightmap[offset + 2] = snow_depth;
+      }
+    }
+    kCurrentChunk.cx = cx;
+    kCurrentChunk.cz = cz;
+  }
+
+  const offset = 3 * ((x - dx) + (z - dz) * kExpandedWidth);
+  const height = kChunkHeightmap[offset + 0];
+  const tile = kChunkHeightmap[offset + 1] as BlockId;
+  const snow_depth = kChunkHeightmap[offset + 2];
+
   if (tile === blocks.snow) {
     column.push(blocks.rock, height - snow_depth);
   } else if (tile !== blocks.rock) {
@@ -200,10 +237,19 @@ const loadChunk = (blocks: Blocks) => (x: int, z: int, column: Column) => {
   }
   column.push(tile, height);
   column.push(blocks.water, kSeaLevel);
-  if (tile === blocks.grass && has_tree(x, z)) {
+
+  let limit = kWorldHeight;
+  for (const neighbor of kNeighborOffsets) {
+    const neighbor_height = kChunkHeightmap[offset + 3 * neighbor];
+    if (neighbor_height < kSeaLevel) {
+      limit = Math.min(limit, neighbor_height - 1);
+    }
+  }
+  const cave_height = carve_caves(x, z, column, limit);
+
+  if (tile === blocks.grass && has_tree(x, z) && cave_height < height) {
     column.push(blocks.leaves, height + 1);
   }
-  carve_caves(x, z, column);
 };
 
 const loadFrontier = (blocks: Blocks) => (x: int, z: int, column: Column) => {
