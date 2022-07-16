@@ -12,6 +12,17 @@ import {Blocks, loadChunk, loadFrontier} from './worldgen.js';
 
 const kSpriteSize = 1.25;
 
+const kWaterDelay = 200;
+const kWaterDisplacements = [
+  [1, 0, 0],
+  [0, 1, 0],
+  [0, 0, 1],
+  [-1, 0, 0],
+  [0, 0, -1],
+];
+
+type Point = [int, int, int];
+
 //////////////////////////////////////////////////////////////////////////////
 
 class TypedEnv extends Env {
@@ -34,6 +45,37 @@ class TypedEnv extends Env {
     this.target = ents.registerComponent('camera-target', CameraTarget(this));
   }
 };
+
+const hasWaterNeighbor = (env: TypedEnv, water: BlockId, p: Point) => {
+  for (const d of kWaterDisplacements) {
+    const block = env.world.getBlock(d[0] + p[0], d[1] + p[1], d[2] + p[2]);
+    if (block === water) return true;
+  }
+  return false;
+};
+
+const flowWater = (env: TypedEnv, water: BlockId, points: Point[]) => {
+  const next: Point[] = [];
+  const visited: Set<string> = new Set();
+
+  for (const p of points) {
+    const block = env.world.getBlock(p[0], p[1], p[2]);
+    if (block !== kEmptyBlock || !hasWaterNeighbor(env, water, p)) continue;
+    env.world.setBlock(p[0], p[1], p[2], water);
+    for (const d of kWaterDisplacements) {
+      const n: Point = [p[0] - d[0], p[1] - d[1], p[2] - d[2]];
+      const key = `${n[0]}-${n[1]}-${n[2]}`;
+      if (visited.has(key)) continue;
+      visited.add(key);
+      next.push(n);
+    }
+  }
+
+  if (next.length === 0) return;
+  setTimeout(() => flowWater(env, water, next), kWaterDelay);
+};
+
+//////////////////////////////////////////////////////////////////////////////
 
 // An entity with a position is an axis-aligned bounding box (AABB) centered
 // at (x, y, z), with x- and z-extents equal to w and y-extent equal to h.
@@ -320,8 +362,14 @@ const tryToModifyBlock =
     if (intersect) return;
   }
 
+  const x = kTmpPos[0], y = kTmpPos[1], z = kTmpPos[2];
   const block = add && env.blocks ? env.blocks.dirt : kEmptyBlock;
-  env.world.setBlock(kTmpPos[0], kTmpPos[1], kTmpPos[2], block);
+  env.world.setBlock(x, y, z, block);
+
+  if (env.blocks) {
+    const water = env.blocks.water;
+    setTimeout(() => flowWater(env, water, [[x, y, z]]), kWaterDelay);
+  }
 };
 
 const runMovement = (env: TypedEnv, dt: int, state: MovementState) => {
