@@ -13,8 +13,6 @@ import {Blocks, getHeight, loadChunk, loadFrontier} from './worldgen.js';
 const kNumParticles = 16;
 const kMaxNumParticles = 64;
 
-const kSpriteSize = 1.25;
-
 const kWaterDelay = 200;
 const kWaterDisplacements = [
   [1, 0, 0],
@@ -135,6 +133,7 @@ interface PhysicsState {
   resting: Vec3,
   inFluid: boolean,
   friction: number,
+  restitution: number,
   mass: number,
   autoStep: number,
 };
@@ -260,7 +259,8 @@ const runPhysics = (env: TypedEnv, dt: int, state: PhysicsState) => {
   }
 
   for (let i = 0; i < 3; i++) {
-    if (state.resting[i] !== 0) state.vel[i] = 0;
+    if (state.resting[i] === 0) continue;
+    state.vel[i] = -state.restitution * state.vel[i];
   }
 };
 
@@ -276,8 +276,9 @@ const Physics = (env: TypedEnv): Component<PhysicsState> => ({
     resting: Vec3.create(),
     inFluid: false,
     friction: 0,
+    restitution: 0,
     mass: 1,
-    autoStep: 0.25,
+    autoStep: 0,
   }),
   onAdd: (state: PhysicsState) => {
     setPhysicsFromPosition(env.position.getX(state.id), state);
@@ -395,10 +396,10 @@ const generateParticles =
     body.impulses[1] = kParticleSpeed * Math.random();
     body.impulses[2] = kParticleSpeed * (Math.random() - 0.5);
     body.friction = 10;
-    body.autoStep = 0;
+    body.restitution = 0.5;
 
+    const size = position.h;
     const mesh = env.meshes.add(particle);
-    const size = kSpriteSize * position.h;
     const sprite = {url: 'images/rhodox-edited.png', size, x: 16, y: 16};
     mesh.mesh = env.renderer.addSpriteMesh(sprite);
     mesh.mesh.setFrame(data.texture.x + 16 * data.texture.y);
@@ -595,7 +596,7 @@ const Shadow = (env: TypedEnv): Component<ShadowState> => ({
       const fraction = 1 - (y - 0.5 * h - state.height) / state.extent;
       const size = 0.5 * w * Math.max(0, Math.min(1, fraction));
       state.mesh.setPosition(x, state.height + 0.01, z);
-      state.mesh.setSize(kSpriteSize * size);
+      state.mesh.setSize(size);
     }
   },
   onUpdate: (dt: int, states: ShadowState[]) => {
@@ -658,12 +659,12 @@ const main = () => {
   const position = env.position.add(player);
   position.x = 1;
   position.z = 1;
-  position.w = 0.7;
-  position.h = 1.4;
+  position.w = 0.6;
+  position.h = 0.8;
   position.y = safeHeight(position);
 
+  const size = 1.25 * position.h;
   const mesh = env.meshes.add(player);
-  const size = kSpriteSize * position.h;
   const sprite = {url: 'images/player.png', size, x: 32, y: 32};
   mesh.mesh = env.renderer.addSpriteMesh(sprite);
 
