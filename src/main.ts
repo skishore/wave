@@ -11,6 +11,7 @@ import {Blocks, getHeight, loadChunk, loadFrontier} from './worldgen.js';
 //////////////////////////////////////////////////////////////////////////////
 
 const kNumParticles = 16;
+const kMaxNumParticles = 64;
 
 const kSpriteSize = 1.25;
 
@@ -28,6 +29,7 @@ type Point = [int, int, int];
 //////////////////////////////////////////////////////////////////////////////
 
 class TypedEnv extends Env {
+  particles: int = 0;
   blocks: Blocks | null = null;
   lifetime: ComponentStore<LifetimeState>;
   position: ComponentStore<PositionState>;
@@ -374,7 +376,10 @@ const generateParticles =
   const data = env.registry.getMaterialData(material);
   if (!data.texture) return;
 
-  for (let i = 0; i < kNumParticles; i++) {
+  const count = Math.min(kNumParticles, kMaxNumParticles - env.particles);
+  env.particles += count;
+
+  for (let i = 0; i < count; i++) {
     const particle = env.entities.addEntity();
     const position = env.position.add(particle);
 
@@ -406,7 +411,10 @@ const generateParticles =
 
     const lifetime = env.lifetime.add(particle);
     lifetime.lifetime = 1.0 * Math.random() + 0.5;
-    lifetime.cleanup = () => env.entities.removeEntity(particle);
+    lifetime.cleanup = () => {
+      env.entities.removeEntity(particle);
+      env.particles--;
+    };
   }
 };
 
