@@ -18,14 +18,14 @@ const kCaveWaveRadius = 256;
 
 interface Blocks {
   bedrock: BlockId,
-  dirt: BlockId,
-  grass: BlockId,
-  leaves: BlockId,
-  rock: BlockId,
-  sand: BlockId,
-  snow: BlockId,
-  trunk: BlockId,
-  water: BlockId,
+  dirt:    BlockId,
+  grass:   BlockId,
+  leaves:  BlockId,
+  rock:    BlockId,
+  sand:    BlockId,
+  snow:    BlockId,
+  trunk:   BlockId,
+  water:   BlockId,
 };
 
 //////////////////////////////////////////////////////////////////////////////
@@ -205,6 +205,23 @@ const kChunkHeightmap = new Int16Array(3 * kExpandedWidth * kExpandedWidth);
 const kCurrentChunk: {cx: int, cz: int} = {cx: Math.PI, cz: Math.PI};
 const kNeighborOffsets = [0, 1, -1, kExpandedWidth, -kExpandedWidth];
 
+const kDefaultBlocks: Blocks = {
+  bedrock: kEmptyBlock,
+  dirt:    kEmptyBlock,
+  grass:   kEmptyBlock,
+  leaves:  kEmptyBlock,
+  rock:    kEmptyBlock,
+  sand:    kEmptyBlock,
+  snow:    kEmptyBlock,
+  trunk:   kEmptyBlock,
+  water:   kEmptyBlock,
+};
+
+const getHeight = (x: int, z: int): int => {
+  const base = heightmap(x, z, kDefaultBlocks).height;
+  return Math.max(Math.min(base, kWorldHeight), 0);
+};
+
 const loadChunk = (blocks: Blocks) => (x: int, z: int, column: Column) => {
   const cx = Math.floor(x / kChunkWidth);
   const cz = Math.floor(z / kChunkWidth);
@@ -258,4 +275,4 @@ const loadFrontier = (blocks: Blocks) => (x: int, z: int, column: Column) => {
   column.push(blocks.water, kSeaLevel);
 };
 
-export {Blocks, loadChunk, loadFrontier};
+export {Blocks, getHeight, loadChunk, loadFrontier};

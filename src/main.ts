@@ -6,9 +6,11 @@ import {Component, ComponentState, ComponentStore} from './ecs.js';
 import {EntityId, kNoEntity} from './ecs.js';
 import {SpriteMesh, ShadowMesh} from './renderer.js';
 import {sweep} from './sweep.js';
-import {Blocks, loadChunk, loadFrontier} from './worldgen.js';
+import {Blocks, getHeight, loadChunk, loadFrontier} from './worldgen.js';
 
 //////////////////////////////////////////////////////////////////////////////
+
+const kNumParticles = 16;
 
 const kSpriteSize = 1.25;
 
@@ -27,6 +29,7 @@ type Point = [int, int, int];
 
 class TypedEnv extends Env {
   blocks: Blocks | null = null;
+  lifetime: ComponentStore<LifetimeState>;
   position: ComponentStore<PositionState>;
   movement: ComponentStore<MovementState>;
   physics: ComponentStore<PhysicsState>;
@@ -37,6 +40,7 @@ class TypedEnv extends Env {
   constructor(id: string) {
     super(id);
     const ents = this.entities;
+    this.lifetime = ents.registerComponent('lifetime', Lifetime);
     this.position = ents.registerComponent('position', Position);
     this.movement = ents.registerComponent('movement', Movement(this));
     this.physics = ents.registerComponent('physics', Physics(this));
@@ -76,6 +80,26 @@ const flowWater = (env: TypedEnv, water: BlockId, points: Point[]) => {
 };
 
 //////////////////////////////////////////////////////////////////////////////
+
+// An entity with a lifetime calls cleanup() at the end of its life.
+
+interface LifetimeState {
+  id: EntityId,
+  index: int,
+  lifetime: number,
+  cleanup: (() => void) | null,
+};
+
+const Lifetime: Component<LifetimeState> = {
+  init: () => ({id: kNoEntity, index: 0, lifetime: 0, cleanup: null}),
+  onUpdate: (dt: int, states: LifetimeState[]) => {
+    dt = dt / 1000;
+    for (const state of states) {
+      state.lifetime -= dt;
+      if (state.lifetime < 0 && state.cleanup) state.cleanup();
+    }
+  },
+};
 
 // An entity with a position is an axis-aligned bounding box (AABB) centered
 // at (x, y, z), with x- and z-extents equal to w and y-extent equal to h.
@@ -257,7 +281,8 @@ const Physics = (env: TypedEnv): Component<PhysicsState> => ({
     setPhysicsFromPosition(env.position.getX(state.id), state);
   },
   onRemove: (state: PhysicsState) => {
-    setPositionFromPhysics(env.position.getX(state.id), state);
+    const position = env.position.get(state.id);
+    if (position) setPositionFromPhysics(position, state);
   },
   onRender: (dt: int, states: PhysicsState[]) => {
     for (const state of states) {
@@ -342,16 +367,59 @@ const handleRunning =
   Vec3.add(body.forces, body.forces, kTmpPush);
 };
 
+const generateParticles =
+    (env: TypedEnv, block: BlockId, x: int, y: int, z: int, side: int) => {
+  const adjusted = side === 2 || side === 3 ? 0 : side;
+  const material = env.registry.getBlockFaceMaterial(block, adjusted);
+  const data = env.registry.getMaterialData(material);
+  if (!data.texture) return;
+
+  for (let i = 0; i < kNumParticles; i++) {
+    const particle = env.entities.addEntity();
+    const position = env.position.add(particle);
+
+    const side = Math.floor(3 * Math.random() + 1) / 16;
+    position.x = x + (1 - side) * Math.random() + side / 2;
+    position.y = y + (1 - side) * Math.random() + side / 2;
+    position.z = z + (1 - side) * Math.random() + side / 2;
+    position.w = position.h = side;
+
+    const kParticleSpeed = 8;
+    const body = env.physics.add(particle);
+    body.impulses[0] = kParticleSpeed * (Math.random() - 0.5);
+    body.impulses[1] = kParticleSpeed * Math.random();
+    body.impulses[2] = kParticleSpeed * (Math.random() - 0.5);
+    body.friction = 10;
+    body.autoStep = 0;
+
+    const mesh = env.meshes.add(particle);
+    const size = kSpriteSize * position.h;
+    const sprite = {url: 'images/rhodox-edited.png', size, x: 16, y: 16};
+    mesh.mesh = env.renderer.addSpriteMesh(sprite);
+    mesh.mesh.setFrame(data.texture.x + 16 * data.texture.y);
+
+    const epsilon = 0.01;
+    const s = Math.floor(16 * (1 - side) * Math.random()) / 16;
+    const t = Math.floor(16 * (1 - side) * Math.random()) / 16;
+    const uv = side - 2 * epsilon;
+    mesh.mesh.setSTUV(s + epsilon, t + epsilon, uv, uv);
+
+    const lifetime = env.lifetime.add(particle);
+    lifetime.lifetime = 1.0 * Math.random() + 0.5;
+    lifetime.cleanup = () => env.entities.removeEntity(particle);
+  }
+};
+
 const tryToModifyBlock =
     (env: TypedEnv, body: PhysicsState, add: boolean) => {
   const target = env.getTargetedBlock();
   if (target === null) return;
 
+  const side = env.getTargetedBlockSide();
   Vec3.copy(kTmpPos, target);
-  if (add) {
-    const side = env.getTargetedBlockSide();
-    kTmpPos[side >> 1] += (side & 1) ? -1 : 1;
 
+  if (add) {
+    kTmpPos[side >> 1] += (side & 1) ? -1 : 1;
     let intersect = true;
     const {max, min} = body;
     for (let i = 0; i < 3; i++) {
@@ -363,12 +431,18 @@ const tryToModifyBlock =
   }
 
   const x = kTmpPos[0], y = kTmpPos[1], z = kTmpPos[2];
+  const old_block = add ? kEmptyBlock : env.world.getBlock(x, y, z);
   const block = add && env.blocks ? env.blocks.dirt : kEmptyBlock;
   env.world.setBlock(x, y, z, block);
+  const new_block = add ? kEmptyBlock : env.world.getBlock(x, y, z);
 
   if (env.blocks) {
     const water = env.blocks.water;
     setTimeout(() => flowWater(env, water, [[x, y, z]]), kWaterDelay);
+  }
+
+  if (old_block !== kEmptyBlock && old_block !== new_block) {
+    generateParticles(env, old_block, x, y, z, side);
   }
 };
 
@@ -476,6 +550,7 @@ const Meshes = (env: TypedEnv): Component<MeshState> => ({
   onUpdate: (dt: int, states: MeshState[]) => {
     for (const state of states) {
       if (!state.mesh) return;
+      if (!env.movement.get(state.id)) return;
       const body = env.physics.get(state.id);
       if (!body) return;
 
@@ -553,15 +628,31 @@ const CameraTarget = (env: TypedEnv): Component => ({
 
 // Putting it all together:
 
+const safeHeight = (position: PositionState): number => {
+  const radius = 0.5 * (position.w + 1);
+  const ax = Math.floor(position.x - radius);
+  const az = Math.floor(position.z - radius);
+  const bx = Math.ceil(position.x + radius);
+  const bz = Math.ceil(position.z + radius);
+
+  let height = 0;
+  for (let x = ax; x <= bx; x++) {
+    for (let z = az; z <= bz; z++) {
+      height = Math.max(height, getHeight(x, z));
+    }
+  }
+  return height + 0.5 * (position.h + 1);
+};
+
 const main = () => {
   const env = new TypedEnv('container');
   const player = env.entities.addEntity();
   const position = env.position.add(player);
   position.x = 1;
-  position.y = kWorldHeight;
   position.z = 1;
   position.w = 0.7;
   position.h = 1.4;
+  position.y = safeHeight(position);
 
   const mesh = env.meshes.add(player);
   const size = kSpriteSize * position.h;

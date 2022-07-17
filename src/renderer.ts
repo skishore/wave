@@ -767,7 +767,7 @@ const kVoxelShader = `
     float w = float(((index + 1) & 3) >> 1);
     float h = float(((index + 0) & 3) >> 1);
 
-    v_uvw = vec3(0, 0, a_texture);
+    v_uvw = vec3(0.0, 0.0, a_texture);
     const float kTextureBuffer = 0.01;
     if (dim == 2) {
       v_uvw[0] = (a_size[0] - kTextureBuffer) * w * -a_dir;
@@ -804,7 +804,7 @@ const kVoxelShader = `
   void main() {
     float depth = u_fogDepth * gl_FragCoord.w;
     float fog = clamp(exp2(-depth * depth), 0.0, 1.0);
-    vec3 index = v_uvw + vec3(v_move, v_move, 0);
+    vec3 index = v_uvw + vec3(v_move, v_move, 0.0);
     vec4 color = v_color * texture(u_texture, index);
     o_color = mix(color, vec4(u_fogColor, color[3]), fog);
     if (u_alphaTest != 0) {
@@ -1027,6 +1027,7 @@ class VoxelManager implements MeshManager<VoxelShader, VoxelMesh> {
 
 const kSpriteShader = `
   uniform float u_size;
+  uniform vec4 u_stuv;
   uniform vec2 u_billboard;
   uniform mat4 u_transform;
   out vec2 v_uv;
@@ -1036,10 +1037,13 @@ const kSpriteShader = `
 
     float w = float(((index + 1) & 3) >> 1);
     float h = float(((index + 0) & 3) >> 1);
-    v_uv = vec2(w, 1.0 - h);
+
+    float u = u_stuv[0] + u_stuv[2] * w;
+    float v = u_stuv[1] + u_stuv[3] * (1.0 - h);
+    v_uv = vec2(u, v);
 
     float x = u_size * (w - 0.5);
-    vec4 pos = vec4(x * u_billboard[0], u_size * h, x * u_billboard[1], 1);
+    vec4 pos = vec4(x * u_billboard[0], u_size * h, x * u_billboard[1], 1.0);
     gl_Position = u_transform * pos;
   }
 #split
@@ -1057,6 +1061,7 @@ const kSpriteShader = `
 
 class SpriteShader extends Shader {
   u_size:      WebGLUniformLocation | null;
+  u_stuv:      WebGLUniformLocation | null;
   u_billboard: WebGLUniformLocation | null;
   u_transform: WebGLUniformLocation | null;
   u_frame:     WebGLUniformLocation | null;
@@ -1064,6 +1069,7 @@ class SpriteShader extends Shader {
   constructor(gl: WebGL2RenderingContext) {
     super(gl, kSpriteShader);
     this.u_size      = this.getUniformLocation('u_size');
+    this.u_stuv      = this.getUniformLocation('u_stuv');
     this.u_billboard = this.getUniformLocation('u_billboard');
     this.u_transform = this.getUniformLocation('u_transform');
     this.u_frame     = this.getUniformLocation('u_frame');
@@ -1074,6 +1080,7 @@ class SpriteMesh extends Mesh<SpriteShader, SpriteMesh> {
   private frame: int;
   private manager: SpriteManager;
   private size: number;
+  private stuv: Float32Array;
   private texture: WebGLTexture;
 
   constructor(manager: SpriteManager, meshes: SpriteMesh[], sprite: Sprite) {
@@ -1081,6 +1088,8 @@ class SpriteMesh extends Mesh<SpriteShader, SpriteMesh> {
     this.frame = 0;
     this.manager = manager;
     this.size = sprite.size;
+    this.stuv = new Float32Array(4);
+    this.stuv[2] = 1; this.stuv[3] = 1;
     this.texture = manager.atlas.addSprite(sprite);
   }
 
@@ -1093,6 +1102,7 @@ class SpriteMesh extends Mesh<SpriteShader, SpriteMesh> {
     const {gl, shader} = this;
     gl.bindTexture(TEXTURE_2D_ARRAY, this.texture);
     gl.uniform1f(shader.u_size, this.size);
+    gl.uniform4fv(shader.u_stuv, this.stuv);
     gl.uniform1f(shader.u_frame, this.frame);
     gl.uniformMatrix4fv(shader.u_transform, false, transform);
     gl.drawArraysInstanced(gl.TRIANGLES, 0, 3, 2);
@@ -1105,6 +1115,11 @@ class SpriteMesh extends Mesh<SpriteShader, SpriteMesh> {
 
   setPosition(x: int, y: int, z: int): void {
     Vec3.set(this.position, x, y, z);
+  }
+
+  setSTUV(s: number, t: number, u: number, v: number): void {
+    const stuv = this.stuv;
+    stuv[0] = s; stuv[1] = t; stuv[2] = u; stuv[3] = v;
   }
 };
 
@@ -1175,7 +1190,7 @@ const kShadowShader = `
 
     float x = 2.0 * u_size * v_pos[0];
     float z = 2.0 * u_size * v_pos[1];
-    gl_Position = u_transform * vec4(x , 0, z, 1);
+    gl_Position = u_transform * vec4(x, 0.0, z, 1.0);
   }
 #split
   in vec2 v_pos;
@@ -1184,7 +1199,7 @@ const kShadowShader = `
   void main() {
     float radius = length(v_pos);
     if (radius > 0.5) discard;
-    o_color = vec4(0, 0, 0, 0.5);
+    o_color = vec4(0.0, 0.0, 0.0, 0.5);
   }
 `;
 
@@ -1284,7 +1299,7 @@ const kScreenOverlayShader = `
   in vec3 a_position;
 
   void main() {
-    gl_Position = vec4(a_position, 1);
+    gl_Position = vec4(a_position, 1.0);
   }
 #split
   uniform vec4 u_color;
@@ -1393,6 +1408,7 @@ interface IShadowMesh extends IMesh {
 
 interface ISpriteMesh extends IMesh {
   setFrame: (frame: int) => void,
+  setSTUV: (s: number, t: number, u: number, v: number) => void,
 };
 
 interface IVoxelMesh extends IMesh {

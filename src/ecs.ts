@@ -18,10 +18,10 @@ interface Component<T extends ComponentState = ComponentState> {
 };
 
 class ComponentStore<T extends ComponentState = ComponentState> {
-  component: string;
-  definition: Component<T>;
-  lookup: Map<EntityId, T>;
-  states: T[];
+  private component: string;
+  private definition: Component<T>;
+  private lookup: Map<EntityId, T>;
+  private states: T[];
 
   constructor(component: string, definition: Component<T>) {
     this.component = component;
@@ -66,12 +66,13 @@ class ComponentStore<T extends ComponentState = ComponentState> {
     this.lookup.delete(entity);
     const popped = this.states.pop() as T;
     assert(popped.index === this.states.length);
-    if (popped.id === entity) return;
 
-    const index = state.index;
-    assert(index < this.states.length);
-    this.states[index] = popped;
-    popped.index = index;
+    if (popped.id !== entity) {
+      const index = state.index;
+      assert(index < this.states.length);
+      this.states[index] = popped;
+      popped.index = index;
+    }
 
     const callback = this.definition.onRemove;
     if (callback) callback(state);
@@ -91,24 +92,30 @@ class ComponentStore<T extends ComponentState = ComponentState> {
 };
 
 class EntityComponentSystem {
-  last: EntityId;
-  components: Map<string, ComponentStore<any>>;
-  onRenders: ComponentStore<any>[];
-  onUpdates: ComponentStore<any>[];
+  private last: EntityId;
+  private reusable: EntityId[];
+  private components: Map<string, ComponentStore<any>>;
+  private onRenders: ComponentStore<any>[];
+  private onUpdates: ComponentStore<any>[];
 
   constructor() {
     this.last = 0 as EntityId;
+    this.reusable = [];
     this.components = new Map();
     this.onRenders = [];
     this.onUpdates = [];
   }
 
   addEntity(): EntityId {
+    if (this.reusable.length > 0) {
+      return this.reusable.pop() as EntityId;
+    }
     return this.last = (this.last + 1) as EntityId;
   }
 
   removeEntity(entity: EntityId) {
     this.components.forEach(x => x.remove(entity));
+    this.reusable.push(entity);
   }
 
   registerComponent<T extends ComponentState>(
