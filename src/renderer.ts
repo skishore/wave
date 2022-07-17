@@ -1296,10 +1296,11 @@ const kDefaultFogColor = [0.6, 0.8, 1.0];
 const kDefaultSkyColor = [0.6, 0.8, 1.0];
 
 const kScreenOverlayShader = `
-  in vec3 a_position;
-
   void main() {
-    gl_Position = vec4(a_position, 1.0);
+    int index = gl_VertexID + (gl_VertexID > 0 ? gl_InstanceID : 0);
+    float w = float(((index + 1) & 3) >> 1);
+    float h = float(((index + 0) & 3) >> 1);
+    gl_Position = vec4(2.0 * w - 1.0, 2.0 * h - 1.0, 0.0, 1.0);
   }
 #split
   uniform vec4 u_color;
@@ -1313,12 +1314,10 @@ const kScreenOverlayShader = `
 
 class ScreenOverlayShader extends Shader {
   u_color: WebGLUniformLocation | null;
-  a_position: number | null;
 
   constructor(gl: WebGL2RenderingContext) {
     super(gl, kScreenOverlayShader);
     this.u_color = this.getUniformLocation('u_color');
-    this.a_position = this.getAttribLocation('a_position');
   }
 };
 
@@ -1327,35 +1326,26 @@ class ScreenOverlay {
   private fog_color: Float32Array;
   private gl: WebGL2RenderingContext;
   private shader: ScreenOverlayShader;
-  private vertices: Float32Array;
-  private vao: WebGLVertexArrayObject | null;
-  private buffer: WebGLBuffer | null;
 
   constructor(gl: WebGL2RenderingContext) {
     this.color = new Float32Array([1, 1, 1, 1]);
     this.fog_color = new Float32Array(kDefaultFogColor);
     this.gl = gl;
     this.shader = new ScreenOverlayShader(gl);
-    this.vertices = Float32Array.from([
-      1, 1, 0, -1, 1, 0, -1, -1, 0,
-      1, 1, 0, -1, -1, 0, 1, -1, 0
-    ]);
-    this.vao = null;
-    this.buffer = null;
   }
 
   draw() {
     if (this.color[3] === 1) return;
 
-    this.prepareBuffers();
     this.shader.bind();
 
     const gl = this.gl;
-    gl.bindVertexArray(this.vao);
+    gl.enable(gl.BLEND);
     gl.disable(gl.DEPTH_TEST);
     gl.uniform4fv(this.shader.u_color, this.color);
-    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    gl.drawArraysInstanced(gl.TRIANGLES, 0, 3, 2);
     gl.enable(gl.DEPTH_TEST);
+    gl.disable(gl.BLEND);
   }
 
   getFogColor(): Float32Array {
@@ -1373,23 +1363,6 @@ class ScreenOverlay {
     } else {
       this.fog_color.set(kDefaultFogColor);
     }
-  }
-
-  private prepareBuffers() {
-    if (this.vao) return;
-    const gl = this.gl;
-    this.vao = nonnull(gl.createVertexArray());
-    gl.bindVertexArray(this.vao);
-
-    const location = this.shader.a_position;
-    if (location === null) return;
-
-    const buffer = nonnull(gl.createBuffer());
-    gl.bindBuffer(ARRAY_BUFFER, buffer);
-    gl.bufferData(ARRAY_BUFFER, this.vertices, gl.STATIC_DRAW);
-    gl.enableVertexAttribArray(location);
-    gl.vertexAttribPointer(location, 3, gl.FLOAT, false, 0, 0);
-    this.buffer = buffer;
   }
 };
 
@@ -1484,11 +1457,7 @@ class Renderer {
     this.voxels_manager.render(camera, planes, stats, overlay, move, wave, 0);
     this.shadow_manager.render(camera, planes, stats);
     this.voxels_manager.render(camera, planes, stats, overlay, move, wave, 1);
-
-    // Alpha-blended overlay.
-    gl.enable(gl.BLEND);
     overlay.draw();
-    gl.disable(gl.BLEND);
 
     return `${this.voxels_manager.allocator.stats()}\r\n` +
            `Draw calls: ${stats.drawn} / ${stats.total}`;
