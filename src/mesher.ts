@@ -122,8 +122,6 @@ class TerrainMesher {
     const geo = kCachedGeometryA;
     geo.clear();
 
-    const forwards = 1 << 8
-    const backward = -forwards;
     const epsilon = 1 / 256;
     const w = 1 + 2 * epsilon;
     const pos = -epsilon;
@@ -133,9 +131,9 @@ class TerrainMesher {
     for (let d = 0; d < 3; d++) {
       const u = (d + 1) % 3, v = (d + 2) % 3;
       kTmpPos[d] = pos + w;
-      this.addQuad(geo, kHighlightMaterial, d, w, w, forwards, kTmpPos);
+      this.addQuad(geo, kHighlightMaterial, +1, 0, d, w, w, kTmpPos);
       kTmpPos[d] = pos;
-      this.addQuad(geo, kHighlightMaterial, d, w, w, backward, kTmpPos);
+      this.addQuad(geo, kHighlightMaterial, -1, 0, d, w, w, kTmpPos);
     }
 
     assert(geo.num_quads === 6);
@@ -292,15 +290,18 @@ class TerrainMesher {
 
             kTmpPos[u] = iu;
             kTmpPos[v] = iv;
+            const ao = mask & 0xff;
+            const dir = Math.sign(mask);
             const id = Math.abs(mask >> 8) as MaterialId;
             const material = this.getMaterialData(id);
             const geo = material.color[3] < 1 ? water_geo : solid_geo;
             const w_fixed = d > 0 ? w : h;
             const h_fixed = d > 0 ? h : w;
-            this.addQuad(geo, material, d, w_fixed, h_fixed, mask, kTmpPos);
+            this.addQuad(geo, material, dir, ao,
+                         d, w_fixed, h_fixed, kTmpPos);
             if (material.texture && material.texture.alphaTest) {
-              const alt = (-1 * (mask & ~0xff)) | (mask & 0xff);
-              this.addQuad(geo, material, d, w_fixed, h_fixed, alt, kTmpPos);
+              this.addQuad(geo, material, -dir, ao,
+                           d, w_fixed, h_fixed, kTmpPos);
             }
 
             nw = n;
@@ -351,8 +352,8 @@ class TerrainMesher {
         const material = this.getMaterialData(id);
 
         Vec3.set(kTmpPos, x * scale, height, z * scale);
-        const sw = scale * w, sh = scale * h, mask = id << 8;
-        this.addQuad(geo, material, 1, sw, sh, mask, kTmpPos);
+        const sw = scale * w, sh = scale * h;
+        this.addQuad(geo, material, 1, 0, 1, sw, sh, kTmpPos);
 
         for (let wi = 0; wi < w; wi++) {
           let index = offset + stride * wi;
@@ -371,15 +372,15 @@ class TerrainMesher {
     if (!solid) return;
 
     for (let i = 0; i < 4; i++) {
-      const sign = i & 0x1 ? -1 : 1;
+      const dir = i & 0x1 ? -1 : 1;
       const d = i & 0x2 ? 2 : 0;
       const [u, v, ao, li, lj, si, sj] = d === 0
         ? [1, 2, 0x82, sx, sz, 2, stride]
         : [0, 1, 0x06, sz, sx, stride, 2];
 
-      const di = sign > 0 ? si : -si;
+      const di = dir > 0 ? si : -si;
       for (let i = 1; i < li; i++) {
-        let offset = (i - (sign > 0 ? 1 : 0)) * si;
+        let offset = (i - (dir > 0 ? 1 : 0)) * si;
         for (let j = 0; j < lj; j++, offset += sj) {
           const block  = heightmap[offset + 0] as BlockId;
           const height = heightmap[offset + 1];
@@ -404,13 +405,12 @@ class TerrainMesher {
           Vec3.set(kTmpPos, px, neighbor, pz);
 
           // We could use the material at the side of the block with:
-          //  const dir = 2 * d + ((1 - sign) >> 1);
+          //  const face = 2 * d + ((1 - dir) >> 1);
           //
           // But doing so muddles grass, etc. textures at a distance.
           const id = this.getBlockFaceMaterial(block, 2);
-          const mask = ((sign * id) << 8) | ao;
           const material = this.getMaterialData(id);
-          this.addQuad(geo, material, d, wi, hi, mask, kTmpPos);
+          this.addQuad(geo, material, dir, ao, d, wi, hi, kTmpPos);
 
           const extra = w - 1;
           offset += extra * sj;
@@ -420,8 +420,9 @@ class TerrainMesher {
     }
   }
 
-  private addQuad(geo: Geometry, material: Material, d: int,
-                  w: number, h: number, mask: int, pos: Vec3) {
+  private addQuad(geo: Geometry, material: Material,
+                  dir: int, ao: int,
+                  d: int, w: number, h: number, pos: Vec3) {
     const {num_quads} = geo;
     geo.allocateQuads(num_quads + 1);
 
@@ -452,14 +453,14 @@ class TerrainMesher {
       assert(textureIndex !== 0);
     }
 
-    const triangleHint = this.getTriangleHint(mask);
-    const indices = mask > 0
+    const triangleHint = this.getTriangleHint(ao);
+    const indices = dir > 0
       ? (triangleHint ? kIndexOffsets.C : kIndexOffsets.D)
       : (triangleHint ? kIndexOffsets.A : kIndexOffsets.B);
 
-    quads[base + Geometry.OffsetAOs]     = mask & 0xff;
+    quads[base + Geometry.OffsetAOs]     = ao;
     quads[base + Geometry.OffsetDim]     = d;
-    quads[base + Geometry.OffsetDir]     = Math.sign(mask);
+    quads[base + Geometry.OffsetDir]     = dir;
     quads[base + Geometry.OffsetMask]    = 0;
     quads[base + Geometry.OffsetWave]    = material.liquid ? 1 : 0;
     quads[base + Geometry.OffsetTexture] = material.textureIndex;
@@ -481,11 +482,11 @@ class TerrainMesher {
     return 0;
   }
 
-  private getTriangleHint(mask: int): boolean {
-    const a00 = (mask >> 0) & 3;
-    const a10 = (mask >> 2) & 3;
-    const a11 = (mask >> 4) & 3;
-    const a01 = (mask >> 6) & 3;
+  private getTriangleHint(ao: int): boolean {
+    const a00 = (ao >> 0) & 3;
+    const a10 = (ao >> 2) & 3;
+    const a11 = (ao >> 4) & 3;
+    const a01 = (ao >> 6) & 3;
     if (a00 === a11) return (a10 === a01) ? a10 === 3 : true;
     return (a10 === a01) ? false : (a00 + a11 > a10 + a01);
   }
