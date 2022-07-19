@@ -550,10 +550,13 @@ class Chunk {
   }
 
   getBlock(x: int, y: int, z: int): BlockId {
-    const voxels = this.voxels;
-    if (!voxels) return kEmptyBlock;
     const xm = x & kChunkMask, zm = z & kChunkMask;
-    return voxels.get(xm, y, zm) as BlockId;
+    return this.voxels.get(xm, y, zm) as BlockId;
+  }
+
+  getHeight(x: int, z: int): int {
+    const xm = x & kChunkMask, zm = z & kChunkMask;
+    return this.heightmap.get(xm, zm);
   }
 
   setBlock(x: int, y: int, z: int, block: BlockId) {
@@ -871,7 +874,7 @@ class Frontier {
 
     assert(kChunkWidth % kFrontierLOD === 0);
     const side = kChunkWidth / kFrontierLOD;
-    const size = (side + 2) * (side + 2) * 2;
+    const size = 3 * (side + 2) * (side + 2);
     this.solid_heightmap = new Uint32Array(size);
     this.water_heightmap = new Uint32Array(size);
     this.side = side;
@@ -965,7 +968,7 @@ class Frontier {
       for (let i = 0; i < side; i++) {
         for (let j = 0; j < side; j++) {
           loadFrontier(ax + i * lod, az + j * lod, column);
-          const offset = 2 * ((i + 1) + (j + 1) * (side + 2));
+          const offset = 3 * ((i + 1) + (j + 1) * (side + 2));
 
           const size = column.getSize();
           const last_block = column.getNthBlock(size - 1, bedrock);
@@ -974,11 +977,14 @@ class Frontier {
           if (registry.solid[last_block]) {
             solid_heightmap[offset + 0] = last_block;
             solid_heightmap[offset + 1] = last_level;
+            solid_heightmap[offset + 2] = 1;
             water_heightmap[offset + 0] = 0;
             water_heightmap[offset + 1] = 0;
+            water_heightmap[offset + 2] = 0;
           } else {
             water_heightmap[offset + 0] = last_block;
             water_heightmap[offset + 1] = last_level;
+            water_heightmap[offset + 2] = 1;
 
             for (let i = size; i > 0; i--) {
               const block = column.getNthBlock(i - 2, bedrock);
@@ -986,6 +992,7 @@ class Frontier {
               if (!registry.solid[block]) continue;
               solid_heightmap[offset + 0] = block;
               solid_heightmap[offset + 1] = level;
+              solid_heightmap[offset + 2] = 0;
               break;
             }
           }
@@ -1073,6 +1080,12 @@ class World {
     const cx = x >> kChunkBits, cz = z >> kChunkBits;
     const chunk = this.chunks.get(cx, cz);
     return chunk ? chunk.getBlock(x, y, z) : kUnknownBlock;
+  }
+
+  getHeight(x: int, z: int): int {
+    const cx = x >> kChunkBits, cz = z >> kChunkBits;
+    const chunk = this.chunks.get(cx, cz);
+    return chunk ? chunk.getHeight(x, z) : 0;
   }
 
   setBlock(x: int, y: int, z: int, block: BlockId) {

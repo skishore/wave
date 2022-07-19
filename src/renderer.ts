@@ -792,7 +792,7 @@ const kVoxelShader = `
     if (hide) gl_Position[3] = 0.0;
   }
 #split
-  uniform int u_alphaTest;
+  uniform float u_alphaTest;
   uniform vec3 u_fogColor;
   uniform float u_fogDepth;
   uniform sampler2DArray u_texture;
@@ -807,10 +807,7 @@ const kVoxelShader = `
     vec3 index = v_uvw + vec3(v_move, v_move, 0.0);
     vec4 color = v_color * texture(u_texture, index);
     o_color = mix(color, vec4(u_fogColor, color[3]), fog);
-    if (u_alphaTest != 0) {
-      if (o_color[3] < 0.5) discard;
-      o_color[3] = 1.0;
-    }
+    if (o_color[3] < 0.5 * u_alphaTest) discard;
   }
 `;
 
@@ -993,7 +990,7 @@ class VoxelManager implements MeshManager<VoxelShader, VoxelMesh> {
     const fog_depth = overlay.getFogDepth();
     gl.uniform1f(shader.u_move, move);
     gl.uniform1f(shader.u_wave, wave);
-    gl.uniform1i(shader.u_alphaTest, 1);
+    gl.uniform1f(shader.u_alphaTest, 1);
     gl.uniform3fv(shader.u_fogColor, fog_color);
     gl.uniform1f(shader.u_fogDepth, fog_depth);
 
@@ -1008,7 +1005,7 @@ class VoxelManager implements MeshManager<VoxelShader, VoxelMesh> {
       gl.depthMask(false);
       gl.enable(gl.BLEND);
       gl.disable(gl.CULL_FACE);
-      gl.uniform1i(shader.u_alphaTest, 0);
+      gl.uniform1f(shader.u_alphaTest, 0);
       for (const mesh of this.water_meshes) {
         if (mesh.draw(camera, planes)) drawn++;
       }
@@ -1048,6 +1045,7 @@ const kSpriteShader = `
   }
 #split
   uniform float u_frame;
+  uniform float u_light;
   uniform sampler2DArray u_texture;
   in vec2 v_uv;
   out vec4 o_color;
@@ -1055,7 +1053,7 @@ const kSpriteShader = `
   void main() {
     o_color = texture(u_texture, vec3(v_uv, u_frame));
     if (o_color[3] < 0.5) discard;
-    o_color[3] = 1.0;
+    o_color *= u_light;
   }
 `;
 
@@ -1065,6 +1063,7 @@ class SpriteShader extends Shader {
   u_billboard: WebGLUniformLocation | null;
   u_transform: WebGLUniformLocation | null;
   u_frame:     WebGLUniformLocation | null;
+  u_light:     WebGLUniformLocation | null;
 
   constructor(gl: WebGL2RenderingContext) {
     super(gl, kSpriteShader);
@@ -1073,11 +1072,13 @@ class SpriteShader extends Shader {
     this.u_billboard = this.getUniformLocation('u_billboard');
     this.u_transform = this.getUniformLocation('u_transform');
     this.u_frame     = this.getUniformLocation('u_frame');
+    this.u_light     = this.getUniformLocation('u_light');
   }
 };
 
 class SpriteMesh extends Mesh<SpriteShader, SpriteMesh> {
   private frame: int;
+  private light: number;
   private manager: SpriteManager;
   private size: number;
   private stuv: Float32Array;
@@ -1086,6 +1087,7 @@ class SpriteMesh extends Mesh<SpriteShader, SpriteMesh> {
   constructor(manager: SpriteManager, meshes: SpriteMesh[], sprite: Sprite) {
     super(manager, meshes);
     this.frame = 0;
+    this.light = 1;
     this.manager = manager;
     this.size = sprite.size;
     this.stuv = new Float32Array(4);
@@ -1103,6 +1105,7 @@ class SpriteMesh extends Mesh<SpriteShader, SpriteMesh> {
     gl.bindTexture(TEXTURE_2D_ARRAY, this.texture);
     gl.uniform1f(shader.u_size, this.size);
     gl.uniform4fv(shader.u_stuv, this.stuv);
+    gl.uniform1f(shader.u_light, this.light);
     gl.uniform1f(shader.u_frame, this.frame);
     gl.uniformMatrix4fv(shader.u_transform, false, transform);
     gl.drawArraysInstanced(gl.TRIANGLES, 0, 3, 2);
@@ -1111,6 +1114,10 @@ class SpriteMesh extends Mesh<SpriteShader, SpriteMesh> {
 
   setFrame(frame: int): void {
     this.frame = frame;
+  }
+
+  setLight(light: number): void {
+    this.light = light;
   }
 
   setPosition(x: int, y: int, z: int): void {
@@ -1381,6 +1388,7 @@ interface IShadowMesh extends IMesh {
 
 interface ISpriteMesh extends IMesh {
   setFrame: (frame: int) => void,
+  setLight: (light: number) => void,
   setSTUV: (s: number, t: number, u: number, v: number) => void,
 };
 
