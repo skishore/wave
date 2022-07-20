@@ -330,13 +330,13 @@ type Loader = (x: int, z: int, column: Column) => void;
 
 class Column {
   private decorations: int[];
-  private data: Uint16Array;
+  private data: Int16Array;
   private last: int;
   private size: int;
 
   constructor() {
     this.decorations = [];
-    this.data = new Uint16Array(2 * kWorldHeight);
+    this.data = new Int16Array(2 * kWorldHeight);
     this.last = 0;
     this.size = 0;
   }
@@ -370,8 +370,9 @@ class Column {
   }
 
   push(block: BlockId, height: int): void {
+    height = Math.min(height, kWorldHeight);
     if (height <= this.last) return;
-    this.last = Math.min(height, kWorldHeight);
+    this.last = height;
     const offset = 2 * this.size;
     this.data[offset + 0] = block;
     this.data[offset + 1] = this.last;
