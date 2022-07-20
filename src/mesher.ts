@@ -180,6 +180,9 @@ class TerrainMesher {
       const u = 3 - d - v;
       const ld = kTmpShape[d] - 1, lu = kTmpShape[u] - 2, lv = kTmpShape[v] - 2;
       const sd = stride[d], su = stride[u], sv = stride[v];
+      const hd = d === 1 ? 0 : heightmap.stride[d >> 1];
+      const hu = u === 1 ? 0 : heightmap.stride[u >> 1];
+      const hv = v === 1 ? 0 : heightmap.stride[v >> 1];
       const base = su + sv;
 
       // d is the dimension that the quad faces. A d of {0, 1, 2} corresponds
@@ -247,14 +250,10 @@ class TerrainMesher {
 
             const lit = (() => {
               const xd = id + (facing > 0 ? 1 : 0);
-              if (d === 1) {
-                const height = heightmap.get(iv + 1, iu + 1);
-                return height <= xd;
-              } else {
-                const height = d === 0 ? heightmap.get(xd, iu + 1)
-                                       : heightmap.get(iu + 1, xd);
-                return height <= iv + 1;
-              }
+              const index = hd * xd + hu * (iu + 1) + hv * (iv + 1);
+              const height = heightmap.data[index];
+              const current = d === 1 ? xd : iv + 1;
+              return height <= current;
             })();
 
             const material = facing > 0
