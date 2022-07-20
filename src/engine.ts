@@ -331,14 +331,20 @@ type Loader = (x: int, z: int, column: Column) => void;
 class Column {
   private decorations: int[];
   private data: Int16Array;
-  private last: int;
-  private size: int;
+  private last: int = 0;
+  private size: int = 0;
+
+  // For computing "chunk equi-levels" efficiently. An "equi-level" is a
+  // height in a chunk at which all columns have the same block.
+  private mismatches: Int16Array;
+  private reference_data: Int16Array;
+  private reference_size: int = 0;
 
   constructor() {
     this.decorations = [];
     this.data = new Int16Array(2 * kWorldHeight);
-    this.last = 0;
-    this.size = 0;
+    this.mismatches = new Int16Array(kWorldHeight);
+    this.reference_data = new Int16Array(2 * kWorldHeight);
   }
 
   clear(): void {
@@ -347,7 +353,7 @@ class Column {
     this.size = 0;
   }
 
-  fillChunk(x: int, z: int, chunk: Chunk): void {
+  fillChunk(x: int, z: int, chunk: Chunk, first: boolean): void {
     let last = 0;
     for (let i = 0; i < this.size; i++) {
       const offset = 2 * i;
@@ -360,6 +366,16 @@ class Column {
       const block = this.decorations[i + 0] as BlockId
       const level = this.decorations[i + 1];
       chunk.setColumn(x, z, level, 1, block);
+    }
+    this.detectEquiLevelChanges(first);
+  }
+
+  fillEquiLevels(equilevels: Int16Array): void {
+    let current = 0;
+    const mismatches = this.mismatches;
+    for (let i = 0; i < kWorldHeight; i++) {
+      current += mismatches[i];
+      equilevels[i] = (current === 0 ? 1 : 0);
     }
   }
 
@@ -389,6 +405,55 @@ class Column {
 
   getSize(): int {
     return this.size;
+  }
+
+  private detectEquiLevelChanges(first: boolean): void {
+    if (this.last < kWorldHeight) {
+      const offset = 2 * this.size;
+      this.data[offset + 0] = kEmptyBlock;
+      this.data[offset + 1] = kWorldHeight;
+      this.size++;
+    }
+
+    if (first) {
+      this.mismatches.fill(0);
+      this.reference_data.set(this.data);
+      this.reference_size = this.size;
+      return;
+    }
+
+    let matched = true;
+    let di = 0, ri = 0;
+    let d_start = 0, r_start = 0;
+    while (di < this.size && ri < this.reference_size) {
+      const d_offset = 2 * di;
+      const d_block = this.data[d_offset + 0];
+      const d_limit = this.data[d_offset + 1];
+
+      const r_offset = 2 * ri;
+      const r_block = this.reference_data[r_offset + 0];
+      const r_limit = this.reference_data[r_offset + 1];
+
+      if (matched !== (d_block === r_block)) {
+        const height = Math.max(d_start, r_start);
+        this.mismatches[height] += matched ? 1 : -1;
+        matched = !matched;
+      }
+
+      if (d_limit <= r_limit) {
+        d_start = d_limit;
+        di++;
+      }
+      if (r_limit <= d_limit) {
+        r_start = r_limit;
+        ri++;
+      }
+    }
+
+    assert(di === this.size);
+    assert(ri === this.reference_size);
+    assert(d_start === kWorldHeight);
+    assert(r_start === kWorldHeight);
   }
 };
 
@@ -528,6 +593,7 @@ class Chunk {
   private world: World;
   private voxels: Tensor3;
   private heightmap: Tensor2;
+  private equilevels: Int16Array;
 
   constructor(cx: int, cz: int, world: World, loader: Loader) {
     this.cx = cx;
@@ -535,6 +601,7 @@ class Chunk {
     this.world = world;
     this.voxels = new Tensor3(kChunkWidth, kWorldHeight, kChunkWidth);
     this.heightmap = new Tensor2(kChunkWidth, kChunkWidth);
+    this.equilevels = new Int16Array(kWorldHeight);
     this.load(loader);
   }
 
@@ -571,6 +638,7 @@ class Chunk {
     this.dirty = true;
 
     this.updateHeightmap(xm, zm, index, y, 1, block);
+    this.equilevels[y] = 0;
 
     const neighbor = (x: int, y: int, z: int) => {
       const {cx, cz} = this;
@@ -615,11 +683,13 @@ class Chunk {
     const dz = cz << kChunkBits;
     for (let x = 0; x < kChunkWidth; x++) {
       for (let z = 0; z < kChunkWidth; z++) {
+        const first = x + z === 0;
         loader(x + dx, z + dz, column);
-        column.fillChunk(x + dx, z + dz, this);
+        column.fillChunk(x + dx, z + dz, this, first);
         column.clear();
       }
     }
+    column.fillEquiLevels(this.equilevels);
 
     const neighbor = (x: int, z: int) => {
       const chunk = this.world.chunks.get(x + cx, z + cz);
