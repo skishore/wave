@@ -680,7 +680,7 @@ const main = () => {
   };
 
   const registry = env.registry;
-  registry.addMaterialOfColor('blue', [0.1, 0.1, 0.4, 0.2], true);
+  registry.addMaterialOfColor('blue', [0.1, 0.1, 0.4, 0.4], true);
   registry.addMaterialOfTexture(
     'water', texture(13, 12), [1, 1, 1, 0.8], true);
   registry.addMaterialOfTexture('leaves', texture(4, 3, true));

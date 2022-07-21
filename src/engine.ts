@@ -1373,7 +1373,7 @@ class Env {
       const limit = max * step;
       for (let i = 1; i < limit; i++) {
         const other = this.world.getBlock(xi, yi + i, zi);
-        if (other === kEmptyBlock) return Math.pow(2, i / step);
+        if (other !== new_block) return Math.pow(2, i / step);
       }
       return Math.pow(2, max);
     })();

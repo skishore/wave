@@ -1181,6 +1181,8 @@ class SpriteManager implements MeshManager<SpriteShader, SpriteMesh> {
 
 //////////////////////////////////////////////////////////////////////////////
 
+const kShadowAlpha = 0.36;
+
 const kShadowShader = `
   uniform float u_size;
   uniform mat4 u_transform;
@@ -1204,7 +1206,7 @@ const kShadowShader = `
   void main() {
     float radius = length(v_pos);
     if (radius > 0.5) discard;
-    o_color = vec4(0.0, 0.0, 0.0, 0.5);
+    o_color = vec4(0.0, 0.0, 0.0, ${kShadowAlpha});
   }
 `;
 
@@ -1273,7 +1275,7 @@ class ShadowManager implements MeshManager<ShadowShader, ShadowMesh> {
     for (let i = 0; i < 8; i++) {
       const bound = result[i];
       bound[0] = (i & 1) ? size : -size;
-      bound[2] = (i & 1) ? size : -size;
+      bound[2] = (i & 4) ? size : -size;
     }
     return result;
   }
@@ -1363,7 +1365,7 @@ class ScreenOverlay {
   }
 
   getFogDepth(): number {
-    return this.color[3] === 1 ? 1024 : 16;
+    return this.color[3] === 1 ? 1024 : 64;
   }
 
   setColor(color: Color) {
@@ -1481,5 +1483,5 @@ class Renderer {
 
 //////////////////////////////////////////////////////////////////////////////
 
-export {Geometry, Renderer, Texture};
+export {kShadowAlpha, Geometry, Renderer, Texture};
 export {IMesh as Mesh, IShadowMesh as ShadowMesh, ISpriteMesh as SpriteMesh, IVoxelMesh as VoxelMesh};

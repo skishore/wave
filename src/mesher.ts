@@ -1,5 +1,5 @@
 import {assert, int, nonnull, Color, Tensor2, Tensor3, Vec3} from './base.js';
-import {Geometry, Renderer, Texture, VoxelMesh} from './renderer.js';
+import {kShadowAlpha, Geometry, Renderer, Texture, VoxelMesh} from './renderer.js';
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -467,8 +467,8 @@ class TerrainMesher {
     quads[offset_size + 0] = w;
     quads[offset_size + 1] = h;
 
-    const light = lit ? 1 : 0.64;
     const color = material.color;
+    const light = lit ? 1 : 1 - kShadowAlpha;
     const offset_color = base + Geometry.OffsetColor;
     quads[offset_color + 0] = color[0] * light;
     quads[offset_color + 1] = color[1] * light;
