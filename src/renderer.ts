@@ -1002,7 +1002,6 @@ class VoxelManager implements MeshManager<VoxelShader, VoxelMesh> {
       total = this.solid_meshes.length;
     } else {
       // Alpha-blended voxel meshes. (Should we sort them?)
-      gl.depthMask(false);
       gl.enable(gl.BLEND);
       gl.disable(gl.CULL_FACE);
       gl.uniform1f(shader.u_alphaTest, 0);
@@ -1012,7 +1011,6 @@ class VoxelManager implements MeshManager<VoxelShader, VoxelMesh> {
       total = this.water_meshes.length;
       gl.enable(gl.CULL_FACE);
       gl.disable(gl.BLEND);
-      gl.depthMask(true);
     }
 
     stats.drawn += drawn;
@@ -1307,7 +1305,7 @@ const kScreenOverlayShader = `
     int index = gl_VertexID + (gl_VertexID > 0 ? gl_InstanceID : 0);
     float w = float(((index + 1) & 3) >> 1);
     float h = float(((index + 0) & 3) >> 1);
-    gl_Position = vec4(2.0 * w - 1.0, 2.0 * h - 1.0, 0.0, 1.0);
+    gl_Position = vec4(2.0 * w - 1.0, 2.0 * h - 1.0, 1.0, 1.0);
   }
 #split
   uniform vec4 u_color;
@@ -1342,11 +1340,16 @@ class ScreenOverlay {
   }
 
   draw() {
-    if (this.color[3] === 1) return;
+    const alpha = this.color[3];
+    if (alpha === 1) return;
 
     this.shader.bind();
-
     const gl = this.gl;
+    this.color[3] = 1;
+    gl.uniform4fv(this.shader.u_color, this.color);
+    gl.drawArraysInstanced(gl.TRIANGLES, 0, 3, 2);
+    this.color[3] = alpha;
+
     gl.enable(gl.BLEND);
     gl.disable(gl.DEPTH_TEST);
     gl.uniform4fv(this.shader.u_color, this.color);
