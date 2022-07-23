@@ -370,7 +370,7 @@ class Column {
     this.detectEquiLevelChanges(first);
   }
 
-  fillEquiLevels(equilevels: Int16Array): void {
+  fillEquilevels(equilevels: Int16Array): void {
     let current = 0;
     const mismatches = this.mismatches;
     for (let i = 0; i < kWorldHeight; i++) {
@@ -415,9 +415,18 @@ class Column {
       this.size++;
     }
 
+    if (first) this.mismatches.fill(0);
+
+    for (let i = 0; i < this.decorations.length; i += 2) {
+      const level = this.decorations[i + 1];
+      this.mismatches[level]++;
+      if (level + 1 < kWorldHeight) this.mismatches[level + 1]--;
+    }
+
     if (first) {
-      this.mismatches.fill(0);
-      this.reference_data.set(this.data);
+      for (let i = 0; i < 2 * this.size; i++) {
+        this.reference_data[i] = this.data[i];
+      }
       this.reference_size = this.size;
       return;
     }
@@ -566,8 +575,12 @@ const kFrontierLOD = 2;
 const kFrontierRadius = 8;
 const kFrontierLevels = 6;
 
+// Enable debug assertions for the equi-levels optimization.
+const kCheckEquilevels = false;
+
 // List of neighboring chunks to include when meshing.
 type Point = [int, int, int];
+const kHeightOffset = 2;
 const kNeighborOffsets = ((): [Point, Point, Point, Point][] => {
   const W = kChunkWidth;
   const H = kWorldHeight;
@@ -605,7 +618,7 @@ class Chunk {
     this.load(loader);
   }
 
-  dispose() {
+  dispose(): void {
     this.dropMeshes();
 
     const {cx, cz} = this;
@@ -627,7 +640,7 @@ class Chunk {
     return this.heightmap.get(xm, zm);
   }
 
-  setBlock(x: int, y: int, z: int, block: BlockId) {
+  setBlock(x: int, y: int, z: int, block: BlockId): void {
     const voxels = this.voxels;
     const xm = x & kChunkMask, zm = z & kChunkMask;
 
@@ -651,7 +664,7 @@ class Chunk {
     if (zm === kChunkMask) neighbor(0, 0, 1);
   }
 
-  setColumn(x: int, z: int, start: int, count: int, block: BlockId) {
+  setColumn(x: int, z: int, start: int, count: int, block: BlockId): void {
     const voxels = this.voxels;
     const xm = x & kChunkMask, zm = z & kChunkMask;
 
@@ -670,13 +683,13 @@ class Chunk {
     return this.dirty && this.ready;
   }
 
-  remeshChunk() {
+  remeshChunk(): void {
     assert(this.dirty);
     this.remeshTerrain();
     this.dirty = false;
   }
 
-  private load(loader: Loader) {
+  private load(loader: Loader): void {
     const {cx, cz, world} = this;
     const column = world.column;
     const dx = cx << kChunkBits;
@@ -689,7 +702,19 @@ class Chunk {
         column.clear();
       }
     }
-    column.fillEquiLevels(this.equilevels);
+    column.fillEquilevels(this.equilevels);
+
+    if (kCheckEquilevels) {
+      for (let y = 0; y < kWorldHeight; y++) {
+        if (this.equilevels[y] === 0) continue;
+        const base = this.voxels.get(0, y, 0);
+        for (let x = 0; x < kChunkWidth; x++) {
+          for (let z = 0; z < kChunkWidth; z++) {
+            assert(this.voxels.get(x, y, z) === base);
+          }
+        }
+      }
+    }
 
     const neighbor = (x: int, z: int) => {
       const chunk = this.world.chunks.get(x + cx, z + cz);
@@ -708,7 +733,7 @@ class Chunk {
     return this.neighbors === 4;
   }
 
-  private dropMeshes() {
+  private dropMeshes(): void {
     if (this.solid) this.solid.dispose();
     if (this.water) this.water.dispose();
     this.solid = null;
@@ -716,7 +741,7 @@ class Chunk {
     this.dirty = true;
   }
 
-  private notifyNeighborDisposed() {
+  private notifyNeighborDisposed(): void {
     assert(this.neighbors > 0);
     this.neighbors--;
     const old = this.ready;
@@ -724,15 +749,16 @@ class Chunk {
     if (old && !this.ready) this.dropMeshes();
   }
 
-  private notifyNeighborLoaded() {
+  private notifyNeighborLoaded(): void {
     assert(this.neighbors < 4);
     this.neighbors++;
     this.ready = this.checkReady();
   }
 
-  private remeshTerrain() {
+  private remeshTerrain(): void {
     const {cx, cz, world} = this;
-    const {bedrock, buffer, heightmap} = world;
+    const {bedrock, buffer, heightmap, equilevels} = world;
+    equilevels.set(this.equilevels, kHeightOffset);
     for (const offset of kNeighborOffsets) {
       const [c, dstPos, srcPos, size] = offset;
       const chunk = world.chunks.get(cx + c[0], cz + c[2]);
@@ -742,6 +768,22 @@ class Chunk {
       } else {
         this.zeroHeightmap(heightmap, dstPos, size, dstPos[1] - srcPos[1]);
         this.zeroVoxels(buffer, dstPos, size);
+      }
+      if (chunk !== this) this.copyEquilevels(equilevels, chunk, srcPos, size);
+    }
+
+    if (kCheckEquilevels) {
+      for (let y = 0; y < buffer.shape[1]; y++) {
+        if (equilevels[y] === 0) continue;
+        const base = buffer.get(1, y, 1);
+        for (let x = 0; x < buffer.shape[0]; x++) {
+          for (let z = 0; z < buffer.shape[2]; z++) {
+            if ((x !== 0 && x !== buffer.shape[0] - 1) ||
+                (z !== 0 && z !== buffer.shape[2] - 1)) {
+              assert(buffer.get(x, y, z) === base);
+            }
+          }
+        }
       }
     }
 
@@ -756,7 +798,7 @@ class Chunk {
   }
 
   private updateHeightmap(xm: int, zm: int, index: int,
-                          start: int, count: int, block: BlockId) {
+                          start: int, count: int, block: BlockId): void {
     const end = start + count;
     const offset = this.heightmap.index(xm, zm);
     const height = this.heightmap.data[offset]
@@ -774,9 +816,42 @@ class Chunk {
     }
   }
 
-  private copyHeightmap(dst: Tensor2, dstPos: [int, int, int],
-                        src: Tensor2, srcPos: [int, int, int],
-                        size: [int, int, int]) {
+  private copyEquilevels(dst: Int16Array, chunk: Chunk | null,
+                         srcPos: Point, size: Point): void {
+    assert(this.voxels.stride[1] === 1);
+    const data = this.voxels.data;
+
+    if (chunk === null) {
+      for (let i = 0; i < kWorldHeight; i++) {
+        if (dst[i + kHeightOffset] === 0) continue;
+        if (data[i] !== kEmptyBlock) dst[i + kHeightOffset] = 0;
+      }
+      return;
+    }
+
+    assert(chunk.voxels.stride[1] === 1);
+    assert(size[0] === 1 || size[2] === 1);
+    const stride = chunk.voxels.stride[size[0] === 1 ? 2 : 0];
+    const index = chunk.voxels.index(srcPos[0], srcPos[1], srcPos[2]);
+    const limit = stride * (size[0] === 1 ? size[2] : size[0]);
+
+    const chunk_equilevels = chunk.equilevels;
+    const chunk_data = chunk.voxels.data;
+
+    for (let i = 0; i < kWorldHeight; i++) {
+      if (dst[i + kHeightOffset] === 0) continue;
+      const base = data[i];
+      if (chunk_equilevels[i] === 1 && chunk_data[i] === base) continue;
+      for (let offset = 0; offset < limit; offset += stride) {
+        if (chunk_data[index + offset + i] === base) continue;
+        dst[i + kHeightOffset] = 0;
+        break;
+      }
+    }
+  }
+
+  private copyHeightmap(dst: Tensor2, dstPos: Point,
+                        src: Tensor2, srcPos: Point, size: Point): void {
     const ni = size[0], nk = size[2];
     const di = dstPos[0], dk = dstPos[2];
     const si = srcPos[0], sk = srcPos[2];
@@ -791,9 +866,8 @@ class Chunk {
     }
   }
 
-  private copyVoxels(dst: Tensor3, dstPos: [int, int, int],
-                     src: Tensor3, srcPos: [int, int, int],
-                     size: [int, int, int]) {
+  private copyVoxels(dst: Tensor3, dstPos: Point,
+                     src: Tensor3, srcPos: Point, size: Point): void {
     const [ni, nj, nk] = size;
     const [di, dj, dk] = dstPos;
     const [si, sj, sk] = srcPos;
@@ -809,8 +883,8 @@ class Chunk {
     }
   }
 
-  private zeroHeightmap(dst: Tensor2, dstPos: [int, int, int],
-                        size: [int, int, int], offset: int) {
+  private zeroHeightmap(dst: Tensor2, dstPos: Point,
+                        size: Point, offset: int): void {
     const ni = size[0], nk = size[2];
     const di = dstPos[0], dk = dstPos[2];
 
@@ -821,8 +895,7 @@ class Chunk {
     }
   }
 
-  private zeroVoxels(dst: Tensor3, dstPos: [int, int, int],
-                     size: [int, int, int]) {
+  private zeroVoxels(dst: Tensor3, dstPos: Point, size: Point): void {
     const [ni, nj, nk] = size;
     const [di, dj, dk] = dstPos;
     const dsj = dst.stride[1];
@@ -1120,6 +1193,7 @@ class World {
   loadFrontier: Loader | null;
   buffer: Tensor3;
   heightmap: Tensor2;
+  equilevels: Int16Array;
 
   constructor(registry: Registry, renderer: Renderer) {
     const radius = (kChunkRadius | 0) + 0.5;
@@ -1143,6 +1217,8 @@ class World {
     const h = kWorldHeight + 3;
     this.buffer = new Tensor3(w, h, w);
     this.heightmap = new Tensor2(w, w);
+    this.equilevels = new Int16Array(h);
+    this.equilevels[0] = this.equilevels[1] = this.equilevels[h - 1] = 1;
   }
 
   getBlock(x: int, y: int, z: int): BlockId {
