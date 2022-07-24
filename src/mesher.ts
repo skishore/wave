@@ -88,14 +88,16 @@ class TerrainMesher {
     this.renderer = renderer;
   }
 
-  meshChunk(voxels: Tensor3, heightmap: Tensor2,
+  meshChunk(voxels: Tensor3, heightmap: Tensor2, equilevels: Int16Array,
             solid: Mesh, water: Mesh): [Mesh, Mesh] {
     const solid_geo = solid ? solid.getGeometry() : kCachedGeometryA;
     const water_geo = water ? water.getGeometry() : kCachedGeometryB;
     solid_geo.clear();
     water_geo.clear();
 
-    this.computeChunkGeometry(solid_geo, water_geo, voxels, heightmap);
+    this.computeChunkGeometryWithEquilevels(
+        solid_geo, water_geo, voxels, heightmap, equilevels);
+
     return [
       this.buildMesh(solid_geo, solid, true),
       this.buildMesh(water_geo, water, false),
@@ -158,21 +160,59 @@ class TerrainMesher {
     return this.renderer.addVoxelMesh(Geometry.clone(geo), solid);
   }
 
+  private computeChunkGeometryWithEquilevels(
+      solid_geo: Geometry, water_geo: Geometry, voxels: Tensor3,
+      heightmap: Tensor2, equilevels: Int16Array): void {
+
+    let max_height = 0;
+    const heightmap_data = heightmap.data;
+    for (let i = 0; i < heightmap_data.length; i++) {
+      max_height = Math.max(max_height, heightmap_data[i]);
+    }
+
+    assert(voxels.stride[1] === 1);
+    assert(voxels.shape[1] === equilevels.length);
+    const data = voxels.data;
+    const limit = equilevels.length - 1;
+    const index = voxels.index(1, 0, 1);
+    const opaque = this.opaque;
+
+    const skip_level = (i: int) => {
+      const el0 = equilevels[i + 0];
+      const el1 = equilevels[i + 1];
+      if (el0 + el1 !== 2) return false;
+      const block0 = data[index + i + 0];
+      const block1 = data[index + i + 1];
+      if (block0 === block1) return true;
+      return opaque[block0] && opaque[block1];
+    };
+
+    for (let i = 0; i < limit; i++) {
+      if (skip_level(i)) continue;
+      let j = i + 1;
+      for (; j < limit; j++) {
+        if (skip_level(j)) break;
+      }
+      const y_min = i;
+      const y_max = Math.min(j, max_height) + 1;
+      if (y_min >= y_max) break;
+      this.computeChunkGeometry(
+          solid_geo, water_geo, voxels, heightmap, y_min, y_max);
+      i = j;
+    }
+  }
+
   private computeChunkGeometry(solid_geo: Geometry, water_geo: Geometry,
-                               voxels: Tensor3, heightmap: Tensor2): void {
+                               voxels: Tensor3, heightmap: Tensor2,
+                               y_min: int, y_max: int): void {
 
     const {data, shape, stride} = voxels;
 
     assert(heightmap.shape[0] === shape[0]);
     assert(heightmap.shape[1] === shape[2]);
-    let max = 0;
-    const heightmap_data = heightmap.data;
-    for (let i = 0; i < heightmap_data.length; i++) {
-      max = Math.max(max, heightmap_data[i]);
-    }
     kTmpShape[0] = shape[0];
+    kTmpShape[1] = y_max - y_min;
     kTmpShape[2] = shape[2];
-    kTmpShape[1] = Math.min(shape[1], max + 1);
 
     for (let d = 0; d < 3; d++) {
       const dir = d * 2;
@@ -183,7 +223,7 @@ class TerrainMesher {
       const hd = d === 1 ? 0 : heightmap.stride[d >> 1];
       const hu = u === 1 ? 0 : heightmap.stride[u >> 1];
       const hv = v === 1 ? 0 : heightmap.stride[v >> 1];
-      const base = su + sv;
+      const base = su + sv + y_min * stride[1];
 
       // d is the dimension that the quad faces. A d of {0, 1, 2} corresponds
       // to a quad with a normal that's a unit vector on the {x, y, z} axis,
@@ -253,7 +293,7 @@ class TerrainMesher {
               const index = hd * xd + hu * (iu + 1) + hv * (iv + 1);
               const height = heightmap.data[index];
               const current = d === 1 ? xd : iv + 1;
-              return height <= current;
+              return height <= current + y_min;
             })();
 
             const material = facing > 0
@@ -271,19 +311,25 @@ class TerrainMesher {
         }
         if (complete_union === 0) continue;
 
-        if (id === 0) {
-          for (let i = 0; i < area; i++) {
-            if (kMaskData[i] > 0) kMaskData[i] = 0;
-          }
-        } else if (id === shape[d] - 2) {
-          for (let i = 0; i < area; i++) {
-            if (kMaskData[i] < 0) kMaskData[i] = 0;
+        // Our data includes a 1-voxel-wide border all around our chunk in
+        // all directions. In the y direction, this border is synthetic, but
+        // in the x and z direction, the border cells come from other chunks.
+        //
+        // To avoid meshing a block face twice, we mesh a face iff its block
+        // is in our chunk. This check applies in the x and z directions.
+        if (d !== 1) {
+          if (id === 0) {
+            for (let i = 0; i < area; i++) {
+              if (kMaskData[i] > 0) kMaskData[i] = 0;
+            }
+          } else if (id === shape[d] - 2) {
+            for (let i = 0; i < area; i++) {
+              if (kMaskData[i] < 0) kMaskData[i] = 0;
+            }
           }
         }
 
         n = 0;
-        kTmpPos[d] = id;
-
         for (let iu = 0; iu < lu; iu++) {
           if (kMaskUnion[iu] === 0) {
             n += lv;
@@ -310,13 +356,16 @@ class TerrainMesher {
               }
             }
 
+            kTmpPos[d] = id;
             kTmpPos[u] = iu;
             kTmpPos[v] = iv;
+            kTmpPos[1] += y_min;
+
             const ao = mask & 0xff;
             const dir = Math.sign(mask);
             const lit = mask & 0x100 ? 1 : 0;
-            const id = Math.abs(mask >> 9) as MaterialId;
-            const material = this.getMaterialData(id);
+            const material_id = Math.abs(mask >> 9) as MaterialId;
+            const material = this.getMaterialData(material_id);
             const geo = material.color[3] < 1 ? water_geo : solid_geo;
             const w_fixed = d > 0 ? w : h;
             const h_fixed = d > 0 ? h : w;

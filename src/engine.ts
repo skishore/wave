@@ -580,18 +580,17 @@ const kCheckEquilevels = false;
 
 // List of neighboring chunks to include when meshing.
 type Point = [int, int, int];
-const kHeightOffset = 2;
 const kNeighborOffsets = ((): [Point, Point, Point, Point][] => {
   const W = kChunkWidth;
   const H = kWorldHeight;
   const L = W - 1;
   const N = W + 1;
   return [
-    [[ 0,  0,  0], [1, 2, 1], [0, 0, 0], [W, H, W]],
-    [[-1,  0,  0], [0, 2, 1], [L, 0, 0], [1, H, W]],
-    [[ 1,  0,  0], [N, 2, 1], [0, 0, 0], [1, H, W]],
-    [[ 0,  0, -1], [1, 2, 0], [0, 0, L], [W, H, 1]],
-    [[ 0,  0,  1], [1, 2, N], [0, 0, 0], [W, H, 1]],
+    [[ 0,  0,  0], [1, 1, 1], [0, 0, 0], [W, H, W]],
+    [[-1,  0,  0], [0, 1, 1], [L, 0, 0], [1, H, W]],
+    [[ 1,  0,  0], [N, 1, 1], [0, 0, 0], [1, H, W]],
+    [[ 0,  0, -1], [1, 1, 0], [0, 0, L], [W, H, 1]],
+    [[ 0,  0,  1], [1, 1, N], [0, 0, 0], [W, H, 1]],
   ];
 })();
 
@@ -758,18 +757,22 @@ class Chunk {
   private remeshTerrain(): void {
     const {cx, cz, world} = this;
     const {bedrock, buffer, heightmap, equilevels} = world;
-    equilevels.set(this.equilevels, kHeightOffset);
+    equilevels.set(this.equilevels, 1);
     for (const offset of kNeighborOffsets) {
       const [c, dstPos, srcPos, size] = offset;
       const chunk = world.chunks.get(cx + c[0], cz + c[2]);
+      const delta = dstPos[1] - srcPos[1];
+      assert(delta === 1);
       if (chunk) {
         this.copyHeightmap(heightmap, dstPos, chunk.heightmap, srcPos, size);
         this.copyVoxels(buffer, dstPos, chunk.voxels, srcPos, size);
       } else {
-        this.zeroHeightmap(heightmap, dstPos, size, dstPos[1] - srcPos[1]);
+        this.zeroHeightmap(heightmap, dstPos, size, delta);
         this.zeroVoxels(buffer, dstPos, size);
       }
-      if (chunk !== this) this.copyEquilevels(equilevels, chunk, srcPos, size);
+      if (chunk !== this) {
+        this.copyEquilevels(equilevels, chunk, srcPos, size, delta);
+      }
     }
 
     if (kCheckEquilevels) {
@@ -789,10 +792,10 @@ class Chunk {
 
     const x = cx << kChunkBits, z = cz << kChunkBits;
     const meshed = world.mesher.meshChunk(
-        buffer, heightmap, this.solid, this.water);
+        buffer, heightmap, equilevels, this.solid, this.water);
     const [solid, water] = meshed;
-    if (solid) solid.setPosition(x, -1, z);
-    if (water) water.setPosition(x, -1, z);
+    if (solid) solid.setPosition(x, 0, z);
+    if (water) water.setPosition(x, 0, z);
     this.solid = solid;
     this.water = water;
   }
@@ -817,14 +820,14 @@ class Chunk {
   }
 
   private copyEquilevels(dst: Int16Array, chunk: Chunk | null,
-                         srcPos: Point, size: Point): void {
+                         srcPos: Point, size: Point, delta: int): void {
     assert(this.voxels.stride[1] === 1);
     const data = this.voxels.data;
 
     if (chunk === null) {
       for (let i = 0; i < kWorldHeight; i++) {
-        if (dst[i + kHeightOffset] === 0) continue;
-        if (data[i] !== kEmptyBlock) dst[i + kHeightOffset] = 0;
+        if (dst[i + delta] === 0) continue;
+        if (data[i] !== kEmptyBlock) dst[i + delta] = 0;
       }
       return;
     }
@@ -839,12 +842,12 @@ class Chunk {
     const chunk_data = chunk.voxels.data;
 
     for (let i = 0; i < kWorldHeight; i++) {
-      if (dst[i + kHeightOffset] === 0) continue;
+      if (dst[i + delta] === 0) continue;
       const base = data[i];
       if (chunk_equilevels[i] === 1 && chunk_data[i] === base) continue;
       for (let offset = 0; offset < limit; offset += stride) {
         if (chunk_data[index + offset + i] === base) continue;
-        dst[i + kHeightOffset] = 0;
+        dst[i + delta] = 0;
         break;
       }
     }
@@ -883,14 +886,14 @@ class Chunk {
     }
   }
 
-  private zeroHeightmap(dst: Tensor2, dstPos: Point,
-                        size: Point, offset: int): void {
+  private zeroHeightmap(
+      dst: Tensor2, dstPos: Point, size: Point, delta: int): void {
     const ni = size[0], nk = size[2];
     const di = dstPos[0], dk = dstPos[2];
 
     for (let i = 0; i < ni; i++) {
       for (let k = 0; k < nk; k++) {
-        dst.set(di + i, dk + k, offset);
+        dst.set(di + i, dk + k, delta);
       }
     }
   }
@@ -1214,11 +1217,11 @@ class World {
     // have room for a plane of bedrock blocks below this chunk (in case we
     // dig all the way to y = 0).
     const w = kChunkWidth + 2;
-    const h = kWorldHeight + 3;
+    const h = kWorldHeight + 2;
     this.buffer = new Tensor3(w, h, w);
     this.heightmap = new Tensor2(w, w);
     this.equilevels = new Int16Array(h);
-    this.equilevels[0] = this.equilevels[1] = this.equilevels[h - 1] = 1;
+    this.equilevels[0] = this.equilevels[h - 1] = 1;
   }
 
   getBlock(x: int, y: int, z: int): BlockId {
@@ -1251,15 +1254,14 @@ class World {
     for (let x = 0; x < buffer.shape[0]; x++) {
       for (let z = 0; z < buffer.shape[2]; z++) {
         buffer.set(x, 0, z, bedrock);
-        buffer.set(x, 1, z, bedrock);
       }
     }
   }
 
   recenter(x: number, y: number, z: number) {
     const {chunks, frontier, loadChunk} = this;
-    const cx = (x >> kChunkBits);
-    const cz = (z >> kChunkBits);
+    const cx = Math.floor(x) >> kChunkBits;
+    const cz = Math.floor(z) >> kChunkBits;
     chunks.center(cx, cz);
     frontier.center(cx, cz);
 
@@ -1455,9 +1457,9 @@ class Env {
     };
 
     const buffer = 1 / kSweepResolution;
-    const x = ((target[0] * kSweepResolution) | 0) / kSweepResolution;
-    const y = ((target[1] * kSweepResolution) | 0) / kSweepResolution;
-    const z = ((target[2] * kSweepResolution) | 0) / kSweepResolution;
+    const x = Math.floor(target[0] * kSweepResolution) / kSweepResolution;
+    const y = Math.floor(target[1] * kSweepResolution) / kSweepResolution;
+    const z = Math.floor(target[2] * kSweepResolution) / kSweepResolution;
 
     Vec3.set(kTmpMin, x - buffer, y - buffer, z - buffer);
     Vec3.set(kTmpMax, x + buffer, y + buffer, z + buffer);
