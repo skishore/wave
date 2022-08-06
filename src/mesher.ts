@@ -215,7 +215,7 @@ class TerrainMesher {
     kTmpShape[2] = shape[2];
 
     for (let d = 0; d < 3; d++) {
-      const dir = d * 2;
+      const face = d * 2;
       const v = (d === 1 ? 0 : 1);
       const u = 3 - d - v;
       const ld = kTmpShape[d] - 1, lu = kTmpShape[u] - 2, lv = kTmpShape[v] - 2;
@@ -270,39 +270,41 @@ class TerrainMesher {
           for (let iv = 0; iv < lv; iv++, index += sv, n += 1) {
             // mask[n] is the face between (id, iu, iv) and (id + 1, iu, iv).
             // Its value is the MaterialId to use, times -1, if it is in the
-            // direction opposite `dir`.
+            // direction opposite `face`.
             //
             // When we enable lighting and ambient occlusion, we pack these
             // values into the mask, because if the lighting is different for
             // two adjacent voxels, we can't combine them into the same greedy
             // meshing quad. The packed layout is:
             //
-            //    - bits 0:8:  AO value (4 x 2-bit values)
-            //    - bits 8:9:  lighting value in {0, 1}
-            //    - bits 9:25: material index
-            //    - sign bit:  direction along the d-axis
+            //    - bits 0:8:   AO value (4 x 2-bit values)
+            //    - bits 8:9:   lighting value in {0, 1}
+            //    - bits 9:10:  dir in {0, 1} (0 -> -1, 1 -> +1)
+            //    - bits 10:25: material index
             //
             const block0 = data[index] as BlockId;
             const block1 = data[index + sd] as BlockId;
             if (block0 === block1) continue;
-            const facing = this.getFaceDir(block0, block1, dir);
-            if (facing === 0) continue;
+            const dir = this.getFaceDir(block0, block1, face);
+            if (dir === 0) continue;
 
             const lit = (() => {
-              const xd = id + (facing > 0 ? 1 : 0);
+              const xd = id + (dir > 0 ? 1 : 0);
               const index = hd * xd + hu * (iu + 1) + hv * (iv + 1);
               const height = light_map.data[index];
               const current = d === 1 ? xd : iv + 1;
               return height <= current + y_min;
             })();
 
-            const material = facing > 0
-              ?  this.getBlockFaceMaterial(block0, dir)
-              : -this.getBlockFaceMaterial(block1, dir + 1);
-            const ao = facing > 0
+            const material = dir > 0
+              ? this.getBlockFaceMaterial(block0, face)
+              : this.getBlockFaceMaterial(block1, face + 1);
+            const ao = dir > 0
               ? this.packAOMask(data, index + sd, index, su_fixed, sv_fixed)
               : this.packAOMask(data, index, index + sd, su_fixed, sv_fixed);
-            const mask = (material << 9) | (lit ? 1 << 8 : 0) | ao;
+            const mask = (material << 10) |
+                         (dir > 0 ? 1 << 9 : 0) |
+                         (lit ? 1 << 8 : 0) | ao;
 
             kMaskData[n] = mask;
             kMaskUnion[iu] |= mask;
@@ -320,11 +322,11 @@ class TerrainMesher {
         if (d !== 1) {
           if (id === 0) {
             for (let i = 0; i < area; i++) {
-              if (kMaskData[i] > 0) kMaskData[i] = 0;
+              if ((kMaskData[i] & 0x200)) kMaskData[i] = 0;
             }
           } else if (id === shape[d] - 2) {
             for (let i = 0; i < area; i++) {
-              if (kMaskData[i] < 0) kMaskData[i] = 0;
+              if (!(kMaskData[i] & 0x200)) kMaskData[i] = 0;
             }
           }
         }
@@ -362,10 +364,9 @@ class TerrainMesher {
             kTmpPos[1] += y_min;
 
             const ao = mask & 0xff;
-            const dir = Math.sign(mask);
             const lit = mask & 0x100 ? 1 : 0;
-            const material_id = Math.abs(mask >> 9) as MaterialId;
-            const material = this.getMaterialData(material_id);
+            const dir = mask & 0x200 ? 1 : -1;
+            const material = this.getMaterialData((mask >> 10) as MaterialId);
             const geo = material.color[3] < 1 ? water_geo : solid_geo;
             const w_fixed = d > 0 ? w : h;
             const h_fixed = d > 0 ? h : w;
@@ -419,8 +420,8 @@ class TerrainMesher {
         }
 
         const d = 1;
-        const dir = 2 * d;
-        const id = this.getBlockFaceMaterial(block, dir);
+        const face = 2 * d;
+        const id = this.getBlockFaceMaterial(block, face);
         const material = this.getMaterialData(id);
 
         Vec3.set(kTmpPos, x * scale, height, z * scale);
