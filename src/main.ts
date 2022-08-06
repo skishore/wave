@@ -553,7 +553,8 @@ const Meshes = (env: TypedEnv): Component<MeshState> => ({
     for (const state of states) {
       if (!state.mesh) continue;
       const {x, y, z, h} = env.position.getX(state.id);
-      const lit = y >= env.world.getHeight(Math.floor(x), Math.floor(z));
+      const lit = env.world.isBlockLit(
+          Math.floor(x), Math.floor(y), Math.floor(z));
       state.mesh.setPosition(x, y - h / 2, z);
       state.mesh.setLight(lit ? 1 : 0.64);
     }
@@ -680,7 +681,7 @@ const main = () => {
   };
 
   const registry = env.registry;
-  registry.addMaterialOfColor('blue', [0.1, 0.1, 0.4, 0.4], true);
+  registry.addMaterialOfColor('blue', [0.1, 0.1, 0.4, 0.6], true);
   registry.addMaterialOfTexture(
     'water', texture(13, 12), [1, 1, 1, 0.8], true);
   registry.addMaterialOfTexture('leaves', texture(4, 3, true));

@@ -605,6 +605,7 @@ class Chunk {
   private world: World;
   private voxels: Tensor3;
   private heightmap: Tensor2;
+  private light_map: Tensor2;
   private equilevels: Int16Array;
 
   constructor(cx: int, cz: int, world: World, loader: Loader) {
@@ -613,6 +614,7 @@ class Chunk {
     this.world = world;
     this.voxels = new Tensor3(kChunkWidth, kWorldHeight, kChunkWidth);
     this.heightmap = new Tensor2(kChunkWidth, kChunkWidth);
+    this.light_map = new Tensor2(kChunkWidth, kChunkWidth);
     this.equilevels = new Int16Array(kWorldHeight);
     this.load(loader);
   }
@@ -634,9 +636,9 @@ class Chunk {
     return this.voxels.get(xm, y, zm) as BlockId;
   }
 
-  getHeight(x: int, z: int): int {
+  getLitHeight(x: int, z: int): int {
     const xm = x & kChunkMask, zm = z & kChunkMask;
-    return this.heightmap.get(xm, zm);
+    return this.light_map.get(xm, zm);
   }
 
   setBlock(x: int, y: int, z: int, block: BlockId): void {
@@ -756,7 +758,7 @@ class Chunk {
 
   private remeshTerrain(): void {
     const {cx, cz, world} = this;
-    const {bedrock, buffer, heightmap, equilevels} = world;
+    const {bedrock, buffer, heightmap, light_map, equilevels} = world;
     equilevels.set(this.equilevels, 1);
     for (const offset of kNeighborOffsets) {
       const [c, dstPos, srcPos, size] = offset;
@@ -765,9 +767,11 @@ class Chunk {
       assert(delta === 1);
       if (chunk) {
         this.copyHeightmap(heightmap, dstPos, chunk.heightmap, srcPos, size);
+        this.copyHeightmap(light_map, dstPos, chunk.light_map, srcPos, size);
         this.copyVoxels(buffer, dstPos, chunk.voxels, srcPos, size);
       } else {
         this.zeroHeightmap(heightmap, dstPos, size, delta);
+        this.zeroHeightmap(light_map, dstPos, size, delta);
         this.zeroVoxels(buffer, dstPos, size);
       }
       if (chunk !== this) {
@@ -792,7 +796,7 @@ class Chunk {
 
     const x = cx << kChunkBits, z = cz << kChunkBits;
     const meshed = world.mesher.meshChunk(
-        buffer, heightmap, equilevels, this.solid, this.water);
+        buffer, heightmap, light_map, equilevels, this.solid, this.water);
     const [solid, water] = meshed;
     if (solid) solid.setPosition(x, 0, z);
     if (water) water.setPosition(x, 0, z);
@@ -804,11 +808,12 @@ class Chunk {
                           start: int, count: int, block: BlockId): void {
     const end = start + count;
     const offset = this.heightmap.index(xm, zm);
-    const height = this.heightmap.data[offset]
+    const height = this.heightmap.data[offset];
+    const light_ = this.light_map.data[offset];
     const voxels = this.voxels;
+    assert(voxels.stride[1] === 1);
 
     if (block === kEmptyBlock && start < height && height <= end) {
-      assert(voxels.stride[1] === 1);
       let i = 0;
       for (; i < start; i++) {
         if (voxels.data[index - i - 1] !== kEmptyBlock) break;
@@ -816,6 +821,17 @@ class Chunk {
       this.heightmap.data[offset] = start - i;
     } else if (block !== kEmptyBlock && height <= end) {
       this.heightmap.data[offset] = end;
+    }
+
+    const solid = this.world.registry.solid;
+    if (!solid[block] && start < light_ && light_ <= end) {
+      let i = 0;
+      for (; i < start; i++) {
+        if (solid[voxels.data[index - i - 1]]) break;
+      }
+      this.light_map.data[offset] = start - i;
+    } else if (solid[block] && light_ <= end) {
+      this.light_map.data[offset] = end;
     }
   }
 
@@ -1021,7 +1037,7 @@ class Frontier {
 
     assert(kChunkWidth % kFrontierLOD === 0);
     const side = kChunkWidth / kFrontierLOD;
-    const size = 3 * (side + 2) * (side + 2);
+    const size = 2 * (side + 2) * (side + 2);
     this.solid_heightmap = new Uint32Array(size);
     this.water_heightmap = new Uint32Array(size);
     this.side = side;
@@ -1115,7 +1131,7 @@ class Frontier {
       for (let i = 0; i < side; i++) {
         for (let j = 0; j < side; j++) {
           loadFrontier(ax + i * lod, az + j * lod, column);
-          const offset = 3 * ((i + 1) + (j + 1) * (side + 2));
+          const offset = 2 * ((i + 1) + (j + 1) * (side + 2));
 
           const size = column.getSize();
           const last_block = column.getNthBlock(size - 1, bedrock);
@@ -1124,14 +1140,11 @@ class Frontier {
           if (registry.solid[last_block]) {
             solid_heightmap[offset + 0] = last_block;
             solid_heightmap[offset + 1] = last_level;
-            solid_heightmap[offset + 2] = 1;
             water_heightmap[offset + 0] = 0;
             water_heightmap[offset + 1] = 0;
-            water_heightmap[offset + 2] = 0;
           } else {
             water_heightmap[offset + 0] = last_block;
             water_heightmap[offset + 1] = last_level;
-            water_heightmap[offset + 2] = 1;
 
             for (let i = size; i > 0; i--) {
               const block = column.getNthBlock(i - 2, bedrock);
@@ -1139,7 +1152,6 @@ class Frontier {
               if (!registry.solid[block]) continue;
               solid_heightmap[offset + 0] = block;
               solid_heightmap[offset + 1] = level;
-              solid_heightmap[offset + 2] = 0;
               break;
             }
           }
@@ -1196,6 +1208,7 @@ class World {
   loadFrontier: Loader | null;
   buffer: Tensor3;
   heightmap: Tensor2;
+  light_map: Tensor2;
   equilevels: Int16Array;
 
   constructor(registry: Registry, renderer: Renderer) {
@@ -1220,8 +1233,15 @@ class World {
     const h = kWorldHeight + 2;
     this.buffer = new Tensor3(w, h, w);
     this.heightmap = new Tensor2(w, w);
+    this.light_map = new Tensor2(w, w);
     this.equilevels = new Int16Array(h);
     this.equilevels[0] = this.equilevels[h - 1] = 1;
+  }
+
+  isBlockLit(x: int, y: int, z: int): boolean {
+    const cx = x >> kChunkBits, cz = z >> kChunkBits;
+    const chunk = this.chunks.get(cx, cz);
+    return chunk ? y >= chunk.getLitHeight(x, z) : true;
   }
 
   getBlock(x: int, y: int, z: int): BlockId {
@@ -1230,12 +1250,6 @@ class World {
     const cx = x >> kChunkBits, cz = z >> kChunkBits;
     const chunk = this.chunks.get(cx, cz);
     return chunk ? chunk.getBlock(x, y, z) : kUnknownBlock;
-  }
-
-  getHeight(x: int, z: int): int {
-    const cx = x >> kChunkBits, cz = z >> kChunkBits;
-    const chunk = this.chunks.get(cx, cz);
-    return chunk ? chunk.getHeight(x, z) : 0;
   }
 
   setBlock(x: int, y: int, z: int, block: BlockId) {

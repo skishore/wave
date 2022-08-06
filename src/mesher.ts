@@ -7,8 +7,8 @@ type Mesh = VoxelMesh | null;
 type BlockId = int & {__type__: 'BlockId'};
 type MaterialId = int & {__type__: 'MaterialId'};
 
-// A frontier heightmap has a (tile, height, light) for each (x, z) pair.
-const kHeightmapFields = 3;
+// A frontier heightmap has a (tile, height) for each (x, z) pair.
+const kHeightmapFields = 2;
 
 const kNoMaterial = 0 as MaterialId;
 const kEmptyBlock = 0 as BlockId;
@@ -88,15 +88,15 @@ class TerrainMesher {
     this.renderer = renderer;
   }
 
-  meshChunk(voxels: Tensor3, heightmap: Tensor2, equilevels: Int16Array,
-            solid: Mesh, water: Mesh): [Mesh, Mesh] {
+  meshChunk(voxels: Tensor3, heightmap: Tensor2, light_map: Tensor2,
+            equilevels: Int16Array, solid: Mesh, water: Mesh): [Mesh, Mesh] {
     const solid_geo = solid ? solid.getGeometry() : kCachedGeometryA;
     const water_geo = water ? water.getGeometry() : kCachedGeometryB;
     solid_geo.clear();
     water_geo.clear();
 
     this.computeChunkGeometryWithEquilevels(
-        solid_geo, water_geo, voxels, heightmap, equilevels);
+        solid_geo, water_geo, voxels, heightmap, light_map, equilevels);
 
     return [
       this.buildMesh(solid_geo, solid, true),
@@ -162,7 +162,7 @@ class TerrainMesher {
 
   private computeChunkGeometryWithEquilevels(
       solid_geo: Geometry, water_geo: Geometry, voxels: Tensor3,
-      heightmap: Tensor2, equilevels: Int16Array): void {
+      heightmap: Tensor2, light_map: Tensor2, equilevels: Int16Array): void {
 
     let max_height = 0;
     const heightmap_data = heightmap.data;
@@ -197,19 +197,19 @@ class TerrainMesher {
       const y_max = Math.min(j, max_height) + 1;
       if (y_min >= y_max) break;
       this.computeChunkGeometry(
-          solid_geo, water_geo, voxels, heightmap, y_min, y_max);
+          solid_geo, water_geo, voxels, light_map, y_min, y_max);
       i = j;
     }
   }
 
   private computeChunkGeometry(solid_geo: Geometry, water_geo: Geometry,
-                               voxels: Tensor3, heightmap: Tensor2,
+                               voxels: Tensor3, light_map: Tensor2,
                                y_min: int, y_max: int): void {
 
     const {data, shape, stride} = voxels;
 
-    assert(heightmap.shape[0] === shape[0]);
-    assert(heightmap.shape[1] === shape[2]);
+    assert(light_map.shape[0] === shape[0]);
+    assert(light_map.shape[1] === shape[2]);
     kTmpShape[0] = shape[0];
     kTmpShape[1] = y_max - y_min;
     kTmpShape[2] = shape[2];
@@ -220,9 +220,9 @@ class TerrainMesher {
       const u = 3 - d - v;
       const ld = kTmpShape[d] - 1, lu = kTmpShape[u] - 2, lv = kTmpShape[v] - 2;
       const sd = stride[d], su = stride[u], sv = stride[v];
-      const hd = d === 1 ? 0 : heightmap.stride[d >> 1];
-      const hu = u === 1 ? 0 : heightmap.stride[u >> 1];
-      const hv = v === 1 ? 0 : heightmap.stride[v >> 1];
+      const hd = d === 1 ? 0 : light_map.stride[d >> 1];
+      const hu = u === 1 ? 0 : light_map.stride[u >> 1];
+      const hv = v === 1 ? 0 : light_map.stride[v >> 1];
       const base = su + sv + y_min * stride[1];
 
       // d is the dimension that the quad faces. A d of {0, 1, 2} corresponds
@@ -291,7 +291,7 @@ class TerrainMesher {
             const lit = (() => {
               const xd = id + (facing > 0 ? 1 : 0);
               const index = hd * xd + hu * (iu + 1) + hv * (iv + 1);
-              const height = heightmap.data[index];
+              const height = light_map.data[index];
               const current = d === 1 ? xd : iv + 1;
               return height <= current + y_min;
             })();
@@ -399,15 +399,13 @@ class TerrainMesher {
         const offset = kHeightmapFields * (x + z * sx);
         const block  = heightmap[offset + 0] as BlockId;
         const height = heightmap[offset + 1];
-        const light  = heightmap[offset + 2];
         if (block === kEmptyBlock || (block & kSentinel)) continue;
 
         const lx = sx - x, lz = sz - z;
         let w = 1, h = 1;
         for (let index = offset + stride; w < lz; w++, index += stride) {
           const match = heightmap[index + 0] === block &&
-                        heightmap[index + 1] === height &&
-                        heightmap[index + 2] === light;
+                        heightmap[index + 1] === height;
           if (!match) break;
         }
         OUTER:
@@ -415,8 +413,7 @@ class TerrainMesher {
           let index = offset + kHeightmapFields * h;
           for (let i = 0; i < w; i++, index += stride) {
             const match = heightmap[index + 0] === block &&
-                          heightmap[index + 1] === height &&
-                          heightmap[index + 2] === light;
+                          heightmap[index + 1] === height;
             if (!match) break OUTER;
           }
         }
@@ -428,7 +425,7 @@ class TerrainMesher {
 
         Vec3.set(kTmpPos, x * scale, height, z * scale);
         const sw = scale * w, sh = scale * h;
-        this.addQuad(geo, material, 1, 0, light, 1, sw, sh, kTmpPos);
+        this.addQuad(geo, material, 1, 0, 1, 1, sw, sh, kTmpPos);
 
         for (let wi = 0; wi < w; wi++) {
           let index = offset + stride * wi;
@@ -459,7 +456,6 @@ class TerrainMesher {
         for (let j = 0; j < lj; j++, offset += sj) {
           const block  = heightmap[offset + 0] as BlockId;
           const height = heightmap[offset + 1];
-          const light  = heightmap[offset + 2];
           if (block === kEmptyBlock) continue;
 
           const neighbor = heightmap[offset + 1 + di];
@@ -470,7 +466,6 @@ class TerrainMesher {
           for (let index = offset + sj; w < limit; w++, index += sj) {
             const match = heightmap[index + 0] === block &&
                           heightmap[index + 1] === height &&
-                          heightmap[index + 2] === light &&
                           heightmap[index + 1 + di] === neighbor;
             if (!match) break;
           }
@@ -487,7 +482,7 @@ class TerrainMesher {
           // But doing so muddles grass, etc. textures at a distance.
           const id = this.getBlockFaceMaterial(block, 2);
           const material = this.getMaterialData(id);
-          this.addQuad(geo, material, dir, ao, light, d, wi, hi, kTmpPos);
+          this.addQuad(geo, material, dir, ao, 1, d, wi, hi, kTmpPos);
 
           const extra = w - 1;
           offset += extra * sj;
