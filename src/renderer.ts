@@ -478,7 +478,7 @@ class Geometry {
   static OffsetDir: int = 11;
   // mask: float -> int32; small int
   static OffsetMask: int = 12;
-  // wave: float -> int32; {0, 1}
+  // wave: float -> int32; 4 packed 1-bit values
   static OffsetWave: int = 13;
   // texture: float -> int32; medium int
   static OffsetTexture: int = 14;
@@ -777,12 +777,13 @@ const kVoxelShader = `
       v_uvw[1] = (a_size[0] - kTextureBuffer) * (1.0 - w);
     }
 
-    v_move = a_wave * u_move;
+    float wave = float((int(a_wave) >> index) & 0x1);
+    v_move = wave * u_move;
 
     vec3 pos = a_pos;
     pos[(dim + 1) % 3] += w * a_size[0];
     pos[(dim + 2) % 3] += h * a_size[1];
-    pos[1] -= a_wave * u_wave;
+    pos[1] -= wave * u_wave;
     gl_Position = u_transform * vec4(pos, 1.0);
 
     int mask = int(a_mask);

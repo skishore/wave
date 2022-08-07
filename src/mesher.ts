@@ -52,6 +52,8 @@ const kTmpShape: [int, int, int] = [0, 0, 0];
 let kMaskData = new Int32Array();
 let kMaskUnion = new Int32Array();
 
+const kWaveValues: int[] = [0b0110, 0b1111, 0b1100];
+
 const kIndexOffsets = {
   A: pack_indices([0, 1, 2, 0, 2, 3]),
   B: pack_indices([1, 2, 3, 0, 1, 3]),
@@ -136,9 +138,9 @@ class TerrainMesher {
     for (let d = 0; d < 3; d++) {
       const u = (d + 1) % 3, v = (d + 2) % 3;
       kTmpPos[d] = pos + w;
-      this.addQuad(geo, kHighlightMaterial, +1, 0, 1, d, w, w, kTmpPos);
+      this.addQuad(geo, kHighlightMaterial, +1, 0, 1, 0, d, w, w, kTmpPos);
       kTmpPos[d] = pos;
-      this.addQuad(geo, kHighlightMaterial, -1, 0, 1, d, w, w, kTmpPos);
+      this.addQuad(geo, kHighlightMaterial, -1, 0, 1, 0, d, w, w, kTmpPos);
     }
 
     assert(geo.num_quads === 6);
@@ -214,7 +216,7 @@ class TerrainMesher {
     kTmpShape[1] = y_max - y_min;
     kTmpShape[2] = shape[2];
 
-    for (let d = 0; d < 3; d++) {
+    for (const d of [1, 0, 2]) {
       const face = d * 2;
       const v = (d === 1 ? 0 : 1);
       const u = 3 - d - v;
@@ -370,11 +372,34 @@ class TerrainMesher {
             const geo = material.color[3] < 1 ? water_geo : solid_geo;
             const w_fixed = d > 0 ? w : h;
             const h_fixed = d > 0 ? h : w;
-            this.addQuad(geo, material, dir, ao, lit,
-                         d, w_fixed, h_fixed, kTmpPos);
-            if (material.texture && material.texture.alphaTest) {
-              this.addQuad(geo, material, -dir, ao, lit,
+
+            if (material.liquid) {
+              if (d === 1) {
+                const pos = kTmpPos;
+                if (dir > 0) {
+                  const wave = kWaveValues[d];
+                  this.addQuad(geo, material, dir, ao, lit, wave, d, w, h, pos);
+                  this.patchLiquidSurfaceQuads(geo, voxels, ao, lit, w, h, pos);
+                } else {
+                  this.addQuad(geo, material, dir, ao, lit, 0, d, w, h, pos);
+                }
+              } else {
+                const wave = kWaveValues[d];
+                if (h === lv - iv) {
+                  this.addQuad(geo, material, dir, ao, lit, wave,
+                               d, w_fixed, h_fixed, kTmpPos);
+                } else {
+                  this.splitLiquidSideQuads(geo, material, voxels, dir, ao,
+                                            lit, wave, d, w, h, kTmpPos);
+                }
+              }
+            } else {
+              this.addQuad(geo, material, dir, ao, lit, 0,
                            d, w_fixed, h_fixed, kTmpPos);
+              if (material.texture && material.texture.alphaTest) {
+                this.addQuad(geo, material, -dir, ao, lit, 0,
+                             d, w_fixed, h_fixed, kTmpPos);
+              }
             }
 
             nw = n;
@@ -386,6 +411,103 @@ class TerrainMesher {
           }
         }
       }
+    }
+  }
+
+  // We displace a liquid's upper surface downward using the `wave` attribute.
+  //
+  // When a liquid is adjacent to a downward surface, such as a rock that ends
+  // right above the water, we have to add small vertical patches to avoid
+  // leaving gaps in the liquid's surface.
+  //
+  // NOTE: The AO values here are not quite right. For each of the faces we
+  // consider (-x, +x, -z, +z), we should broadcast a different subset of the
+  // input AO. But doing that is tricky and AO doesn't matter much here.
+  private patchLiquidSurfaceQuads(geo: Geometry, voxels: Tensor3, ao: int,
+                                  lit: int, w: int, h: int, pos: Vec3): void {
+    const base_x = pos[0];
+    const base_y = pos[1];
+    const base_z = pos[2];
+    const water = voxels.get(base_x + 1, base_y, base_z + 1);
+    const sides = this.getBlockFaceMaterial(water as BlockId, 0);
+    const material = this.getMaterialData(sides);
+
+    const patch = (x: int, z: int, face: int): boolean => {
+      const ax = base_x + x + 1;
+      const az = base_z + z + 1;
+      const below = voxels.get(ax, base_y + 0, az) as BlockId;
+      if (this.opaque[below] ||
+          this.getBlockFaceMaterial(below, face) === kNoMaterial) {
+        return false;
+      }
+      const above = voxels.get(ax, base_y + 1, az) as BlockId;
+      return this.opaque[above] ||
+             this.getBlockFaceMaterial(above, 3) !== kNoMaterial;
+    };
+
+    for (let face = 4; face < 6; face++) {
+      const dz = face === 4 ? -1 : w;
+      const wave = kWaveValues[1] - kWaveValues[2];
+      for (let x = 0; x < h; x++) {
+        if (!patch(x, dz, face)) continue;
+        let start = x;
+        for (x++; x < h; x++) {
+          if (!patch(x, dz, face)) break;
+        }
+        kTmpPos[0] = base_x + start;
+        kTmpPos[2] = base_z + Math.max(dz, 0);
+        this.addQuad(geo, material, 1, ao, lit, wave, 2, x - start, 0, kTmpPos);
+      }
+    }
+
+    for (let face = 0; face < 2; face++) {
+      const dx = face === 0 ? -1 : h;
+      const wave = kWaveValues[1] - kWaveValues[0];
+      for (let z = 0; z < w; z++) {
+        if (!patch(dx, z, face)) continue;
+        let start = z;
+        for (z++; z < w; z++) {
+          if (!patch(dx, z, face)) break;
+        }
+        kTmpPos[0] = base_x + Math.max(dx, 0);
+        kTmpPos[2] = base_z + start;
+        this.addQuad(geo, material, 1, ao, lit, wave, 0, 0, z - start, kTmpPos);
+      }
+    }
+  }
+
+  // For vertical liquid surfaces, we need to check the block right above the
+  // surface to check if the top of this quad should get the wave effect. This
+  // test may change along the width of the liquid quad, so we may end up
+  // splitting one quad into multiple quads here.
+  private splitLiquidSideQuads(
+      geo: Geometry, material: Material, voxels: Tensor3, dir: int, ao: int,
+      lit: int, wave: int, d: int, w: number, h: number, pos: Vec3): void {
+    const base_x = pos[0];
+    const base_y = pos[1];
+    const base_z = pos[2];
+    const ax = base_x + (d === 0 && dir > 0 ? 0 : 1);
+    const az = base_z + (d === 2 && dir > 0 ? 0 : 1);
+    const ay = base_y + h + 1;
+    const test = (i: int) => {
+      const above = d === 0 ? voxels.get(ax, ay, az + i) as BlockId
+                            : voxels.get(ax + i, ay, az) as BlockId;
+      const result =
+        !this.opaque[above] &&
+        this.getBlockFaceMaterial(above, 3) === kNoMaterial;
+      return result;
+    };
+    let last = test(0);
+    for (let i = 0; i < w; i++) {
+      let j = i + 1;
+      for (; j < w && test(j) === last; j++) {}
+      const w_fixed = d > 0 ? j - i : h;
+      const h_fixed = d > 0 ? h : j - i;
+      this.addQuad(geo, material, dir, ao, lit, last ? wave : 0,
+                   d, w_fixed, h_fixed, kTmpPos);
+      kTmpPos[2 - d] += j - i;
+      last = !last;
+      i = j - 1;
     }
   }
 
@@ -426,7 +548,8 @@ class TerrainMesher {
 
         Vec3.set(kTmpPos, x * scale, height, z * scale);
         const sw = scale * w, sh = scale * h;
-        this.addQuad(geo, material, 1, 0, 1, 1, sw, sh, kTmpPos);
+        const wave = material.liquid ? 0b1111 : 0;
+        this.addQuad(geo, material, 1, 0, 1, wave, 1, sw, sh, kTmpPos);
 
         for (let wi = 0; wi < w; wi++) {
           let index = offset + stride * wi;
@@ -483,7 +606,8 @@ class TerrainMesher {
           // But doing so muddles grass, etc. textures at a distance.
           const id = this.getBlockFaceMaterial(block, 2);
           const material = this.getMaterialData(id);
-          this.addQuad(geo, material, dir, ao, 1, d, wi, hi, kTmpPos);
+          const wave = material.liquid ? 0b1111 : 0;
+          this.addQuad(geo, material, dir, ao, 1, wave, d, wi, hi, kTmpPos);
 
           const extra = w - 1;
           offset += extra * sj;
@@ -494,7 +618,7 @@ class TerrainMesher {
   }
 
   private addQuad(geo: Geometry, material: Material,
-                  dir: int, ao: int, lit: int,
+                  dir: int, ao: int, lit: int, wave: int,
                   d: int, w: number, h: number, pos: Vec3) {
     const {num_quads} = geo;
     geo.allocateQuads(num_quads + 1);
@@ -536,7 +660,7 @@ class TerrainMesher {
     quads[base + Geometry.OffsetDim]     = d;
     quads[base + Geometry.OffsetDir]     = dir;
     quads[base + Geometry.OffsetMask]    = 0;
-    quads[base + Geometry.OffsetWave]    = material.liquid ? 1 : 0;
+    quads[base + Geometry.OffsetWave]    = wave;
     quads[base + Geometry.OffsetTexture] = material.textureIndex;
     quads[base + Geometry.OffsetIndices] = indices;
   }
