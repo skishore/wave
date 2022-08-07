@@ -626,8 +626,11 @@ const CameraTarget = (env: TypedEnv): Component => ({
   init: () => ({id: kNoEntity, index: 0}),
   onRender: (dt: int, states: ComponentState[]) => {
     for (const state of states) {
-      const {x, y, z, h} = env.position.getX(state.id);
-      env.renderer.camera.setTarget(x, y + h / 3, z);
+      const {x, y, z, h, w} = env.position.getX(state.id);
+      env.setCameraTarget(x, y + h / 3, z);
+      const mesh = env.meshes.get(state.id);
+      const zoom = env.renderer.camera.safe_zoom;
+      if (mesh && mesh.mesh) mesh.mesh.enabled = zoom > 2 * w;
     }
   },
   onUpdate: (dt: int, states: ComponentState[]) => {

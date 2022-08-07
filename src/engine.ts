@@ -1361,6 +1361,11 @@ class Env {
     return this.highlightSide;
   }
 
+  setCameraTarget(x: number, y: number, z: number): void {
+    this.renderer.camera.setTarget(x, y, z);
+    this.setSafeZoomDistance();
+  }
+
   refresh(): void {
     const saved = this.container.inputs.pointer;
     this.container.inputs.pointer = true;
@@ -1385,7 +1390,6 @@ class Env {
     deltas.x = deltas.y = deltas.scroll = 0;
 
     this.entities.render(dt);
-    this.setSafeZoomDistance();
     this.updateHighlightMesh();
     this.updateOverlayColor(wave);
     const renderer_stats = this.renderer.render(move, wave);

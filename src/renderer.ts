@@ -17,6 +17,7 @@ class Camera {
   heading: number; // In radians: [0, 2π)
   pitch: number;   // In radians: (-π/2, π/2)
   zoom: number;
+  safe_zoom: number;
   direction: Vec3;
   position: Vec3;
   target: Vec3;
@@ -41,6 +42,7 @@ class Camera {
     this.pitch = 0;
     this.heading = 0;
     this.zoom = 0;
+    this.safe_zoom = 0;
     this.direction = Vec3.from(0, 0, 1);
     this.position = Vec3.create();
     this.target = Vec3.create();
@@ -143,6 +145,7 @@ class Camera {
   setSafeZoomDistance(zoom: number) {
     zoom = Math.max(Math.min(zoom, this.zoom), 0);
     Vec3.scaleAndAdd(this.position, this.target, this.direction, -zoom);
+    this.safe_zoom = zoom;
   }
 
   setTarget(x: number, y: number, z: number) {
@@ -1137,6 +1140,7 @@ class SpriteShader extends Shader {
 };
 
 class SpriteMesh extends Mesh<SpriteShader, SpriteMesh> {
+  enabled = true;
   private frame: int;
   private light: number;
   private manager: SpriteManager;
@@ -1156,6 +1160,7 @@ class SpriteMesh extends Mesh<SpriteShader, SpriteMesh> {
   }
 
   draw(camera: Camera, planes: CullingPlane[]): boolean {
+    if (!this.enabled) return false;
     const bounds = this.manager.getBounds(this.size);
     if (this.cull(bounds, camera, planes)) return false;
 
@@ -1454,6 +1459,7 @@ interface IShadowMesh extends IMesh {
 };
 
 interface ISpriteMesh extends IMesh {
+  enabled: boolean,
   setFrame: (frame: int) => void,
   setLight: (light: number) => void,
   setSTUV: (s: number, t: number, u: number, v: number) => void,
