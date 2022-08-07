@@ -1026,31 +1026,30 @@ class VoxelManager implements MeshManager<VoxelShader, VoxelMesh> {
   shader: VoxelShader;
   atlas: TextureAtlas;
   allocator: BufferAllocator;
-  private solid_meshes: VoxelMesh[];
-  private water_meshes: VoxelMesh[];
+  private phases: VoxelMesh[][];
 
   constructor(gl: WebGL2RenderingContext) {
     this.gl = gl;
     this.shader = new VoxelShader(gl);
     this.atlas = new TextureAtlas(gl);
     this.allocator = new BufferAllocator(gl);
-    this.solid_meshes = [];
-    this.water_meshes = [];
+    this.phases = [[], [], []];
   }
 
-  addMesh(geo: Geometry, solid: boolean): VoxelMesh {
+  addMesh(geo: Geometry, phase: int): VoxelMesh {
     assert(geo.num_quads > 0);
-    const meshes = solid ? this.solid_meshes : this.water_meshes;
-    return new VoxelMesh(this, meshes, geo);
+    assert(0 <= phase && phase < this.phases.length);
+    return new VoxelMesh(this, this.phases[phase], geo);
   }
 
   render(camera: Camera, planes: CullingPlane[], stats: Stats,
          overlay: ScreenOverlay, move: number, wave: number, phase: int): void {
     const {atlas, gl, shader} = this;
-    let drawn = 0, total = 0;
+    let drawn = 0;
 
     atlas.bind();
     shader.bind();
+    const meshes = this.phases[phase];
     const fog_color = overlay.getFogColor();
     const fog_depth = overlay.getFogDepth();
     gl.uniform1f(shader.u_move, move);
@@ -1059,27 +1058,29 @@ class VoxelManager implements MeshManager<VoxelShader, VoxelMesh> {
     gl.uniform3fv(shader.u_fogColor, fog_color);
     gl.uniform1f(shader.u_fogDepth, fog_depth);
 
+    // Rendering phases:
+    //   0) Opaque and alpha-tested voxel meshes.
+    //   1) The highlight mesh, drawn before shadows and other effects.
+    //   2) All other alpha-blended voxel meshes. (Should we sort them?)
     if (phase === 0) {
-      // Opaque and alpha-tested voxel meshes.
-      for (const mesh of this.solid_meshes) {
+      for (const mesh of meshes) {
         if (mesh.draw(camera, planes)) drawn++;
       }
-      total = this.solid_meshes.length;
     } else {
-      // Alpha-blended voxel meshes. (Should we sort them?)
       gl.enable(gl.BLEND);
       gl.disable(gl.CULL_FACE);
+      if (phase === 1) gl.depthMask(false);
       gl.uniform1f(shader.u_alphaTest, 0);
-      for (const mesh of this.water_meshes) {
+      for (const mesh of meshes) {
         if (mesh.draw(camera, planes)) drawn++;
       }
-      total = this.water_meshes.length;
+      if (phase === 1) gl.depthMask(true);
       gl.enable(gl.CULL_FACE);
       gl.disable(gl.BLEND);
     }
 
     stats.drawn += drawn;
-    stats.total += total;
+    stats.total += meshes.length;
   }
 };
 
@@ -1353,11 +1354,13 @@ class ShadowManager implements MeshManager<ShadowShader, ShadowMesh> {
 
     // All sprite meshes are alpha-blended.
     shader.bind();
+    gl.depthMask(false);
     gl.enable(gl.BLEND);
     for (const mesh of this.meshes) {
       if (mesh.draw(camera, planes)) drawn++;
     }
     gl.disable(gl.BLEND);
+    gl.depthMask(true);
 
     stats.drawn += drawn;
     stats.total += this.meshes.length;
@@ -1520,8 +1523,8 @@ class Renderer {
     return this.sprite_manager.addMesh(sprite);
   }
 
-  addVoxelMesh(geo: Geometry, solid: boolean): IVoxelMesh {
-    return this.voxels_manager.addMesh(geo, solid);
+  addVoxelMesh(geo: Geometry, phase: int): IVoxelMesh {
+    return this.voxels_manager.addMesh(geo, phase);
   }
 
   render(move: number, wave: number): string {
@@ -1537,8 +1540,9 @@ class Renderer {
     const stats = {drawn: 0, total: 0};
     this.sprite_manager.render(camera, planes, stats);
     this.voxels_manager.render(camera, planes, stats, overlay, move, wave, 0);
-    this.shadow_manager.render(camera, planes, stats);
     this.voxels_manager.render(camera, planes, stats, overlay, move, wave, 1);
+    this.shadow_manager.render(camera, planes, stats);
+    this.voxels_manager.render(camera, planes, stats, overlay, move, wave, 2);
     overlay.draw();
 
     return `${this.voxels_manager.allocator.stats()}\r\n` +

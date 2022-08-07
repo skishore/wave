@@ -101,8 +101,8 @@ class TerrainMesher {
         solid_geo, water_geo, voxels, heightmap, light_map, equilevels);
 
     return [
-      this.buildMesh(solid_geo, solid, true),
-      this.buildMesh(water_geo, water, false),
+      this.buildMesh(solid_geo, solid, 0),
+      this.buildMesh(water_geo, water, 2),
     ];
   }
 
@@ -122,7 +122,7 @@ class TerrainMesher {
       geo.quads[offset + OffsetPos + 2] += pz;
       geo.quads[offset + OffsetMask] = mask;
     }
-    return this.buildMesh(geo, old, solid);
+    return this.buildMesh(geo, old, solid ? 0 : 2);
   }
 
   meshHighlight(): VoxelMesh {
@@ -148,10 +148,10 @@ class TerrainMesher {
     for (let i = 0; i < 6; i++) {
       geo.quads[i * Stride + OffsetMask] = i;
     }
-    return nonnull(this.buildMesh(geo, null, false));
+    return nonnull(this.buildMesh(geo, null, 1));
   }
 
-  private buildMesh(geo: Geometry, old: Mesh, solid: boolean): Mesh {
+  private buildMesh(geo: Geometry, old: Mesh, phase: int): Mesh {
     if (geo.num_quads === 0) {
       if (old) old.dispose();
       return null;
@@ -159,7 +159,7 @@ class TerrainMesher {
       old.setGeometry(geo);
       return old;
     }
-    return this.renderer.addVoxelMesh(Geometry.clone(geo), solid);
+    return this.renderer.addVoxelMesh(Geometry.clone(geo), phase);
   }
 
   private computeChunkGeometryWithEquilevels(
