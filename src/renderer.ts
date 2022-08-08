@@ -246,6 +246,7 @@ class Shader {
 
 interface Texture {
   alphaTest: boolean,
+  sparkle: boolean,
   url: string,
   x: int,
   y: int,
@@ -258,16 +259,22 @@ class TextureAtlas {
   private texture: WebGLTexture;
   private canvas: CanvasRenderingContext2D | null;
   private images: Map<string, HTMLImageElement>;
-  private data: Uint8Array;
   private nextResult: int;
+  private data: Uint8Array;
+  private sparkle_data: Uint8Array;
+  private sparkle_last: Uint8Array;
+  private sparkle_indices: int[];
 
   constructor(gl: WebGL2RenderingContext) {
     this.gl = gl;
     this.texture = nonnull(gl.createTexture());
     this.canvas = null;
     this.images = new Map();
-    this.data = new Uint8Array();
     this.nextResult = 0;
+    this.data = new Uint8Array();
+    this.sparkle_data = new Uint8Array();
+    this.sparkle_last = new Uint8Array();
+    this.sparkle_indices = [];
 
     this.bind();
     const id = TEXTURE_2D_ARRAY;
@@ -286,8 +293,54 @@ class TextureAtlas {
     return index;
   }
 
-  bind() {
+  bind(): void {
     this.gl.bindTexture(TEXTURE_2D_ARRAY, this.texture);
+  }
+
+  sparkle(): void {
+    if (!this.canvas) return;
+
+    const size = this.canvas.canvas.width;
+    const length = size * size * 4;
+    if (this.sparkle_data.length === 0) {
+      this.sparkle_data = new Uint8Array(length);
+      this.sparkle_last = new Uint8Array(length / 4);
+    }
+    const {gl, sparkle_data, sparkle_last} = this;
+    assert(sparkle_data.length === length);
+
+    const limit = sparkle_last.length;
+    for (let i = 0; i < limit; i++) {
+      const value = sparkle_last[i];
+      if (value > 0) {
+        sparkle_last[i] = Math.max(value - 4, 0);
+      } else if (Math.random() < 0.004) {
+        sparkle_last[i] = 128;
+      }
+    }
+
+    for (const index of this.sparkle_indices) {
+      const offset = length * index;
+      const limit = offset + length;
+      if (this.data.length < limit) continue;
+
+      sparkle_data.set(this.data.subarray(offset, limit));
+
+      for (let i = 0; i < size; i++) {
+        for (let j = 0; j < size; j++) {
+          const index = (i * size + j);
+          const value = sparkle_last[index];
+          if (value === 0) continue;
+          const k = 4 * index;
+          sparkle_data[k + 0] = Math.min(sparkle_data[k + 0] + value, 255);
+          sparkle_data[k + 1] = Math.min(sparkle_data[k + 1] + value, 255);
+          sparkle_data[k + 2] = Math.min(sparkle_data[k + 2] + value, 255);
+        }
+      }
+
+      gl.texSubImage3D(TEXTURE_2D_ARRAY, 0, 0, 0, index, size, size, 1,
+                       gl.RGBA, gl.UNSIGNED_BYTE, sparkle_data, 0);
+    }
   }
 
   private image(url: string): HTMLImageElement {
@@ -299,7 +352,7 @@ class TextureAtlas {
     return image;
   }
 
-  private loaded(texture: Texture, index: int, image: HTMLImageElement) {
+  private loaded(texture: Texture, index: int, image: HTMLImageElement): void {
     assert(image.complete);
     const {x, y, w, h} = texture;
 
@@ -375,8 +428,16 @@ class TextureAtlas {
     } else {
       gl.texSubImage3D(TEXTURE_2D_ARRAY, 0, 0, 0, index, size, size, 1,
                        gl.RGBA, gl.UNSIGNED_BYTE, this.data, offset);
+      for (const sindex of this.sparkle_indices) {
+        const soffset = length * sindex;
+        assert(soffset + length <= this.data.length);
+        gl.texSubImage3D(TEXTURE_2D_ARRAY, 0, 0, 0, sindex, size, size, 1,
+                         gl.RGBA, gl.UNSIGNED_BYTE, this.data, soffset);
+      }
     }
     gl.generateMipmap(TEXTURE_2D_ARRAY);
+
+    if (texture.sparkle) this.sparkle_indices.push(index);
   }
 };
 
@@ -1462,6 +1523,7 @@ class Renderer {
     const [r, g, b] = kDefaultSkyColor;
     gl.clearColor(r, g, b, 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    this.voxels_manager.atlas.sparkle();
 
     const camera = this.camera;
     const planes = camera.getCullingPlanes();

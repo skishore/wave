@@ -4,7 +4,7 @@ import {BlockId, Column, Env} from './engine.js';
 import {kChunkWidth, kEmptyBlock, kWorldHeight} from './engine.js';
 import {Component, ComponentState, ComponentStore} from './ecs.js';
 import {EntityId, kNoEntity} from './ecs.js';
-import {SpriteMesh, ShadowMesh} from './renderer.js';
+import {SpriteMesh, ShadowMesh, Texture} from './renderer.js';
 import {sweep} from './sweep.js';
 import {Blocks, getHeight, loadChunk, loadFrontier} from './worldgen.js';
 
@@ -676,14 +676,16 @@ const main = () => {
   env.shadow.add(player);
   env.target.add(player);
 
-  const texture = (x: int, y: int, alphaTest: boolean = false) => {
-    return {alphaTest, url: 'images/rhodox-edited.png', x, y, w: 16, h: 16};
+  const texture = (x: int, y: int, alphaTest: boolean = false,
+                   sparkle: boolean = false): Texture => {
+    const url = 'images/rhodox-edited.png';
+    return {alphaTest, sparkle, url, x, y, w: 16, h: 16};
   };
 
   const registry = env.registry;
   registry.addMaterialOfColor('blue', [0.1, 0.1, 0.4, 0.6], true);
   registry.addMaterialOfTexture(
-    'water', texture(13, 12), [1, 1, 1, 0.8], true);
+    'water', texture(13, 12, false, true), [1, 1, 1, 0.8], true);
   registry.addMaterialOfTexture('leaves', texture(4, 3, true));
   const textures: [string, int, int][] = [
     ['bedrock', 1, 1],
