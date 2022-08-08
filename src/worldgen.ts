@@ -218,48 +218,11 @@ const kDefaultBlocks: Blocks = {
 };
 
 const getHeight = (x: int, z: int): int => {
-  return 2;
-
   const base = heightmap(x, z, kDefaultBlocks).height;
   return Math.max(Math.min(base, kWorldHeight), 0);
 };
 
 const loadChunk = (blocks: Blocks) => (x: int, z: int, column: Column) => {
-  if (!(0 <= x && x < 16 && 0 <= z && z < 16)) {
-    column.push(blocks.dirt, 2);
-  } else if ((x === 7 || x === 8) && z === 4) {
-    column.push(blocks.dirt, 1);
-    column.push(blocks.water, 2);
-  } else if ((z === 7 || z === 8) && x === 4) {
-    column.push(blocks.dirt, 1);
-    column.push(blocks.water, 2);
-  } else if ((z === 7 || z === 8) && x === 11) {
-    column.push(blocks.dirt, 1);
-    column.push(blocks.water, 2);
-  } else if ((z === 7 || z === 8) && x === 12) {
-    column.push(kEmptyBlock, 1);
-    column.push(blocks.water, 2);
-  } else if ((x === 7 || x === 8) && (z === 9 || z === 10)) {
-    column.push(blocks.water, 2);
-    column.push(blocks.dirt, 3);
-  } else if ((x === 7 || x === 8) && z === 11) {
-    column.push(blocks.water, 1);
-    column.push(blocks.dirt, 3);
-  } else if ((x === 5 || x === 9) && z === 11) {
-    column.push(blocks.water, 1);
-    column.push(blocks.dirt, 2);
-  } else if (x === 6 && z === 11) {
-    column.push(blocks.water, 1);
-  } else if (x === 10 && z === 11) {
-    column.push(blocks.water, 2);
-  } else if (!(4 <= x && x < 12 && 4 <= z && z < 12)) {
-  } else if (x === 4 || x === 11 || z === 4 || z === 11) {
-    column.push(blocks.dirt, 2);
-  } else {
-    column.push(blocks.water, 2);
-  }
-  return;
-
   const cx = Math.floor(x / kChunkWidth);
   const cz = Math.floor(z / kChunkWidth);
   const dx = cx * kChunkWidth - kBuffer;
@@ -307,9 +270,6 @@ const loadChunk = (blocks: Blocks) => (x: int, z: int, column: Column) => {
 };
 
 const loadFrontier = (blocks: Blocks) => (x: int, z: int, column: Column) => {
-  column.push(blocks.dirt, 2);
-  return true;
-
   const {height, tile} = heightmap(x, z, blocks);
   column.push(tile, height);
   column.push(blocks.water, kSeaLevel);
