@@ -13,7 +13,7 @@ type Input = 'up' | 'left' | 'down' | 'right' | 'hover' |
 class Container {
   element: Element;
   canvas: HTMLCanvasElement;
-  stats: Element;
+  stats: Element | null;
   bindings: Map<int, Input>;
   inputs: Record<Input, boolean>;
   deltas: {x: int, y: int, scroll: int};
@@ -21,7 +21,7 @@ class Container {
   constructor(id: string) {
     this.element = nonnull(document.getElementById(id), () => id);
     this.canvas = nonnull(this.element.querySelector('canvas'));
-    this.stats = nonnull(this.element.querySelector('#stats'));
+    this.stats = document.getElementById('stats');
     this.inputs = {
       up: false,
       left: false,
@@ -55,7 +55,7 @@ class Container {
   }
 
   displayStats(stats: string) {
-    this.stats.textContent = stats;
+    if (this.stats) this.stats.textContent = stats;
   }
 
   onKeyInput(e: Event, down: boolean) {
@@ -84,6 +84,8 @@ class Container {
 
   onPointerInput(e: Event) {
     const locked = document.pointerLockElement === this.element;
+    if (locked) this.element.classList.remove('paused');
+    if (!locked) this.element.classList.add('paused');
     this.onInput(e, 'pointer', locked);
   }
 

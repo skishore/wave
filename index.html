@@ -7,8 +7,9 @@
 
     <style type="text/css">
       body {
-        background-color: #888;
-        font-family: monospace;
+        background-color: #444;
+        color: white;
+        font-family: 'Helvetica Neue', 'Helvetica', sans-serif;
         overflow: hidden;
         position: absolute;
         top: 0;
@@ -20,6 +21,7 @@
       }
 
       #container {
+        display: inline-block;
         overflow: hidden;
         position: relative;
         transform: translate(-50%, -50%);
@@ -27,17 +29,18 @@
         left: 50%;
       }
 
-      #container.small {
+      #container.small>#inner {
         height: 360px;
         width: 640px;
       }
 
-      #container.large {
+      #container.large>#inner {
         height: 720px;
         width: 1080px;
       }
 
-      #container.fullscreen {
+      #container.fullscreen,
+      #container.fullscreen>#inner {
         position: absolute;
         transform: none;
         left: 0;
@@ -46,25 +49,43 @@
         right: 0;
       }
 
-      #container>canvas {
+      #container>#inner>canvas {
         image-rendering: crisp-edges;
         image-rendering: pixelated;
         width: 100%;
         height: 100%;
       }
 
-      #container>#cursor {
+      #container>#inner>#cursor,
+      #container>#inner>#click-to-resume {
         color: white;
         left: 50%;
         top: 50%;
+        font-size: 16px;
         position: absolute;
         transform: translate(-50%, -50%);
       }
 
+      #container>#inner>#click-to-resume {
+        background-color: #9f6;
+        border-radius: 8px;
+        color: black;
+        display: none;
+        padding: 16px 32px;
+      }
+
+      #container.paused>#inner>#click-to-resume {
+        display: block;
+      }
+      #container.paused>#inner>canvas {
+        opacity: 0.5;
+      }
+
       #stats {
-        background-color: #444;
+        background-color: #222;
         border-radius: 4px;
         color: white;
+        font-family: monospace;
         opacity: 0.75;
         padding: 4px 8px;
         position: absolute;
@@ -72,14 +93,98 @@
         top: 12px;
         white-space: pre;
       }
+
+      #title, #controls {
+        display: none;
+      }
+      #container.small>#title, #container.small>#controls {
+        display: block;
+      }
+
+      #title {
+        font-size: 12px;
+        margin-bottom: 20px;
+        text-align: center;
+      }
+      #title>.heading {
+        font-size:48px;
+      }
+      #title>.heading {
+        font-size: 24px;
+        margin-bottom: 8px;
+      }
+      #title>div {
+        margin-bottom: 4px;
+      }
+      #title>:last-child {
+        margin-bottom: 0;
+      }
+      #title a {
+        color: #9f6;
+      }
+
+      #controls {
+        font-size: 12px;
+        margin-top: 16px;
+        text-align: center;
+      }
+      #controls>.heading {
+        font-size: 16px;
+        margin-bottom: 8px;
+      }
+      #controls>table {
+        margin: 0 auto;
+      }
+      #controls>table th.key {
+        padding: 2px 4px 0 16px;
+        text-align: right;
+      }
+      #controls>table td.val {
+        padding: 2px 16px 0 4px;
+        text-align: left;
+      }
     </style>
   </head>
 
   <body>
-    <div id="container">
-      <canvas></canvas>
-      <div id="cursor">+</div>
-      <div id="stats"></div>
+    <div id="container" class="paused">
+      <div id="title">
+        <div class="heading">WebGL2 Voxel Engine</div>
+        <div>
+          If you have a discrete GPU,
+          <a href="?size=large">click here</a> for a larger view,
+          <a href="?size=fullscreen&scale=1">or go fullscreen</a>.
+        </div>
+        <div>
+          This engine is open-source.
+          <a href="https://github.com/skishore/voxels">
+            Fork this code on GitHub!
+          </a>
+        </div>
+      </div>
+      <div id="inner">
+        <canvas></canvas>
+        <div id="cursor">+</div>
+        <div id="click-to-resume">Paused - click to resume.</div>
+      </div>
+      <div id="controls">
+        <div class="heading">Controls:</div>
+        <table>
+          <tr>
+            <th class="key">WASD:</th><td class="val">move</td>
+            <th class="key">Left-click:</th><td class="val">destroy a block</td>
+          </tr>
+          <tr>
+            <th class="key">Mouse:</th><td class="val">look around</td>
+            <th class="key">Right-click:</th><td class="val">create a block</td>
+          </tr>
+          <tr>
+            <th class="key">Space/E:</th><td class="val">jump/hover</td>
+            <th class="key">Scroll up/down:</th><td class="val">zoom in/out</td>
+          </tr>
+        </table>
+      </div>
     </div>
+    <div id="stats"></div>
   </body>
 </html>

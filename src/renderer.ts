@@ -1484,11 +1484,11 @@ class Renderer {
 
   constructor(canvas: HTMLCanvasElement) {
     const params = new URLSearchParams(window.location.search);
-    const size   = params.get('size') || 'large';
+    const size   = params.get('size') || 'small';
     const base   = size === 'small' ? '1' : '2';
     const scale  = parseFloat(params.get('scale') || base);
 
-    const container = nonnull(canvas.parentElement);
+    const container = nonnull(nonnull(canvas.parentElement).parentElement);
     container.classList.add(size);
 
     canvas.width = canvas.clientWidth / scale;
