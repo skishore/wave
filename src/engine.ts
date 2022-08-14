@@ -43,8 +43,14 @@ class Container {
     this.bindings.set('E'.charCodeAt(0), 'hover');
     this.bindings.set(' '.charCodeAt(0), 'space');
 
-    const element = this.element;
-    element.addEventListener('click', () => element.requestPointerLock());
+    const canvas = this.canvas;
+    const target = nonnull(this.canvas.parentElement);
+    target.addEventListener('click', (e: Event) => {
+      if (this.inputs.pointer) return;
+      this.onMimicPointerLock(e, true);
+      this.insistOnPointerLock();
+    });
+
     document.addEventListener('keydown', e => this.onKeyInput(e, true));
     document.addEventListener('keyup', e => this.onKeyInput(e, false));
     document.addEventListener('mousedown', e => this.onMouseDown(e));
@@ -58,38 +64,51 @@ class Container {
     if (this.stats) this.stats.textContent = stats;
   }
 
-  onKeyInput(e: Event, down: boolean) {
+  private insistOnPointerLock() {
     if (!this.inputs.pointer) return;
-    const input = this.bindings.get((e as KeyboardEvent).keyCode);
+    if (document.pointerLockElement === this.canvas) return;
+    this.canvas.requestPointerLock();
+    setTimeout(() => this.insistOnPointerLock(), 100);
+  }
+
+  private onKeyInput(e: Event, down: boolean) {
+    if (!this.inputs.pointer) return;
+    const keycode = (e as KeyboardEvent).keyCode;
+    if (keycode === 27) return this.onMimicPointerLock(e, false);
+    const input = this.bindings.get(keycode);
     if (input) this.onInput(e, input, down);
   }
 
-  onMouseDown(e: Event) {
+  private onMouseDown(e: Event) {
     if (!this.inputs.pointer) return;
     const button = (e as MouseEvent).button;
     if (button === 0) this.inputs.mouse0 = true;
     if (button !== 0) this.inputs.mouse1 = true;
   }
 
-  onMouseMove(e: Event) {
+  private onMouseMove(e: Event) {
     if (!this.inputs.pointer) return;
     this.deltas.x += (e as MouseEvent).movementX;
     this.deltas.y += (e as MouseEvent).movementY;
   }
 
-  onMouseWheel(e: Event) {
+  private onMouseWheel(e: Event) {
     if (!this.inputs.pointer) return;
     this.deltas.scroll += (e as any).deltaY;
   }
 
-  onPointerInput(e: Event) {
-    const locked = document.pointerLockElement === this.element;
+  private onMimicPointerLock(e: Event, locked: boolean) {
     if (locked) this.element.classList.remove('paused');
     if (!locked) this.element.classList.add('paused');
     this.onInput(e, 'pointer', locked);
   }
 
-  onInput(e: Event, input: Input, state: boolean) {
+  private onPointerInput(e: Event) {
+    const locked = document.pointerLockElement === this.canvas;
+    this.onMimicPointerLock(e, locked);
+  }
+
+  private onInput(e: Event, input: Input, state: boolean) {
     this.inputs[input] = state;
     e.stopPropagation();
     e.preventDefault();
