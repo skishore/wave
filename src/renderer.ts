@@ -302,6 +302,7 @@ class TextureAtlas {
 
   sparkle(): void {
     if (!this.canvas) return;
+    if (this.sparkle_indices.length === 0) return;
 
     const size = this.canvas.canvas.width;
     const length = size * size * 4;
@@ -322,6 +323,7 @@ class TextureAtlas {
       }
     }
 
+    this.bind();
     for (const index of this.sparkle_indices) {
       const offset = length * index;
       const limit = offset + length;
