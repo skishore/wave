@@ -1,5 +1,6 @@
 {
   "compilerOptions": {
+    "allowJs": true,
     "emitDecoratorMetadata": true,
     "experimentalDecorators": true,
     "lib": ["dom", "es2020"],

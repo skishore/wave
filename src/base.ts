@@ -20,6 +20,11 @@ const nonnull = <T>(x: T | null, message?: () => string): T => {
   throw new Error(message ? message() : 'Unexpected null!');
 };
 
+const only = <T>(xs: T[]): T => {
+  assert(xs.length === 1);
+  return xs[0];
+};
+
 //////////////////////////////////////////////////////////////////////////////
 
 interface Vec3 extends Float64Array {__type__: 'Vec3'};
@@ -254,4 +259,4 @@ class Tensor3 {
 
 //////////////////////////////////////////////////////////////////////////////
 
-export {assert, drop, int, nonnull, Color, Mat4, Tensor2, Tensor3, Vec3};
+export {assert, drop, int, nonnull, only, Color, Mat4, Tensor2, Tensor3, Vec3};
