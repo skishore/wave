@@ -35,6 +35,7 @@ class TypedEnv extends Env {
   physics: ComponentStore<PhysicsState>;
   meshes: ComponentStore<MeshState>;
   shadow: ComponentStore<ShadowState>;
+  inputs: ComponentStore;
   target: ComponentStore;
 
   constructor(id: string) {
@@ -42,6 +43,7 @@ class TypedEnv extends Env {
     const ents = this.entities;
     this.lifetime = ents.registerComponent('lifetime', Lifetime);
     this.position = ents.registerComponent('position', Position);
+    this.inputs = ents.registerComponent('inputs', Inputs(this));
     this.movement = ents.registerComponent('movement', Movement(this));
     this.physics = ents.registerComponent('physics', Physics(this));
     this.meshes = ents.registerComponent('meshes', Meshes(this));
@@ -305,6 +307,7 @@ interface MovementState {
   heading: number,
   running: boolean,
   jumping: boolean,
+  hovering: boolean,
   maxSpeed: number,
   moveForce: number,
   swimPenalty: number,
@@ -457,31 +460,11 @@ const tryToModifyBlock =
 
 const runMovement = (env: TypedEnv, dt: int, state: MovementState) => {
   dt = dt / 1000;
-
-  // Process the inputs to get a heading, running, and jumping state.
-  const inputs = env.container.inputs;
-  const fb = (inputs.up ? 1 : 0) - (inputs.down ? 1 : 0);
-  const lr = (inputs.right ? 1 : 0) - (inputs.left ? 1 : 0);
-  state.running = fb !== 0 || lr !== 0;
-  state.jumping = inputs.space;
-
-  if (state.running) {
-    let heading = env.renderer.camera.heading;
-    if (fb) {
-      if (fb === -1) heading += Math.PI;
-      heading += fb * lr * Math.PI / 4;
-    } else {
-      heading += lr * Math.PI / 2;
-    }
-    state.heading = heading;
-  }
-
-  // All inputs processed; update the entity's PhysicsState.
   const body = env.physics.getX(state.id);
   const grounded = body.resting[1] < 0;
   if (grounded) state._jumpCount = 0;
 
-  if (inputs.hover) {
+  if (state.hovering) {
     const force = body.vel[1] < 0 ? state.hoverFallForce : state.hoverRiseForce;
     body.forces[1] += force;
   }
@@ -498,13 +481,6 @@ const runMovement = (env: TypedEnv, dt: int, state: MovementState) => {
   } else {
     body.friction = state.standingFriction;
   }
-
-  // Turn mouse inputs into actions.
-  if (inputs.mouse0 || inputs.mouse1) {
-    tryToModifyBlock(env, body, !inputs.mouse0);
-    inputs.mouse0 = false;
-    inputs.mouse1 = false;
-  }
 };
 
 const Movement = (env: TypedEnv): Component<MovementState> => ({
@@ -514,6 +490,7 @@ const Movement = (env: TypedEnv): Component<MovementState> => ({
     heading: 0,
     running: false,
     jumping: false,
+    hovering: false,
     maxSpeed: 10,
     moveForce: 30,
     swimPenalty: 0.5,
@@ -533,6 +510,47 @@ const Movement = (env: TypedEnv): Component<MovementState> => ({
   }),
   onUpdate: (dt: int, states: MovementState[]) => {
     for (const state of states) runMovement(env, dt, state);
+  }
+});
+
+// An entity with an input component processes inputs.
+
+const runInputs = (env: TypedEnv, id: EntityId) => {
+  const state = env.movement.get(id);
+  if (!state) return;
+
+  // Process the inputs to get a heading, running, and jumping state.
+  const inputs = env.container.inputs;
+  const fb = (inputs.up ? 1 : 0) - (inputs.down ? 1 : 0);
+  const lr = (inputs.right ? 1 : 0) - (inputs.left ? 1 : 0);
+  state.running = fb !== 0 || lr !== 0;
+  state.jumping = inputs.space;
+  state.hovering = inputs.hover;
+
+  if (state.running) {
+    let heading = env.renderer.camera.heading;
+    if (fb) {
+      if (fb === -1) heading += Math.PI;
+      heading += fb * lr * Math.PI / 4;
+    } else {
+      heading += lr * Math.PI / 2;
+    }
+    state.heading = heading;
+  }
+
+  // Turn mouse inputs into actions.
+  if (inputs.mouse0 || inputs.mouse1) {
+    const body = env.physics.get(id);
+    if (body) tryToModifyBlock(env, body, !inputs.mouse0);
+    inputs.mouse0 = false;
+    inputs.mouse1 = false;
+  }
+};
+
+const Inputs = (env: TypedEnv): Component => ({
+  init: () => ({id: kNoEntity, index: 0}),
+  onUpdate: (dt: int, states: ComponentState[]) => {
+    for (const state of states) runInputs(env, state.id);
   }
 });
 
@@ -676,6 +694,7 @@ const main = () => {
 
   env.physics.add(player);
   env.movement.add(player);
+  env.inputs.add(player);
   env.shadow.add(player);
   env.target.add(player);
 
