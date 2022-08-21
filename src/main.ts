@@ -536,6 +536,16 @@ const runInputs = (env: TypedEnv, id: EntityId) => {
       heading += lr * Math.PI / 2;
     }
     state.heading = heading;
+
+    const mesh = env.meshes.get(id);
+    if (mesh) {
+      const row = mesh.row;
+      const option_a = fb > 0 ? 0 : fb < 0 ? 2 : -1;
+      const option_b = lr > 0 ? 3 : lr < 0 ? 1 : -1;
+      if (row !== option_a && row !== option_b) {
+        mesh.row = Math.max(option_a, option_b);
+      }
+    }
   }
 
   // Turn mouse inputs into actions.
@@ -560,12 +570,21 @@ interface MeshState {
   id: EntityId,
   index: int,
   mesh: SpriteMesh | null,
+  columns: number,
   frame: number,
+  row: number,
 };
 
 
 const Meshes = (env: TypedEnv): Component<MeshState> => ({
-  init: () => ({id: kNoEntity, index: 0, mesh: null, frame: 0}),
+  init: () => ({
+    id: kNoEntity,
+    index: 0,
+    mesh: null,
+    columns: 0,
+    frame: 0,
+    row: 0,
+  }),
   onRemove: (state: MeshState) => { if (state.mesh) state.mesh.dispose(); },
   onRender: (dt: int, states: MeshState[]) => {
     for (const state of states) {
@@ -579,12 +598,11 @@ const Meshes = (env: TypedEnv): Component<MeshState> => ({
   },
   onUpdate: (dt: int, states: MeshState[]) => {
     for (const state of states) {
-      if (!state.mesh) return;
-      if (!env.movement.get(state.id)) return;
+      if (!state.mesh || !state.columns) return;
       const body = env.physics.get(state.id);
       if (!body) return;
 
-      const setting = (() => {
+      const column = (() => {
         if (!body.resting[1]) return 1;
         const speed = Vec3.length(body.vel);
         state.frame = speed ? (state.frame + 0.025 * speed) % 4 : 0;
@@ -592,7 +610,7 @@ const Meshes = (env: TypedEnv): Component<MeshState> => ({
         const value = Math.floor(state.frame);
         return value & 1 ? 0 : (value + 2) >> 1;
       })();
-      state.mesh.setFrame(setting);
+      state.mesh.setFrame(column + state.row * state.columns);
     }
   },
 });
@@ -691,6 +709,7 @@ const main = () => {
   const mesh = env.meshes.add(player);
   const sprite = {url: 'images/player.png', size, x: 32, y: 32};
   mesh.mesh = env.renderer.addSpriteMesh(sprite);
+  mesh.columns = 3;
 
   env.physics.add(player);
   env.movement.add(player);
