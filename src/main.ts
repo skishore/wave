@@ -695,26 +695,32 @@ const safeHeight = (position: PositionState): number => {
   return height + 0.5 * (position.h + 1);
 };
 
-const main = () => {
-  const env = new TypedEnv('container');
-  const player = env.entities.addEntity();
-  const position = env.position.add(player);
-  position.x = 1;
-  position.z = 1;
-  position.w = 0.6;
-  position.h = 0.8;
+const addEntity = (env: TypedEnv, image: string,
+                   x: number, z: number, h: number, w: number): EntityId => {
+  const entity = env.entities.addEntity();
+  const position = env.position.add(entity);
+  position.x = x + 0.5;
+  position.z = z + 0.5;
+  position.w = w;
+  position.h = h;
   position.y = safeHeight(position);
 
-  const size = 1.25 * position.h;
-  const mesh = env.meshes.add(player);
-  const sprite = {url: 'images/player.png', size, x: 32, y: 32};
+  const mesh = env.meshes.add(entity);
+  const sprite = {url: `images/${image}.png`, size: 1, x: 32, y: 32};
   mesh.mesh = env.renderer.addSpriteMesh(sprite);
   mesh.columns = 3;
 
-  env.physics.add(player);
-  env.movement.add(player);
+  env.physics.add(entity);
+  env.movement.add(entity);
+  env.shadow.add(entity);
+  return entity;
+};
+
+const main = () => {
+  const env = new TypedEnv('container');
+  const player = addEntity(env, 'player', 1, 1, 0.6, 0.8);
+  const follower = addEntity(env, 'follower', 1, 1, 0.4, 0.6);
   env.inputs.add(player);
-  env.shadow.add(player);
   env.target.add(player);
 
   const texture = (x: int, y: int, alphaTest: boolean = false,
