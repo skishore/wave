@@ -1,5 +1,5 @@
 import {makeNoise2D} from '../lib/open-simplex-2d.js';
-import {assert, int, Tensor3, Vec3} from './base.js';
+import {assert, int, nonnull, Tensor3, Vec3} from './base.js';
 import {BlockId, Column, Env} from './engine.js';
 import {kChunkWidth, kEmptyBlock, kWorldHeight} from './engine.js';
 import {Component, ComponentState, ComponentStore} from './ecs.js';
@@ -32,6 +32,7 @@ class TypedEnv extends Env {
   lifetime: ComponentStore<LifetimeState>;
   position: ComponentStore<PositionState>;
   movement: ComponentStore<MovementState>;
+  pathing: ComponentStore<PathingState>;
   physics: ComponentStore<PhysicsState>;
   meshes: ComponentStore<MeshState>;
   shadow: ComponentStore<ShadowState>;
@@ -44,6 +45,7 @@ class TypedEnv extends Env {
     this.lifetime = ents.registerComponent('lifetime', Lifetime);
     this.position = ents.registerComponent('position', Position);
     this.inputs = ents.registerComponent('inputs', Inputs(this));
+    this.pathing = ents.registerComponent('pathing', Pathing(this));
     this.movement = ents.registerComponent('movement', Movement(this));
     this.physics = ents.registerComponent('physics', Physics(this));
     this.meshes = ents.registerComponent('meshes', Meshes(this));
@@ -304,8 +306,8 @@ const Physics = (env: TypedEnv): Component<PhysicsState> => ({
 interface MovementState {
   id: EntityId,
   index: int,
-  heading: number,
-  running: boolean,
+  inputX: number,
+  inputZ: number,
   jumping: boolean,
   hovering: boolean,
   maxSpeed: number,
@@ -359,9 +361,7 @@ const handleRunning =
     (dt: int, state: MovementState, body: PhysicsState, grounded: boolean) => {
   const penalty = body.inFluid ? state.swimPenalty : 1;
   const speed = penalty * state.maxSpeed;
-  Vec3.set(kTmpDelta, 0, 0, speed);
-  Vec3.rotateY(kTmpDelta, kTmpDelta, state.heading);
-
+  Vec3.set(kTmpDelta, state.inputX * speed, 0, state.inputZ * speed);
   Vec3.sub(kTmpPush, kTmpDelta, body.vel);
   kTmpPush[1] = 0;
   const length = Vec3.length(kTmpPush);
@@ -432,13 +432,17 @@ const tryToModifyBlock =
 
   if (add) {
     kTmpPos[side >> 1] += (side & 1) ? -1 : 1;
-    let intersect = true;
-    const {max, min} = body;
-    for (let i = 0; i < 3; i++) {
-      const pos = kTmpPos[i];
-      if (pos < max[i] && min[i] < pos + 1) continue;
-      intersect = false;
-    }
+    const intersect = env.movement.some(state => {
+      const body = env.physics.get(state.id);
+      if (!body) return false;
+      const {max, min} = body;
+      for (let i = 0; i < 3; i++) {
+        const pos = kTmpPos[i];
+        if (pos < max[i] && min[i] < pos + 1) continue;
+        return false;
+      }
+      return true;
+    });
     if (intersect) return;
   }
 
@@ -471,13 +475,15 @@ const runMovement = (env: TypedEnv, dt: int, state: MovementState) => {
 
   if (state.jumping) {
     handleJumping(dt, state, body, grounded);
+    state.jumping = false;
   } else {
     state._jumped = false;
   }
 
-  if (state.running) {
+  if (state.inputX || state.inputZ) {
     handleRunning(dt, state, body, grounded);
     body.friction = state.runningFriction;
+    state.inputX = state.inputZ = 0;
   } else {
     body.friction = state.standingFriction;
   }
@@ -487,11 +493,11 @@ const Movement = (env: TypedEnv): Component<MovementState> => ({
   init: () => ({
     id: kNoEntity,
     index: 0,
-    heading: 0,
-    running: false,
+    inputX: 0,
+    inputZ: 0,
     jumping: false,
     hovering: false,
-    maxSpeed: 10,
+    maxSpeed: 7.5,
     moveForce: 30,
     swimPenalty: 0.5,
     responsiveness: 15,
@@ -523,11 +529,10 @@ const runInputs = (env: TypedEnv, id: EntityId) => {
   const inputs = env.container.inputs;
   const fb = (inputs.up ? 1 : 0) - (inputs.down ? 1 : 0);
   const lr = (inputs.right ? 1 : 0) - (inputs.left ? 1 : 0);
-  state.running = fb !== 0 || lr !== 0;
   state.jumping = inputs.space;
   state.hovering = inputs.hover;
 
-  if (state.running) {
+  if (fb || lr) {
     let heading = env.renderer.camera.heading;
     if (fb) {
       if (fb === -1) heading += Math.PI;
@@ -535,7 +540,8 @@ const runInputs = (env: TypedEnv, id: EntityId) => {
     } else {
       heading += lr * Math.PI / 2;
     }
-    state.heading = heading;
+    state.inputX = Math.sin(heading);
+    state.inputZ = Math.cos(heading);
 
     const mesh = env.meshes.get(id);
     if (mesh) {
@@ -545,6 +551,17 @@ const runInputs = (env: TypedEnv, id: EntityId) => {
       if (row !== option_a && row !== option_b) {
         mesh.row = Math.max(option_a, option_b);
       }
+    }
+  }
+
+  // Call any followers.
+  if (inputs.call) {
+    const body = env.physics.get(id);
+    if (body) {
+      const x = Math.floor((body.min[0] + body.max[0]) / 2);
+      const y = Math.floor((body.min[1] + body.max[1]) / 2);
+      const z = Math.floor((body.min[2] + body.max[2]) / 2);
+      env.pathing.each(other => other.target = [x, y, z]);
     }
   }
 
@@ -564,24 +581,228 @@ const Inputs = (env: TypedEnv): Component => ({
   }
 });
 
+// An entity with PathingState computes a path to a target and moves along it.
+
+interface PathingState {
+  id: EntityId,
+  index: int,
+  path_index: int,
+  path: Point[] | null,
+  target: Point | null,
+};
+
+const solid = (env: TypedEnv, x: int, y: int, z: int): boolean => {
+  const block = env.world.getBlock(x, y, z);
+  return env.registry.solid[block];
+};
+
+const hasDirectPath = (env: TypedEnv, start: Point, end: Point): boolean => {
+  if (start[1] !== end[1]) return false;
+  if (start[0] === end[0] && start[2] === end[2]) return true;
+
+  const [sx, y, sz] = start;
+  const [ex, _, ez] = end;
+  const dx = Math.abs(ex - sx);
+  const dz = Math.abs(ez - sz);
+  const elements: Point[] = [];
+
+  if (dx <= dz) {
+    const extra = dx === 0 ? 1 : 0;
+    for (let i = 0; i < dz; i++) {
+      const a = Math.floor(i * dx / dz);
+      const b = Math.ceil((i + 1) * dx / dz) + extra;
+      for (let j = a; j < b; j++) {
+        const x = ex >= sx ? sx + j : sx - j - 1;
+        const z = ez >= sz ? sz + i : sz - i - 1;
+        elements.push([x, y, z]);
+      }
+    }
+  } else {
+    const extra = dz === 0 ? 1 : 0;
+    for (let i = 0; i < dx; i++) {
+      const a = Math.floor(i * dz / dx);
+      const b = Math.ceil((i + 1) * dz / dx) + extra;
+      for (let j = a; j < b; j++) {
+        const x = ex >= sx ? sx + i : sx - i - 1;
+        const z = ez >= sz ? sz + j : sz - j - 1;
+        elements.push([x, y, z]);
+      }
+    }
+  }
+
+  const n = dx && dz ? 4 : 1;
+  for (const element of elements) {
+    const [x, y, z] = element;
+    for (let i = 0; i < n; i++) {
+      const ix = x + (i & 1);
+      const iz = z + ((i >> 1) & 1);
+      if (solid(env, ix, y, iz) || !solid(env, ix, y - 1, iz)) return false;
+    }
+  }
+  return true;
+};
+
+const findPath = (env: TypedEnv, state: PathingState,
+                  body: PhysicsState): void => {
+  const min = body.min;
+  const sx = Math.floor(min[0]);
+  const sy = Math.floor(min[1]);
+  const sz = Math.floor(min[2]);
+  const [tx, ty, tz] = nonnull(state.target);
+
+  console.log(`Pathing: (${sx}, ${sy}, ${sz}) -> (${tx}, ${ty}, ${tz})`);
+
+  const limit = 64;
+  let prev: Point[] = [[sx, sy, sz]];
+  let next: Point[] = [];
+  let done: boolean = false;
+
+  let shift = 1;
+  while ((1 << shift) < 2 * limit) shift++;
+  const mask = (1 << shift) - 1;
+
+  const compute_key = (x: int, y: int, z: int): int => {
+    return (y << (2 * shift)) |
+           (((x - sx) & mask) << shift) |
+           (((z - sz) & mask));
+  };
+
+  const visited: Map<int, Point | null> = new Map();
+  visited.set(compute_key(sx, sy, sz), null);
+
+  for (let i = 0; i < limit; i++) {
+    for (const pp of prev) {
+      const npY = pp[1];
+      for (let dir = 0; dir < 4; dir++) {
+        const npX = pp[0] + ((dir & 1) ? dir - 2 : 0);
+        const npZ = pp[2] + ((dir & 1) ? 0 : dir - 1);
+        const key = compute_key(npX, npY, npZ);
+        if (visited.has(key)) continue;
+
+        if (solid(env, npX, npY, npZ)) continue;
+        if (!solid(env, npX, npY - 1, npZ)) continue;
+
+        visited.set(key, pp);
+        next.push([npX, npY, npZ]);
+        if (npX === tx && npY === ty && npZ === tz) done = true;
+      }
+    }
+    if (done) break;
+    [prev, next] = [next, prev];
+    next.length === 0;
+  }
+
+  if (!done) return;
+
+  const full: Point[] = [];
+  let cur: Point | null | void = [tx, ty, tz];
+  while (cur) {
+    full.push(cur);
+    cur = visited.get(compute_key(cur[0], cur[1], cur[2]));
+  }
+  full.reverse();
+
+  const result = [full[0]];
+  for (let i = 2; i < full.length; i++) {
+    const last = result[result.length - 1];
+    if (hasDirectPath(env, last, full[i])) continue;
+    result.push(full[i - 1]);
+  }
+  if (full.length > 1) result.push(full[full.length - 1]);
+
+  state.path = result;
+  state.path_index = 0;
+  state.target = null;
+  console.log(state.path);
+};
+
+const PIDController = (error: number, derror: number): number => {
+  return 1.00 * error + 0.05 * derror;
+};
+
+const followPath = (env: TypedEnv, state: PathingState,
+                    body: PhysicsState): void => {
+  const path = nonnull(state.path);
+  if (state.path_index === path.length) { state.path = null; return; }
+  const movement = env.movement.get(state.id);
+  if (!movement) return;
+
+  const cx = (body.min[0] + body.max[0]) / 2;
+  const cz = (body.min[2] + body.max[2]) / 2;
+
+  const node = path[state.path_index];
+  const E = state.path_index + 1 === path.length
+    ? 0.4 * (1 - (body.max[0] - body.min[0]))
+    : 0;
+  if (node[0] + E <= body.min[0] && body.max[0] <= node[0] + 1 - E &&
+      node[1] + 0 <= body.min[1] && body.max[1] <= node[1] + 1 - 0 &&
+      node[2] + E <= body.min[2] && body.max[2] <= node[2] + 1 - E) {
+    state.path_index += 1;
+  }
+  if (state.path_index === path.length) { state.path = null; return; }
+
+  const cur = path[state.path_index];
+  let inputX = PIDController(cur[0] + 0.5 - cx, -body.vel[0]);
+  let inputZ = PIDController(cur[2] + 0.5 - cz, -body.vel[2]);
+  const length = Math.sqrt(inputX * inputX + inputZ * inputZ);
+  const normalization = length > 1 ? 1 / length : 1;
+  movement.inputX = inputX * normalization;
+  movement.inputZ = inputZ * normalization;
+
+  const mesh = env.meshes.get(state.id);
+  if (!mesh) return;
+  const dx = state.path_index > 0
+    ? cur[0] - path[state.path_index - 1][0]
+    : cur[0] + 0.5 - cx;
+  const dz = state.path_index > 0
+    ? cur[2] - path[state.path_index - 1][2]
+    : cur[2] + 0.5 - cz;
+  mesh.heading = Math.atan2(dx, dz);
+};
+
+const runPathing = (env: TypedEnv, state: PathingState): void => {
+  if (!state.path && !state.target) return;
+  const body = env.physics.get(state.id);
+  if (!body) return;
+
+  if (state.target) return findPath(env, state, body);
+  if (state.path) return followPath(env, state, body);
+};
+
+const Pathing = (env: TypedEnv): Component<PathingState> => ({
+  init: () => ({
+    id: kNoEntity,
+    index: 0,
+    path: null,
+    path_index: 0,
+    target: null,
+  }),
+  onUpdate: (dt: int, states: PathingState[]) => {
+    for (const state of states) runPathing(env, state);
+  }
+});
+
 // An entity with a MeshState keeps a renderer mesh at its position.
 
 interface MeshState {
   id: EntityId,
   index: int,
   mesh: SpriteMesh | null,
+  heading: number | null,
   columns: number,
+  column: number,
   frame: number,
   row: number,
 };
-
 
 const Meshes = (env: TypedEnv): Component<MeshState> => ({
   init: () => ({
     id: kNoEntity,
     index: 0,
     mesh: null,
+    heading: null,
     columns: 0,
+    column: 0,
     frame: 0,
     row: 0,
   }),
@@ -594,6 +815,14 @@ const Meshes = (env: TypedEnv): Component<MeshState> => ({
           Math.floor(x), Math.floor(y), Math.floor(z));
       state.mesh.setPosition(x, y - h / 2, z);
       state.mesh.setLight(lit ? 1 : 0.64);
+
+      if (state.heading !== null) {
+        const pos = env.renderer.camera.position;
+        const camera_heading = Math.atan2(x - pos[0], z - pos[2]);
+        const delta = state.heading - camera_heading;
+        state.row = Math.floor(8.5 - 2 * delta / Math.PI) & 3;
+        state.mesh.setFrame(state.column + state.row * state.columns);
+      }
     }
   },
   onUpdate: (dt: int, states: MeshState[]) => {
@@ -602,7 +831,7 @@ const Meshes = (env: TypedEnv): Component<MeshState> => ({
       const body = env.physics.get(state.id);
       if (!body) return;
 
-      const column = (() => {
+      state.column = (() => {
         if (!body.resting[1]) return 1;
         const speed = Vec3.length(body.vel);
         state.frame = speed ? (state.frame + 0.025 * speed) % 4 : 0;
@@ -610,7 +839,7 @@ const Meshes = (env: TypedEnv): Component<MeshState> => ({
         const value = Math.floor(state.frame);
         return value & 1 ? 0 : (value + 2) >> 1;
       })();
-      state.mesh.setFrame(column + state.row * state.columns);
+      state.mesh.setFrame(state.column + state.row * state.columns);
     }
   },
 });
@@ -647,8 +876,7 @@ const Shadow = (env: TypedEnv): Component<ShadowState> => ({
       state.height = (() => {
         for (let i = 0; i < state.extent; i++) {
           const h = y - i;
-          const block = env.world.getBlock(x, h - 1, z);
-          if (env.registry.solid[block]) return h;
+          if (solid(env, x, h - 1, z)) return h;
         }
         return 0;
       })();
@@ -718,10 +946,14 @@ const addEntity = (env: TypedEnv, image: string,
 
 const main = () => {
   const env = new TypedEnv('container');
-  const player = addEntity(env, 'player', 1, 1, 0.6, 0.8);
-  const follower = addEntity(env, 'follower', 1, 1, 0.4, 0.6);
+
+  const player = addEntity(env, 'player', 1, 1, 0.8, 0.6);
   env.inputs.add(player);
   env.target.add(player);
+
+  const follower = addEntity(env, 'follower', 1, 1, 0.5, 0.5);
+  env.meshes.getX(follower).heading = 0;
+  env.pathing.add(follower);
 
   const texture = (x: int, y: int, alphaTest: boolean = false,
                    sparkle: boolean = false): Texture => {

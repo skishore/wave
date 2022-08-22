@@ -7,7 +7,7 @@ import {kSweepResolution, sweep} from './sweep.js';
 
 //////////////////////////////////////////////////////////////////////////////
 
-type Input = 'up' | 'left' | 'down' | 'right' | 'hover' |
+type Input = 'up' | 'left' | 'down' | 'right' | 'hover' | 'call' |
              'mouse0' | 'mouse1' | 'space' | 'pointer';
 
 class Container {
@@ -28,6 +28,7 @@ class Container {
       down: false,
       right: false,
       hover: false,
+      call: false,
       space: false,
       mouse0: false,
       mouse1: false,
@@ -41,6 +42,7 @@ class Container {
     this.bindings.set('S'.charCodeAt(0), 'down');
     this.bindings.set('D'.charCodeAt(0), 'right');
     this.bindings.set('E'.charCodeAt(0), 'hover');
+    this.bindings.set('Q'.charCodeAt(0), 'call');
     this.bindings.set(' '.charCodeAt(0), 'space');
 
     const canvas = this.canvas;

@@ -41,6 +41,18 @@ class ComponentStore<T extends ComponentState = ComponentState> {
     return result;
   }
 
+  each(fn: (state: T) => void): void {
+    this.states.forEach(fn);
+  }
+
+  every(fn: (state: T) => boolean): boolean {
+    return this.states.every(fn);
+  }
+
+  some(fn: (state: T) => boolean): boolean {
+    return this.states.some(fn);
+  }
+
   add(entity: EntityId): T {
     if (this.lookup.has(entity)) {
       throw new Error(`Duplicate for ${entity}: ${this.component}`);
