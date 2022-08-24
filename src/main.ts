@@ -563,6 +563,7 @@ const runInputs = (env: TypedEnv, id: EntityId) => {
       const z = Math.floor((body.min[2] + body.max[2]) / 2);
       env.pathing.each(other => other.target = [x, y, z]);
     }
+    inputs.call = false;
   }
 
   // Turn mouse inputs into actions.

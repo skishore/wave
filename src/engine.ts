@@ -10,11 +10,13 @@ import {kSweepResolution, sweep} from './sweep.js';
 type Input = 'up' | 'left' | 'down' | 'right' | 'hover' | 'call' |
              'mouse0' | 'mouse1' | 'space' | 'pointer';
 
+interface KeyBinding {input: Input, handled: boolean};
+
 class Container {
   element: Element;
   canvas: HTMLCanvasElement;
   stats: Element | null;
-  bindings: Map<int, Input>;
+  bindings: Map<int, KeyBinding>;
   inputs: Record<Input, boolean>;
   deltas: {x: int, y: int, scroll: int};
 
@@ -37,13 +39,13 @@ class Container {
     this.deltas = {x: 0, y: 0, scroll: 0};
 
     this.bindings = new Map();
-    this.bindings.set('W'.charCodeAt(0), 'up');
-    this.bindings.set('A'.charCodeAt(0), 'left');
-    this.bindings.set('S'.charCodeAt(0), 'down');
-    this.bindings.set('D'.charCodeAt(0), 'right');
-    this.bindings.set('E'.charCodeAt(0), 'hover');
-    this.bindings.set('Q'.charCodeAt(0), 'call');
-    this.bindings.set(' '.charCodeAt(0), 'space');
+    this.addBinding('W', 'up');
+    this.addBinding('A', 'left');
+    this.addBinding('S', 'down');
+    this.addBinding('D', 'right');
+    this.addBinding('E', 'hover');
+    this.addBinding('Q', 'call');
+    this.addBinding(' ', 'space');
 
     const canvas = this.canvas;
     const target = nonnull(this.canvas.parentElement);
@@ -62,55 +64,62 @@ class Container {
     document.addEventListener('wheel', e => this.onMouseWheel(e));
   }
 
-  displayStats(stats: string) {
+  displayStats(stats: string): void {
     if (this.stats) this.stats.textContent = stats;
   }
 
-  private insistOnPointerLock() {
+  private addBinding(key: string, input: Input): void {
+    assert(key.length === 1);
+    this.bindings.set(key.charCodeAt(0), {input, handled: false});
+  }
+
+  private insistOnPointerLock(): void {
     if (!this.inputs.pointer) return;
     if (document.pointerLockElement === this.canvas) return;
     this.canvas.requestPointerLock();
     setTimeout(() => this.insistOnPointerLock(), 100);
   }
 
-  private onKeyInput(e: Event, down: boolean) {
+  private onKeyInput(e: Event, down: boolean): void {
     if (!this.inputs.pointer) return;
     const keycode = (e as KeyboardEvent).keyCode;
     if (keycode === 27) return this.onMimicPointerLock(e, false);
-    const input = this.bindings.get(keycode);
-    if (input) this.onInput(e, input, down);
+    const binding = this.bindings.get(keycode);
+    if (!binding || binding.handled === down) return;
+    this.onInput(e, binding.input, down);
+    binding.handled = down;
   }
 
-  private onMouseDown(e: Event) {
+  private onMouseDown(e: Event): void {
     if (!this.inputs.pointer) return;
     const button = (e as MouseEvent).button;
     if (button === 0) this.inputs.mouse0 = true;
     if (button !== 0) this.inputs.mouse1 = true;
   }
 
-  private onMouseMove(e: Event) {
+  private onMouseMove(e: Event): void {
     if (!this.inputs.pointer) return;
     this.deltas.x += (e as MouseEvent).movementX;
     this.deltas.y += (e as MouseEvent).movementY;
   }
 
-  private onMouseWheel(e: Event) {
+  private onMouseWheel(e: Event): void {
     if (!this.inputs.pointer) return;
     this.deltas.scroll += (e as any).deltaY;
   }
 
-  private onMimicPointerLock(e: Event, locked: boolean) {
+  private onMimicPointerLock(e: Event, locked: boolean): void {
     if (locked) this.element.classList.remove('paused');
     if (!locked) this.element.classList.add('paused');
     this.onInput(e, 'pointer', locked);
   }
 
-  private onPointerInput(e: Event) {
+  private onPointerInput(e: Event): void {
     const locked = document.pointerLockElement === this.canvas;
     this.onMimicPointerLock(e, locked);
   }
 
-  private onInput(e: Event, input: Input, state: boolean) {
+  private onInput(e: Event, input: Input, state: boolean): void {
     this.inputs[input] = state;
     e.stopPropagation();
     e.preventDefault();
