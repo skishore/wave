@@ -13,7 +13,7 @@ export type Noise2D = (x: number, y: number) => number;
 interface Contribution2D {
   dx: number;
   dy: number;
-  next?: Contribution2D;
+  next: Contribution2D | null;
   xsb: number;
   ysb: number;
 }
@@ -26,6 +26,7 @@ function contribution2D(
   return {
     dx: -xsb - multiplier * SQUISH_2D,
     dy: -ysb - multiplier * SQUISH_2D,
+    next: null,
     xsb,
     ysb,
   };
@@ -92,11 +93,7 @@ export function makeNoise2D(clientSeed: number): Noise2D {
 
     let value = 0;
 
-    for (
-      let c: Contribution2D | undefined = lookup[hash];
-      c !== undefined;
-      c = c.next
-    ) {
+    for (let c: Contribution2D | null = lookup[hash]; c; c = c.next) {
       const dx = dx0 + c.dx;
       const dy = dy0 + c.dy;
 
