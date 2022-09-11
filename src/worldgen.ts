@@ -116,13 +116,12 @@ const carve_caves = (x: int, z: int, column: Column, limit: int): int => {
 // Tree generation.
 
 const hash_fnv32 = (k: int): int => {
-  let result = 2166136261;
+  let result = int(-2128831035);
   for (let i = 0; i < 4; i++) {
-    result ^= (k & 255);
-    result *= 16777619;
+    result = int((result ^ (k & 0xff)) * 16777619);
     k = (k >> 8) as int;
   }
-  return result as int;
+  return result;
 };
 
 const kMask = int((1 << 15) - 1);

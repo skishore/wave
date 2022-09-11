@@ -768,8 +768,8 @@ class Chunk {
   }
 
   private dropMeshes(): void {
-    if (this.solid) this.solid.dispose();
-    if (this.water) this.water.dispose();
+    this.solid?.dispose();
+    this.water?.dispose();
     this.solid = null;
     this.water = null;
     this.dirty = true;
@@ -831,8 +831,8 @@ class Chunk {
     const meshed = world.mesher.meshChunk(
         buffer, heightmap, light_map, equilevels, this.solid, this.water);
     const [solid, water] = meshed;
-    if (solid) solid.setPosition(x, 0, z);
-    if (water) water.setPosition(x, 0, z);
+    solid?.setPosition(x, 0, z);
+    water?.setPosition(x, 0, z);
     this.solid = solid;
     this.water = water;
   }
@@ -995,8 +995,8 @@ class LODMultiMesh {
     if (this.enabled.some(x => x)) return;
 
     for (let i = 0; i < this.meshed.length; i++) this.meshed[i] = false;
-    if (this.solid) this.solid.dispose();
-    if (this.water) this.water.dispose();
+    this.solid?.dispose();
+    this.water?.dispose();
     this.solid = null;
     this.water = null;
     this.mask[0] = this.mask[1] = -1;
@@ -1018,10 +1018,10 @@ class LODMultiMesh {
     const mask_shift = (index & 7) * 4;
     this.mask[mask_index] &= ~(kLODSingleMask << mask_shift);
     this.mask[mask_index] |= mask << mask_shift;
-    const shown = (this.mask[0] & this.mask[1]) !== -1;
 
-    if (this.solid) this.solid.show(this.mask, shown);
-    if (this.water) this.water.show(this.mask, shown);
+    const shown = (this.mask[0] & this.mask[1]) !== -1;
+    this.solid?.show(this.mask, shown);
+    this.water?.show(this.mask, shown);
   }
 };
 
@@ -1202,8 +1202,8 @@ class Frontier {
           water_heightmap, mask, px, pz, n, n, lod, mesh.water, false);
     }
 
-    if (mesh.solid) mesh.solid.setPosition(mx, 0, mz);
-    if (mesh.water) mesh.water.setPosition(mx, 0, mz);
+    mesh.solid?.setPosition(mx, 0, mz);
+    mesh.water?.setPosition(mx, 0, mz);
     mesh.meshed[mesh.index(chunk)] = true;
   }
 
@@ -1290,7 +1290,7 @@ class World {
     if (!(0 <= y && y < kWorldHeight)) return;
     const cx = int(x >> kChunkBits), cz = int(z >> kChunkBits);
     const chunk = this.chunks.get(cx, cz);
-    if (chunk) chunk.setBlock(x, y, z, block);
+    chunk?.setBlock(x, y, z, block);
   }
 
   setLoader(bedrock: BlockId, loadChunk: Loader, loadFrontier?: Loader) {
@@ -1412,8 +1412,7 @@ class Env {
   render(dt: number): void {
     if (!this.container.inputs.pointer) return;
 
-    this.frame += 1;
-    if (this.frame === 65536) this.frame = 0;
+    this.frame = int((this.frame + 1) & 0xffff);
     const pos = this.frame / 256;
     const rad = 2 * Math.PI * pos;
     const move = 0.25 * (Math.cos(rad) * 0.5 + pos);
@@ -1496,10 +1495,10 @@ class Env {
       for (let d = 0; d < 3; d++) {
         pos[d] += 1;
         const b0 = this.world.getBlock(int(pos[0]), int(pos[1]), int(pos[2]));
-        if (this.registry.solid[b0]) mask |= (1 << (2 * d + 0));
+        if (this.registry.opaque[b0]) mask |= (1 << (2 * d + 0));
         pos[d] -= 2;
         const b1 = this.world.getBlock(int(pos[0]), int(pos[1]), int(pos[2]));
-        if (this.registry.solid[b1]) mask |= (1 << (2 * d + 1));
+        if (this.registry.opaque[b1]) mask |= (1 << (2 * d + 1));
         pos[d] += 1;
       }
       move = pos[0] !== this.highlightPosition[0] ||

@@ -76,7 +76,7 @@ class ComponentStore<T extends ComponentState = ComponentState> {
     if (!state) return;
 
     this.lookup.delete(entity);
-    const popped = this.states.pop() as T;
+    const popped = this.states.pop()!;
     assert(popped.index === this.states.length);
 
     if (popped.id !== entity) {
@@ -111,7 +111,7 @@ class EntityComponentSystem {
   private onUpdates: ComponentStore<any>[];
 
   constructor() {
-    this.last = 0 as EntityId;
+    this.last = kNoEntity;
     this.reusable = [];
     this.components = new Map();
     this.onRenders = [];
@@ -120,7 +120,7 @@ class EntityComponentSystem {
 
   addEntity(): EntityId {
     if (this.reusable.length > 0) {
-      return this.reusable.pop() as EntityId;
+      return this.reusable.pop()!;
     }
     return this.last = (this.last + 1) as EntityId;
   }

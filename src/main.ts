@@ -810,7 +810,7 @@ const Meshes = (env: TypedEnv): Component<MeshState> => ({
     frame: 0,
     row: 0,
   }),
-  onRemove: (state: MeshState) => { if (state.mesh) state.mesh.dispose(); },
+  onRemove: (state: MeshState) => state.mesh?.dispose(),
   onRender: (dt: number, states: MeshState[]) => {
     for (const state of states) {
       if (!state.mesh) continue;
@@ -860,7 +860,7 @@ interface ShadowState {
 
 const Shadow = (env: TypedEnv): Component<ShadowState> => ({
   init: () => ({id: kNoEntity, index: 0, mesh: null, extent: 16, height: 0}),
-  onRemove: (state: ShadowState) => { if (state.mesh) state.mesh.dispose(); },
+  onRemove: (state: ShadowState) => state.mesh?.dispose(),
   onRender: (dt: number, states: ShadowState[]) => {
     for (const state of states) {
       if (!state.mesh) state.mesh = env.renderer.addShadowMesh();

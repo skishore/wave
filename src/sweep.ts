@@ -75,7 +75,8 @@ const sweep = (min: Vec3, max: Vec3, delta: Vec3, impacts: Vec3,
       let done = false;
       for (kVoxel[j] = jlo; !done && kVoxel[j] <= jhi; kVoxel[j]++) {
         for (kVoxel[k] = klo; !done && kVoxel[k] <= khi; kVoxel[k]++) {
-          if (check(kVoxel[0] as int, kVoxel[1] as int, kVoxel[2] as int)) continue;
+          const x = int(kVoxel[0]), y = int(kVoxel[1]), z = int(kVoxel[2]);
+          if (check(x, y, z)) continue;
           impacts[i] = direction;
           min[i] -= direction;
           max[i] -= direction;
