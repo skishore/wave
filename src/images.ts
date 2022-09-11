@@ -30,23 +30,26 @@ const showFrame = (frame: Point): string => {
 };
 
 const findBounds = (anim: AnimData, frame: Point, sprite: ImageData): Bound => {
-  const result = {min: {x: anim.width, y: anim.height}, max: {x: 0, y: 0}};
+  const result = {
+    min: {x: anim.width, y: anim.height},
+    max: {x: int(0), y: int(0)},
+  };
   for (let x = 0; x < anim.width; x++) {
     for (let y = 0; y < anim.height; y++) {
       const index = (frame.x * anim.width + x) +
                     (frame.y * anim.height + y) * sprite.width;
       if (sprite.data[4 * index + 3] === 0) continue;
-      result.min.x = Math.min(result.min.x, x);
-      result.min.y = Math.min(result.min.y, y);
-      result.max.x = Math.max(result.max.x, x + 1);
-      result.max.y = Math.max(result.max.y, y + 1);
+      result.min.x = int(Math.min(result.min.x, x));
+      result.min.y = int(Math.min(result.min.y, y));
+      result.max.x = int(Math.max(result.max.x, x + 1));
+      result.max.y = int(Math.max(result.max.y, y + 1));
     }
   }
   return result;
 };
 
 const findOrigin = (anim: AnimData, frame: Point, shadow: ImageData): Point => {
-  const result = [];
+  const result: Point[] = [];
   for (let x = 0; x < anim.width; x++) {
     for (let y = 0; y < anim.height; y++) {
       const index = (frame.x * anim.width + x) +
@@ -54,7 +57,9 @@ const findOrigin = (anim: AnimData, frame: Point, shadow: ImageData): Point => {
       const r = shadow.data[4 * index + 0];
       const g = shadow.data[4 * index + 1];
       const b = shadow.data[4 * index + 2];
-      if (r === 255 && g === 255 && b === 255) result.push({x, y});
+      if (r === 255 && g === 255 && b === 255) {
+        result.push({x: int(x), y: int(y)});
+      }
     }
   }
   if (result.length !== 1) {
@@ -76,7 +81,7 @@ const main = (anim: AnimData, sprite: ImageData, shadow: ImageData) => {
   const cols = sprite.width / anim.width;
   for (let row = 0; row < rows; row++) {
     for (let col = 0; col < cols; col++) {
-      const frame = {x: col, y: row};
+      const frame = {x: int(col), y: int(row)};
       const bound = findBounds(anim, frame, sprite);
       const point = findOrigin(anim, frame, shadow);
       console.log(`${showFrame(frame)}: center: (${point.x}, ${point.y}); ` +
@@ -112,8 +117,8 @@ const parseXML = (filename: string): AnimData[] => {
   for (const anim of anims) {
     const name = onlyChild(anim, 'Name').innerXML;
     if (anim.childNodes!.some(x => x.tagName === 'CopyOf')) continue;
-    const width = parseInt(onlyChild(anim, 'FrameWidth').innerXML, 10);
-    const height = parseInt(onlyChild(anim, 'FrameHeight').innerXML, 10);
+    const width  = int(parseInt(onlyChild(anim, 'FrameWidth').innerXML, 10));
+    const height = int(parseInt(onlyChild(anim, 'FrameHeight').innerXML, 10));
     result.push({name, width, height});
   }
   return result;

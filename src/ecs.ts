@@ -58,7 +58,7 @@ class ComponentStore<T extends ComponentState = ComponentState> {
       throw new Error(`Duplicate for ${entity}: ${this.component}`);
     }
 
-    const index = this.states.length;
+    const index = int(this.states.length);
     const state = this.definition.init();
     state.id = entity;
     state.index = index;
@@ -90,13 +90,13 @@ class ComponentStore<T extends ComponentState = ComponentState> {
     if (callback) callback(state);
   }
 
-  render(dt: int) {
+  render(dt: number) {
     const callback = this.definition.onRender;
     if (!callback) throw new Error(`render called: ${this.component}`);
     callback(dt, this.states);
   }
 
-  update(dt: int) {
+  update(dt: number) {
     const callback = this.definition.onUpdate;
     if (!callback) throw new Error(`update called: ${this.component}`);
     callback(dt, this.states);
@@ -142,11 +142,11 @@ class EntityComponentSystem {
     return store;
   }
 
-  render(dt: int) {
+  render(dt: number) {
     for (const store of this.onRenders) store.render(dt);
   }
 
-  update(dt: int) {
+  update(dt: number) {
     for (const store of this.onUpdates) store.update(dt);
   }
 };

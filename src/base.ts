@@ -1,5 +1,8 @@
-type int = number;
+type IntLiteral = -1 | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 60;
+type int = number & ({__type__: 'int'} | IntLiteral);
 type Color = [number, number, number, number];
+
+const int = (x: number): int => (x | 0) as int;
 
 const assert = (x: boolean, message?: () => string) => {
   if (x) return;
@@ -221,7 +224,7 @@ class Tensor2 {
   }
 
   get(x: int, y: int): int {
-    return this.data[this.index(x, y)];
+    return int(this.data[this.index(x, y)]);
   }
 
   set(x: int, y: int, value: int) {
@@ -229,7 +232,7 @@ class Tensor2 {
   }
 
   index(x: int, y: int): int {
-    return x * this.stride[0] + y * this.stride[1];
+    return int(x * this.stride[0] + y * this.stride[1]);
   }
 };
 
@@ -241,11 +244,11 @@ class Tensor3 {
   constructor(x: int, y: int, z: int) {
     this.data = new Int16Array(x * y * z);
     this.shape = [x, y, z];
-    this.stride = [y, 1, x * y];
+    this.stride = [y, 1, int(x * y)];
   }
 
   get(x: int, y: int, z: int): int {
-    return this.data[this.index(x, y, z)];
+    return int(this.data[this.index(x, y, z)]);
   }
 
   set(x: int, y: int, z: int, value: int) {
@@ -253,7 +256,7 @@ class Tensor3 {
   }
 
   index(x: int, y: int, z: int): int {
-    return x * this.stride[0] + y * this.stride[1] + z * this.stride[2];
+    return int(x * this.stride[0] + y * this.stride[1] + z * this.stride[2]);
   }
 };
 

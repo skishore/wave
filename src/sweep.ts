@@ -1,8 +1,8 @@
-import {Vec3} from './base.js';
+import {int, Vec3} from './base.js';
 
 //////////////////////////////////////////////////////////////////////////////
 
-type Check = (x: Vec3) => boolean;
+type Check = (x: int, y: int, z: int) => boolean;
 
 const kSweepShift = 8;
 const kSweepResolution = 1 << kSweepShift;
@@ -75,7 +75,7 @@ const sweep = (min: Vec3, max: Vec3, delta: Vec3, impacts: Vec3,
       let done = false;
       for (kVoxel[j] = jlo; !done && kVoxel[j] <= jhi; kVoxel[j]++) {
         for (kVoxel[k] = klo; !done && kVoxel[k] <= khi; kVoxel[k]++) {
-          if (check(kVoxel)) continue;
+          if (check(kVoxel[0] as int, kVoxel[1] as int, kVoxel[2] as int)) continue;
           impacts[i] = direction;
           min[i] -= direction;
           max[i] -= direction;

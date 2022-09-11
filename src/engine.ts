@@ -70,7 +70,7 @@ class Container {
 
   private addBinding(key: string, input: Input): void {
     assert(key.length === 1);
-    this.bindings.set(key.charCodeAt(0), {input, handled: false});
+    this.bindings.set(int(key.charCodeAt(0)), {input, handled: false});
   }
 
   private insistOnPointerLock(): void {
@@ -82,7 +82,7 @@ class Container {
 
   private onKeyInput(e: Event, down: boolean): void {
     if (!this.inputs.pointer) return;
-    const keycode = (e as KeyboardEvent).keyCode;
+    const keycode = int((e as KeyboardEvent).keyCode);
     if (keycode === 27) return this.onMimicPointerLock(e, false);
     const binding = this.bindings.get(keycode);
     if (!binding || binding.handled === down) return;
@@ -253,8 +253,8 @@ class Performance {
   end() {
     const index = this.index;
     const next_index = index + 1;
-    this.index = next_index < this.ticks.length ? next_index : 0;
-    const tick = Math.round(1000 * (this.now.now() - this.last));
+    this.index = int(next_index < this.ticks.length ? next_index : 0);
+    const tick = int(Math.round(1000 * (this.now.now() - this.last)));
     this.sum += tick - this.ticks[index];
     this.ticks[index] = tick;
   }
@@ -280,8 +280,8 @@ const kTicksPerSecond = 30;
 
 class Timing {
   private now: any;
-  private render: (dt: int, fraction: number) => void;
-  private update: (dt: int) => void;
+  private render: (dt: number, fraction: number) => void;
+  private update: (dt: number) => void;
   private renderBinding: () => void;
   private updateDelay: number;
   private updateLimit: number;
@@ -290,8 +290,8 @@ class Timing {
   renderPerf: Performance;
   updatePerf: Performance;
 
-  constructor(render: (dt: int, fraction: number) => void,
-              update: (dt: int) => void) {
+  constructor(render: (dt: number, fraction: number) => void,
+              update: (dt: number) => void) {
     this.now = performance || Date;
     this.render = render;
     this.update = update;
@@ -386,12 +386,12 @@ class Column {
   }
 
   fillChunk(x: int, z: int, chunk: Chunk, first: boolean): void {
-    let last = 0;
+    let last = int(0);
     for (let i = 0; i < this.size; i++) {
       const offset = 2 * i;
       const block = this.data[offset + 0] as BlockId;
-      const level = this.data[offset + 1];
-      chunk.setColumn(x, z, last, level - last, block);
+      const level = int(this.data[offset + 1]);
+      chunk.setColumn(x, z, last, int(level - last), block);
       last = level;
     }
     for (let i = 0; i < this.decorations.length; i += 2) {
@@ -418,7 +418,7 @@ class Column {
   }
 
   push(block: BlockId, height: int): void {
-    height = Math.min(height, kWorldHeight);
+    height = int(Math.min(height, kWorldHeight));
     if (height <= this.last) return;
     this.last = height;
     const offset = 2 * this.size;
@@ -432,7 +432,7 @@ class Column {
   }
 
   getNthLevel(n: int): int {
-    return n < 0 ? 0 : this.data[2 * n + 1];
+    return n < 0 ? 0 : int(this.data[2 * n + 1]);
   }
 
   getSize(): int {
@@ -543,8 +543,8 @@ class Circle<T extends CircleElement> {
     let shift = 0;
     while ((1 << shift) < 2 * floor + 1) shift++;
     this.elements = new Array(1 << (2 * shift)).fill(null);
-    this.shift = shift;
-    this.mask = (1 << shift) - 1;
+    this.shift = int(shift);
+    this.mask = int((1 << shift) - 1);
   }
 
   center(center_x: int, center_z: int): void {
@@ -568,7 +568,7 @@ class Circle<T extends CircleElement> {
     const {center_x, center_z, points} = this;
     const length = points.length;
     for (let i = 0; i < length; i += 2) {
-      const done = fn(points[i] + center_x, points[i + 1] + center_z);
+      const done = fn(int(points[i] + center_x), int(points[i + 1] + center_z));
       if (done) break;
     }
   }
@@ -586,16 +586,16 @@ class Circle<T extends CircleElement> {
 
   private index(cx: int, cz: int): int {
     const {mask, shift} = this;
-    return ((cz & mask) << shift) | (cx & mask);
+    return int(((cz & mask) << shift) | (cx & mask));
   }
 };
 
 //////////////////////////////////////////////////////////////////////////////
 
-const kChunkBits = 4;
-const kChunkWidth = 1 << kChunkBits;
-const kChunkMask = kChunkWidth - 1;
-const kWorldHeight = 256;
+const kChunkBits   = int(4);
+const kChunkWidth  = int(1 << kChunkBits);
+const kChunkMask   = int(kChunkWidth - 1);
+const kWorldHeight = int(256);
 
 const kChunkRadius = 12;
 
@@ -615,8 +615,8 @@ type Point = [int, int, int];
 const kNeighborOffsets = ((): [Point, Point, Point, Point][] => {
   const W = kChunkWidth;
   const H = kWorldHeight;
-  const L = W - 1;
-  const N = W + 1;
+  const L = int(W - 1);
+  const N = int(W + 1);
   return [
     [[ 0,  0,  0], [1, 1, 1], [0, 0, 0], [W, H, W]],
     [[-1,  0,  0], [0, 1, 1], [L, 0, 0], [1, H, W]],
@@ -656,7 +656,7 @@ class Chunk {
 
     const {cx, cz} = this;
     const neighbor = (x: int, z: int) => {
-      const chunk = this.world.chunks.get(x + cx, z + cz);
+      const chunk = this.world.chunks.get(int(x + cx), int(z + cz));
       if (chunk) chunk.notifyNeighborDisposed();
     };
     neighbor(1, 0); neighbor(-1, 0);
@@ -664,18 +664,18 @@ class Chunk {
   }
 
   getBlock(x: int, y: int, z: int): BlockId {
-    const xm = x & kChunkMask, zm = z & kChunkMask;
+    const xm = int(x & kChunkMask), zm = int(z & kChunkMask);
     return this.voxels.get(xm, y, zm) as BlockId;
   }
 
   getLitHeight(x: int, z: int): int {
-    const xm = x & kChunkMask, zm = z & kChunkMask;
+    const xm = int(x & kChunkMask), zm = int(z & kChunkMask);
     return this.light_map.get(xm, zm);
   }
 
   setBlock(x: int, y: int, z: int, block: BlockId): void {
     const voxels = this.voxels;
-    const xm = x & kChunkMask, zm = z & kChunkMask;
+    const xm = int(x & kChunkMask), zm = int(z & kChunkMask);
 
     const old = voxels.get(xm, y, zm) as BlockId;
     if (old === block) return;
@@ -688,7 +688,7 @@ class Chunk {
 
     const neighbor = (x: int, y: int, z: int) => {
       const {cx, cz} = this;
-      const chunk = this.world.chunks.get(x + cx, z + cz);
+      const chunk = this.world.chunks.get(int(x + cx), int(z + cz));
       if (chunk) chunk.dirty = true;
     };
     if (xm === 0) neighbor(-1, 0, 0);
@@ -699,7 +699,7 @@ class Chunk {
 
   setColumn(x: int, z: int, start: int, count: int, block: BlockId): void {
     const voxels = this.voxels;
-    const xm = x & kChunkMask, zm = z & kChunkMask;
+    const xm = int(x & kChunkMask), zm = int(z & kChunkMask);
 
     assert(voxels.stride[1] === 1);
     const index = voxels.index(xm, start, zm);
@@ -730,19 +730,20 @@ class Chunk {
     for (let x = 0; x < kChunkWidth; x++) {
       for (let z = 0; z < kChunkWidth; z++) {
         const first = x + z === 0;
-        loader(x + dx, z + dz, column);
-        column.fillChunk(x + dx, z + dz, this, first);
+        const ax = int(x + dx), az =  int(z + dz);
+        loader(ax, az, column);
+        column.fillChunk(ax, az, this, first);
         column.clear();
       }
     }
     column.fillEquilevels(this.equilevels);
 
     if (kCheckEquilevels) {
-      for (let y = 0; y < kWorldHeight; y++) {
+      for (let y = int(0); y < kWorldHeight; y++) {
         if (this.equilevels[y] === 0) continue;
         const base = this.voxels.get(0, y, 0);
-        for (let x = 0; x < kChunkWidth; x++) {
-          for (let z = 0; z < kChunkWidth; z++) {
+        for (let x = int(0); x < kChunkWidth; x++) {
+          for (let z = int(0); z < kChunkWidth; z++) {
             assert(this.voxels.get(x, y, z) === base);
           }
         }
@@ -750,7 +751,7 @@ class Chunk {
     }
 
     const neighbor = (x: int, z: int) => {
-      const chunk = this.world.chunks.get(x + cx, z + cz);
+      const chunk = this.world.chunks.get(int(x + cx), int(z + cz));
       if (!chunk) return;
       chunk.notifyNeighborLoaded();
       this.neighbors++;
@@ -794,8 +795,8 @@ class Chunk {
     equilevels.set(this.equilevels, 1);
     for (const offset of kNeighborOffsets) {
       const [c, dstPos, srcPos, size] = offset;
-      const chunk = world.chunks.get(cx + c[0], cz + c[2]);
-      const delta = dstPos[1] - srcPos[1];
+      const chunk = world.chunks.get(int(cx + c[0]), int(cz + c[2]));
+      const delta = int(dstPos[1] - srcPos[1]);
       assert(delta === 1);
       if (chunk) {
         this.copyHeightmap(heightmap, dstPos, chunk.heightmap, srcPos, size);
@@ -812,11 +813,11 @@ class Chunk {
     }
 
     if (kCheckEquilevels) {
-      for (let y = 0; y < buffer.shape[1]; y++) {
+      for (let y = int(0); y < buffer.shape[1]; y++) {
         if (equilevels[y] === 0) continue;
         const base = buffer.get(1, y, 1);
-        for (let x = 0; x < buffer.shape[0]; x++) {
-          for (let z = 0; z < buffer.shape[2]; z++) {
+        for (let x = int(0); x < buffer.shape[0]; x++) {
+          for (let z = int(0); z < buffer.shape[2]; z++) {
             if ((x !== 0 && x !== buffer.shape[0] - 1) ||
                 (z !== 0 && z !== buffer.shape[2] - 1)) {
               assert(buffer.get(x, y, z) === base);
@@ -910,8 +911,8 @@ class Chunk {
 
     for (let i = 0; i < ni; i++) {
       for (let k = 0; k < nk; k++) {
-        const sindex = src.index(si + i, sk + k);
-        const dindex = dst.index(di + i, dk + k);
+        const sindex = src.index(int(si + i), int(sk + k));
+        const dindex = dst.index(int(di + i), int(dk + k));
         dst.data[dindex] = src.data[sindex] + offset;
       }
     }
@@ -927,8 +928,8 @@ class Chunk {
 
     for (let i = 0; i < ni; i++) {
       for (let k = 0; k < nk; k++) {
-        const sindex = src.index(si + i, sj, sk + k);
-        const dindex = dst.index(di + i, dj, dk + k);
+        const sindex = src.index(int(si + i), sj, int(sk + k));
+        const dindex = dst.index(int(di + i), dj, int(dk + k));
         dst.data.set(src.data.subarray(sindex, sindex + nj), dindex);
       }
     }
@@ -941,7 +942,7 @@ class Chunk {
 
     for (let i = 0; i < ni; i++) {
       for (let k = 0; k < nk; k++) {
-        dst.set(di + i, dk + k, delta);
+        dst.set(int(di + i), int(dk + k), delta);
       }
     }
   }
@@ -953,7 +954,7 @@ class Chunk {
     for (let i = 0; i < ni; i++) {
       for (let k = 0; k < nk; k++) {
         // Unroll along the y-axis, since it's the longest chunk dimension.
-        let dindex = dst.index(di + i, dj, dk + k);
+        let dindex = dst.index(int(di + i), dj, int(dk + k));
         for (let j = 0; j < nj; j++, dindex += dsj) {
           dst.data[dindex] = kEmptyBlock;
         }
@@ -964,10 +965,10 @@ class Chunk {
 
 //////////////////////////////////////////////////////////////////////////////
 
-const kMultiMeshBits = 2;
-const kMultiMeshSide = 1 << kMultiMeshBits;
-const kMultiMeshArea = kMultiMeshSide * kMultiMeshSide;
-const kLODSingleMask = (1 << 4) - 1;
+const kMultiMeshBits = int(2);
+const kMultiMeshSide = int(1 << kMultiMeshBits);
+const kMultiMeshArea = int(kMultiMeshSide * kMultiMeshSide);
+const kLODSingleMask = int((1 << 4) - 1);
 
 class LODMultiMesh {
   solid: VoxelMesh | null;
@@ -1003,7 +1004,7 @@ class LODMultiMesh {
 
   index(chunk: FrontierChunk): int {
     const mask = kMultiMeshSide - 1;
-    return ((chunk.cz & mask) << kMultiMeshBits) | (chunk.cx & mask);
+    return int(((chunk.cz & mask) << kMultiMeshBits) | (chunk.cx & mask));
   }
 
   show(index: int, mask: int): void {
@@ -1068,8 +1069,8 @@ class Frontier {
     }
 
     assert(kChunkWidth % kFrontierLOD === 0);
-    const side = kChunkWidth / kFrontierLOD;
-    const size = 2 * (side + 2) * (side + 2);
+    const side = int(kChunkWidth / kFrontierLOD);
+    const size = int(2 * (side + 2) * (side + 2));
     this.solid_heightmap = new Uint32Array(size);
     this.water_heightmap = new Uint32Array(size);
     this.side = side;
@@ -1077,14 +1078,14 @@ class Frontier {
 
   center(cx: int, cz: int) {
     for (const level of this.levels) {
-      cx >>= 1;
-      cz >>= 1;
+      cx = int(cx >> 1);
+      cz = int(cz >> 1);
       level.center(cx, cz);
     }
   }
 
   remeshFrontier() {
-    for (let i = 0; i < kFrontierLevels; i++) {
+    for (let i = int(0); i < kFrontierLevels; i++) {
       this.computeLODAtLevel(i);
     }
   }
@@ -1105,11 +1106,11 @@ class Frontier {
 
     let counter = 0;
     level.each((cx: int, cz: int): boolean => {
-      let mask = 0;
+      let mask = int(0);
       for (let i = 0; i < 4; i++) {
-        const dx = (cx << 1) + (i & 1 ? 1 : 0);
-        const dz = (cz << 1) + (i & 2 ? 1 : 0);
-        if (meshed(dx, dz)) mask |= (1 << i);
+        const dx = int((cx << 1) + (i & 1 ? 1 : 0));
+        const dz = int((cz << 1) + (i & 2 ? 1 : 0));
+        if (meshed(dx, dz)) mask = int(mask | (1 << i));
       }
 
       const shown = mask !== 15;
@@ -1145,7 +1146,7 @@ class Frontier {
     assert(kFrontierLOD % 2 === 0);
     assert(registry.solid[bedrock]);
     const lshift = kChunkBits + level;
-    const lod = kFrontierLOD << level;
+    const lod = int(kFrontierLOD << level);
     const x = (2 * cx + 1) << lshift;
     const z = (2 * cz + 1) << lshift;
 
@@ -1162,12 +1163,12 @@ class Frontier {
 
       for (let i = 0; i < side; i++) {
         for (let j = 0; j < side; j++) {
-          loadFrontier(ax + i * lod, az + j * lod, column);
+          loadFrontier(int(ax + i * lod), int(az + j * lod), column);
           const offset = 2 * ((i + 1) + (j + 1) * (side + 2));
 
           const size = column.getSize();
-          const last_block = column.getNthBlock(size - 1, bedrock);
-          const last_level = column.getNthLevel(size - 1);
+          const last_block = column.getNthBlock(int(size - 1), bedrock);
+          const last_level = column.getNthLevel(int(size - 1));
 
           if (registry.solid[last_block]) {
             solid_heightmap[offset + 0] = last_block;
@@ -1179,8 +1180,8 @@ class Frontier {
             water_heightmap[offset + 1] = last_level;
 
             for (let i = size; i > 0; i--) {
-              const block = column.getNthBlock(i - 2, bedrock);
-              const level = column.getNthLevel(i - 2);
+              const block = column.getNthBlock(int(i - 2), bedrock);
+              const level = column.getNthLevel(int(i - 2));
               if (!registry.solid[block]) continue;
               solid_heightmap[offset + 0] = block;
               solid_heightmap[offset + 1] = level;
@@ -1191,10 +1192,10 @@ class Frontier {
         }
       }
 
-      const n = side + 2;
-      const px = x + dx - mx - lod;
-      const pz = z + dz - mz - lod;
-      const mask = k + 4 * mesh.index(chunk);
+      const n = int(side + 2);
+      const px = int(x + dx - mx - lod);
+      const pz = int(z + dz - mz - lod);
+      const mask = int(k + 4 * mesh.index(chunk));
       mesh.solid = this.world.mesher.meshFrontier(
           solid_heightmap, mask, px, pz, n, n, lod, mesh.solid, true);
       mesh.water = this.world.mesher.meshFrontier(
@@ -1208,7 +1209,8 @@ class Frontier {
 
   private createFrontierChunk(cx: int, cz: int, level: int): FrontierChunk {
     const bits = kMultiMeshBits;
-    const mesh = this.getOrCreateMultiMesh(cx >> bits, cz >> bits, level);
+    const mesh = this.getOrCreateMultiMesh(
+        int(cx >> bits), int(cz >> bits), level);
     return new FrontierChunk(cx, cz, level, mesh);
   }
 
@@ -1216,7 +1218,7 @@ class Frontier {
     const shift = 12;
     const mask = (1 << shift) - 1;
     const base = ((cz & mask) << shift) | (cx & mask);
-    const key = base * kFrontierLevels + level;
+    const key = int(base * kFrontierLevels + level);
 
     const result = this.meshes.get(key);
     if (result) return result;
@@ -1261,8 +1263,8 @@ class World {
     // We add a two-block-wide plane below our voxel data, so that we also
     // have room for a plane of bedrock blocks below this chunk (in case we
     // dig all the way to y = 0).
-    const w = kChunkWidth + 2;
-    const h = kWorldHeight + 2;
+    const w = int(kChunkWidth + 2);
+    const h = int(kWorldHeight + 2);
     this.buffer = new Tensor3(w, h, w);
     this.heightmap = new Tensor2(w, w);
     this.light_map = new Tensor2(w, w);
@@ -1271,7 +1273,7 @@ class World {
   }
 
   isBlockLit(x: int, y: int, z: int): boolean {
-    const cx = x >> kChunkBits, cz = z >> kChunkBits;
+    const cx = int(x >> kChunkBits), cz = int(z >> kChunkBits);
     const chunk = this.chunks.get(cx, cz);
     return chunk ? y >= chunk.getLitHeight(x, z) : true;
   }
@@ -1279,14 +1281,14 @@ class World {
   getBlock(x: int, y: int, z: int): BlockId {
     if (y < 0) return this.bedrock;
     if (y >= kWorldHeight) return kEmptyBlock;
-    const cx = x >> kChunkBits, cz = z >> kChunkBits;
+    const cx = int(x >> kChunkBits), cz = int(z >> kChunkBits);
     const chunk = this.chunks.get(cx, cz);
     return chunk ? chunk.getBlock(x, y, z) : kUnknownBlock;
   }
 
   setBlock(x: int, y: int, z: int, block: BlockId) {
     if (!(0 <= y && y < kWorldHeight)) return;
-    const cx = x >> kChunkBits, cz = z >> kChunkBits;
+    const cx = int(x >> kChunkBits), cz = int(z >> kChunkBits);
     const chunk = this.chunks.get(cx, cz);
     if (chunk) chunk.setBlock(x, y, z, block);
   }
@@ -1297,8 +1299,8 @@ class World {
     this.loadFrontier = loadFrontier || loadChunk;
 
     const buffer = this.buffer;
-    for (let x = 0; x < buffer.shape[0]; x++) {
-      for (let z = 0; z < buffer.shape[2]; z++) {
+    for (let x = int(0); x < buffer.shape[0]; x++) {
+      for (let z = int(0); z < buffer.shape[2]; z++) {
         buffer.set(x, 0, z, bedrock);
       }
     }
@@ -1306,8 +1308,8 @@ class World {
 
   recenter(x: number, y: number, z: number) {
     const {chunks, frontier, loadChunk} = this;
-    const cx = Math.floor(x) >> kChunkBits;
-    const cz = Math.floor(z) >> kChunkBits;
+    const cx = int(Math.floor(x) >> kChunkBits);
+    const cz = int(Math.floor(z) >> kChunkBits);
     chunks.center(cx, cz);
     frontier.center(cx, cz);
 
@@ -1348,6 +1350,7 @@ class World {
 
 //////////////////////////////////////////////////////////////////////////////
 
+const kTmpPos     = Vec3.create();
 const kTmpMin     = Vec3.create();
 const kTmpMax     = Vec3.create();
 const kTmpDelta   = Vec3.create();
@@ -1406,7 +1409,7 @@ class Env {
     this.container.inputs.pointer = saved;
   }
 
-  render(dt: int): void {
+  render(dt: number): void {
     if (!this.container.inputs.pointer) return;
 
     this.frame += 1;
@@ -1435,7 +1438,7 @@ class Env {
     this.container.displayStats(stats);
   }
 
-  update(dt: int): void {
+  update(dt: number): void {
     if (!this.container.inputs.pointer) return;
     this.entities.update(dt);
 
@@ -1458,8 +1461,8 @@ class Env {
     const camera = this.renderer.camera;
     const {direction, target, zoom} = camera;
 
-    const check = (pos: Vec3) => {
-      const block = this.world.getBlock(pos[0], pos[1], pos[2]);
+    const check = (x: int, y: int, z: int) => {
+      const block = this.world.getBlock(x, y, z);
       return !this.registry.solid[block];
     };
 
@@ -1483,18 +1486,19 @@ class Env {
     let move = false;
     this.highlightMask[0] = (1 << 6) - 1;
 
-    const check = (pos: Vec3) => {
-      const [x, y, z] = pos;
-      const block = this.world.getBlock(pos[0], pos[1], pos[2]);
+    const check = (x: int, y: int, z: int) => {
+      const block = this.world.getBlock(x, y, z);
       if (!this.registry.solid[block]) return true;
 
       let mask = 0;
+      const pos = kTmpPos;
+      Vec3.set(pos, x, y, z);
       for (let d = 0; d < 3; d++) {
         pos[d] += 1;
-        const b0 = this.world.getBlock(pos[0], pos[1], pos[2]);
+        const b0 = this.world.getBlock(int(pos[0]), int(pos[1]), int(pos[2]));
         if (this.registry.solid[b0]) mask |= (1 << (2 * d + 0));
         pos[d] -= 2;
-        const b1 = this.world.getBlock(pos[0], pos[1], pos[2]);
+        const b1 = this.world.getBlock(int(pos[0]), int(pos[1]), int(pos[2]));
         if (this.registry.solid[b1]) mask |= (1 << (2 * d + 1));
         pos[d] += 1;
       }
@@ -1519,7 +1523,7 @@ class Env {
     for (let i = 0; i < 3; i++) {
       const impact = kTmpImpacts[i];
       if (impact === 0) continue;
-      this.highlightSide = 2 * i + (impact < 0 ? 0 : 1);
+      this.highlightSide = int(2 * i + (impact < 0 ? 0 : 1));
       break;
     }
 
@@ -1530,16 +1534,18 @@ class Env {
     this.highlight.show(this.highlightMask, true);
   }
 
-  private updateOverlayColor(wave: int): void {
+  private updateOverlayColor(wave: number): void {
     const [x, y, z] = this.renderer.camera.position;
-    const xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z);
+    const xi = int(Math.floor(x));
+    const yi = int(Math.floor(y));
+    const zi = int(Math.floor(z));
     let boundary = 1;
 
     // We should only apply wave if the block above a liquid is an air block.
     const new_block = ((): BlockId => {
       const below = this.getRenderBlock(xi, yi, zi);
       if (below === kEmptyBlock) return below;
-      const above = this.getRenderBlock(xi, yi + 1, zi);
+      const above = this.getRenderBlock(xi, int(yi + 1), zi);
       if (above !== kEmptyBlock) return below;
       const delta = y + wave - yi - 1;
       boundary = Math.abs(delta);
@@ -1571,7 +1577,7 @@ class Env {
       const max = 2, step = 32;
       const limit = max * step;
       for (let i = 1; i < limit; i++) {
-        const other = this.world.getBlock(xi, yi + i, zi);
+        const other = this.world.getBlock(xi, int(yi + i), zi);
         if (other !== new_block) return Math.pow(2, i / step);
       }
       return Math.pow(2, max);

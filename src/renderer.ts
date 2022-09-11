@@ -118,7 +118,7 @@ class Camera {
       const [x, y, z] = kTmpPlane;
       const plane = planes[i];
       plane.x = x; plane.y = y; plane.z = z;
-      plane.index = (x > 0 ? 1 : 0) | (y > 0 ? 2 : 0) | (z > 0 ? 4 : 0);
+      plane.index = int((x > 0 ? 1 : 0) | (y > 0 ? 2 : 0) | (z > 0 ? 4 : 0));
     }
     return planes;
   }
@@ -286,7 +286,7 @@ class TextureAtlas {
   }
 
   addTexture(texture: Texture): int {
-    const index = ++this.nextResult;
+    const index = int(++this.nextResult);
     const image = this.image(texture.url);
     if (image.complete) {
       this.loaded(texture, index, image);
@@ -679,10 +679,10 @@ class BufferAllocator {
 
   alloc(data: Float32Array): Buffer {
     const gl = this.gl;
-    const bytes = 4 * data.length;
+    const bytes = int(4 * data.length);
     const sizeClass = this.sizeClass(bytes);
     const freeList = this.freeLists[sizeClass];
-    const length = 1 << sizeClass;
+    const length = int(1 << sizeClass);
 
     let buffer = freeList.pop();
     if (buffer) {
@@ -718,7 +718,7 @@ class BufferAllocator {
   }
 
   private sizeClass(bytes: int): int {
-    const result = 32 - Math.clz32(bytes - 1);
+    const result = int(32 - Math.clz32(bytes - 1));
     assert((1 << result) >= bytes);
     return result;
   }
@@ -773,7 +773,7 @@ class Mesh<S extends Shader, T extends Mesh<S, T>> {
 
   protected addToMeshes(): void {
     assert(this.index === -1);
-    this.index = this.meshes.length;
+    this.index = int(this.meshes.length);
     this.meshes.push(this);
   }
 
@@ -967,7 +967,7 @@ class VoxelMesh extends Mesh<VoxelShader, VoxelMesh> {
     this.geo = geo;
   }
 
-  setPosition(x: int, y: int, z: int): void {
+  setPosition(x: number, y: number, z: number): void {
     Vec3.set(this.position, x, y, z);
   }
 
@@ -1188,7 +1188,7 @@ class SpriteMesh extends Mesh<SpriteShader, SpriteMesh> {
     this.light = light;
   }
 
-  setPosition(x: int, y: int, z: int): void {
+  setPosition(x: number, y: number, z: number): void {
     Vec3.set(this.position, x, y, z);
   }
 
@@ -1313,7 +1313,7 @@ class ShadowMesh extends Mesh<ShadowShader, ShadowMesh> {
     return true;
   }
 
-  setPosition(x: int, y: int, z: int): void {
+  setPosition(x: number, y: number, z: number): void {
     Vec3.set(this.position, x, y, z);
   }
 
@@ -1495,7 +1495,7 @@ class Renderer {
 
     canvas.width = canvas.clientWidth / scale;
     canvas.height = canvas.clientHeight / scale;
-    this.camera = new Camera(canvas.width, canvas.height);
+    this.camera = new Camera(int(canvas.width), int(canvas.height));
 
     const gl = nonnull(canvas.getContext('webgl2', {alpha: false}));
     gl.viewport(0, 0, canvas.width, canvas.height);
@@ -1539,7 +1539,7 @@ class Renderer {
     const camera = this.camera;
     const planes = camera.getCullingPlanes();
 
-    const stats = {drawn: 0, total: 0};
+    const stats = {drawn: int(0), total: int(0)};
     this.sprite_manager.render(camera, planes, stats);
     this.voxels_manager.render(camera, planes, stats, overlay, move, wave, 0);
     this.voxels_manager.render(camera, planes, stats, overlay, move, wave, 1);

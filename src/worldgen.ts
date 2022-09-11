@@ -6,7 +6,7 @@ import {kChunkWidth, kEmptyBlock, kWorldHeight} from './engine.js';
 //////////////////////////////////////////////////////////////////////////////
 
 const kIslandRadius = 1024;
-const kSeaLevel = (kWorldHeight / 4) | 0;
+const kSeaLevel = int(kWorldHeight / 4);
 
 const kCaveLevels = 3;
 const kCaveDeltaY = 0;
@@ -89,7 +89,7 @@ const cave_noises = new Array(2 * kCaveLevels).fill(null).map(noise2D);
 // Cave generation.
 
 const carve_caves = (x: int, z: int, column: Column, limit: int): int => {
-  let result = 0;
+  let result: int = 0;
   const start = kSeaLevel - kCaveDeltaY * (kCaveLevels - 1) / 2;
   for (let i = 0; i < kCaveLevels; i++) {
     const carver_noise = cave_noises[2 * i + 0];
@@ -99,15 +99,15 @@ const carve_caves = (x: int, z: int, column: Column, limit: int): int => {
     if (carver > kCaveCutoff) {
       const dy = start + i * kCaveDeltaY;
       const height = height_noise(x / kCaveWaveRadius, z / kCaveWaveRadius);
-      const offset = (dy + kCaveWaveHeight * height) | 0;
-      const blocks = ((carver - kCaveCutoff) * kCaveHeight) | 0;
+      const offset = int(dy + kCaveWaveHeight * height);
+      const blocks = int((carver - kCaveCutoff) * kCaveHeight);
 
-      const ay = offset - blocks;
-      const by = Math.min(offset + blocks + 3, limit);
+      const ay = int(offset - blocks);
+      const by = int(Math.min(offset + blocks + 3, limit));
       for (let i = ay; i < by; i++) {
-        column.overwrite(kEmptyBlock, i);
+        column.overwrite(kEmptyBlock, int(i));
       }
-      result = Math.max(result, by);
+      result = int(Math.max(result, by));
     }
   }
   return result;
@@ -120,14 +120,14 @@ const hash_fnv32 = (k: int): int => {
   for (let i = 0; i < 4; i++) {
     result ^= (k & 255);
     result *= 16777619;
-    k = k >> 8;
+    k = (k >> 8) as int;
   }
-  return result;
+  return result as int;
 };
 
-const kMask = (1 << 15) - 1;
+const kMask = int((1 << 15) - 1);
 const has_tree = (x: int, z: int): boolean => {
-  const base = hash_fnv32(((x & kMask) << 15) | (z & kMask));
+  const base = hash_fnv32((((x & kMask) << 15) | (z & kMask)) as int);
   return (base & 63) <= 3;
 };
 
@@ -139,7 +139,8 @@ interface HeightmapResult {
   snow_depth: int,
 };
 
-const kHeightmapResult = {height: 0, tile: kEmptyBlock, snow_depth: 0};
+const kHeightmapResult: HeightmapResult =
+    {height: 0, tile: kEmptyBlock, snow_depth: 0};
 
 const heightmap = (x: int, z: int, blocks: Blocks): HeightmapResult => {
   const base = Math.sqrt(x * x + z * z) / kIslandRadius;
@@ -190,10 +191,10 @@ const heightmap = (x: int, z: int, blocks: Blocks): HeightmapResult => {
     return truncated < 1 ? blocks.sand : blocks.grass;
   })();
 
-  kHeightmapResult.height = abs_height;
+  kHeightmapResult.height = int(abs_height);
   kHeightmapResult.tile = tile;
   kHeightmapResult.snow_depth = tile === blocks.snow
-    ? height - (72 - 8 * mountain)
+    ? int(height - (72 - 8 * mountain))
     : 0;
   return kHeightmapResult;
 };
@@ -203,7 +204,7 @@ const heightmap = (x: int, z: int, blocks: Blocks): HeightmapResult => {
 const kBuffer = 1;
 const kExpandedWidth = kChunkWidth + 2 * kBuffer;
 const kChunkHeightmap = new Int16Array(3 * kExpandedWidth * kExpandedWidth);
-const kCurrentChunk: {cx: int, cz: int} = {cx: Math.PI, cz: Math.PI};
+const kCurrentChunk: {cx: int, cz: int} = {cx: Math.PI as int, cz: Math.PI as int};
 const kNeighborOffsets = [0, 1, -1, kExpandedWidth, -kExpandedWidth];
 
 const kDefaultBlocks: Blocks = {
@@ -220,19 +221,20 @@ const kDefaultBlocks: Blocks = {
 
 const getHeight = (x: int, z: int): int => {
   const base = heightmap(x, z, kDefaultBlocks).height;
-  return Math.max(Math.min(base, kWorldHeight), 0);
+  return Math.max(Math.min(base, kWorldHeight), 0) as int;
 };
 
 const loadChunk = (blocks: Blocks) => (x: int, z: int, column: Column) => {
-  const cx = Math.floor(x / kChunkWidth);
-  const cz = Math.floor(z / kChunkWidth);
+  const cx = int(Math.floor(x / kChunkWidth));
+  const cz = int(Math.floor(z / kChunkWidth));
   const dx = cx * kChunkWidth - kBuffer;
   const dz = cz * kChunkWidth - kBuffer;
   if (cx !== kCurrentChunk.cx || cz !== kCurrentChunk.cz) {
     for (let i = 0; i < kExpandedWidth; i++) {
       for (let j = 0; j < kExpandedWidth; j++) {
         const offset = 3 * (i + j * kExpandedWidth);
-        const {height, tile, snow_depth} = heightmap(i + dx, j + dz, blocks);
+        const {height, tile, snow_depth} =
+            heightmap(int(i + dx), int(j + dz), blocks);
         kChunkHeightmap[offset + 0] = height;
         kChunkHeightmap[offset + 1] = tile;
         kChunkHeightmap[offset + 2] = snow_depth;
@@ -243,30 +245,30 @@ const loadChunk = (blocks: Blocks) => (x: int, z: int, column: Column) => {
   }
 
   const offset = 3 * ((x - dx) + (z - dz) * kExpandedWidth);
-  const height = kChunkHeightmap[offset + 0];
+  const height = int(kChunkHeightmap[offset + 0]);
   const tile = kChunkHeightmap[offset + 1] as BlockId;
-  const snow_depth = kChunkHeightmap[offset + 2];
+  const snow_depth = int(kChunkHeightmap[offset + 2]);
 
   if (tile === blocks.snow) {
-    column.push(blocks.rock, height - snow_depth);
+    column.push(blocks.rock, int(height - snow_depth));
   } else if (tile !== blocks.rock) {
-    column.push(blocks.rock, height - 4);
-    column.push(blocks.dirt, height - 1);
+    column.push(blocks.rock, int(height - 4));
+    column.push(blocks.dirt, int(height - 1));
   }
   column.push(tile, height);
   column.push(blocks.water, kSeaLevel);
 
   let limit = kWorldHeight;
   for (const neighbor of kNeighborOffsets) {
-    const neighbor_height = kChunkHeightmap[offset + 3 * neighbor];
+    const neighbor_height = int(kChunkHeightmap[offset + 3 * neighbor]);
     if (neighbor_height < kSeaLevel) {
-      limit = Math.min(limit, neighbor_height - 1);
+      limit = int(Math.min(limit, neighbor_height - 1));
     }
   }
   const cave_height = carve_caves(x, z, column, limit);
 
   if (tile === blocks.grass && has_tree(x, z) && cave_height < height) {
-    column.push(blocks.leaves, height + 1);
+    column.push(blocks.leaves, int(height + 1));
   }
 };
 

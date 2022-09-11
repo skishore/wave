@@ -56,7 +56,8 @@ class TypedEnv extends Env {
 
 const hasWaterNeighbor = (env: TypedEnv, water: BlockId, p: Point) => {
   for (const d of kWaterDisplacements) {
-    const block = env.world.getBlock(d[0] + p[0], d[1] + p[1], d[2] + p[2]);
+    const x = int(d[0] + p[0]), y = int(d[1] + p[1]), z = int(d[2] + p[2]);
+    const block = env.world.getBlock(x, y, z);
     if (block === water) return true;
   }
   return false;
@@ -71,7 +72,7 @@ const flowWater = (env: TypedEnv, water: BlockId, points: Point[]) => {
     if (block !== kEmptyBlock || !hasWaterNeighbor(env, water, p)) continue;
     env.world.setBlock(p[0], p[1], p[2], water);
     for (const d of kWaterDisplacements) {
-      const n: Point = [p[0] - d[0], p[1] - d[1], p[2] - d[2]];
+      const n: Point = [int(p[0] - d[0]), int(p[1] - d[1]), int(p[2] - d[2])];
       const key = `${n[0]}-${n[1]}-${n[2]}`;
       if (visited.has(key)) continue;
       visited.add(key);
@@ -95,8 +96,8 @@ interface LifetimeState {
 };
 
 const Lifetime: Component<LifetimeState> = {
-  init: () => ({id: kNoEntity, index: 0, lifetime: 0, cleanup: null}),
-  onUpdate: (dt: int, states: LifetimeState[]) => {
+  init: () => ({id: kNoEntity, index: int(0), lifetime: 0, cleanup: null}),
+  onUpdate: (dt: number, states: LifetimeState[]) => {
     dt = dt / 1000;
     for (const state of states) {
       state.lifetime -= dt;
@@ -182,8 +183,8 @@ const applyFriction = (axis: int, state: PhysicsState, dv: Vec3) => {
 };
 
 const tryAutoStepping =
-    (dt: int, state: PhysicsState, min: Vec3, max: Vec3,
-     check: (pos: Vec3) => boolean) => {
+    (dt: number, state: PhysicsState, min: Vec3, max: Vec3,
+     check: (x: int, y: int, z: int) => boolean) => {
   if (state.resting[1] > 0 && !state.inFluid) return;
 
   const threshold = 4;
@@ -217,17 +218,17 @@ const tryAutoStepping =
   Vec3.copy(state.resting, kTmpResting);
 };
 
-const runPhysics = (env: TypedEnv, dt: int, state: PhysicsState) => {
+const runPhysics = (env: TypedEnv, dt: number, state: PhysicsState) => {
   if (state.mass <= 0) return;
 
-  const check = (pos: Vec3) => {
-    const block = env.world.getBlock(pos[0], pos[1], pos[2]);
+  const check = (x: int, y: int, z: int) => {
+    const block = env.world.getBlock(x, y, z);
     return !env.registry.solid[block];
   };
 
   const [x, y, z] = state.min;
   const block = env.world.getBlock(
-      Math.floor(x), Math.floor(y), Math.floor(z));
+      int(Math.floor(x)), int(Math.floor(y)), int(Math.floor(z)));
   state.inFluid = block !== kEmptyBlock;
 
   dt = dt / 1000;
@@ -291,12 +292,12 @@ const Physics = (env: TypedEnv): Component<PhysicsState> => ({
     const position = env.position.get(state.id);
     if (position) setPositionFromPhysics(position, state);
   },
-  onRender: (dt: int, states: PhysicsState[]) => {
+  onRender: (dt: number, states: PhysicsState[]) => {
     for (const state of states) {
       setPositionFromPhysics(env.position.getX(state.id), state);
     }
   },
-  onUpdate: (dt: int, states: PhysicsState[]) => {
+  onUpdate: (dt: number, states: PhysicsState[]) => {
     for (const state of states) runPhysics(env, dt, state);
   },
 });
@@ -328,8 +329,8 @@ interface MovementState {
   hoverRiseForce: number,
 };
 
-const handleJumping =
-    (dt: int, state: MovementState, body: PhysicsState, grounded: boolean) => {
+const handleJumping = (dt: number, state: MovementState,
+                       body: PhysicsState, grounded: boolean) => {
   if (state._jumped) {
     if (state._jumpTimeLeft <= 0) return;
     const delta = state._jumpTimeLeft <= dt ? state._jumpTimeLeft / dt : 1;
@@ -357,8 +358,8 @@ const handleJumping =
   state._jumpCount++;
 };
 
-const handleRunning =
-    (dt: int, state: MovementState, body: PhysicsState, grounded: boolean) => {
+const handleRunning = (dt: number, state: MovementState,
+                       body: PhysicsState, grounded: boolean) => {
   const penalty = body.inFluid ? state.swimPenalty : 1;
   const speed = penalty * state.maxSpeed;
   Vec3.set(kTmpDelta, state.inputX * speed, 0, state.inputZ * speed);
@@ -403,9 +404,9 @@ const generateParticles =
 
     const size = position.h;
     const mesh = env.meshes.add(particle);
-    const sprite = {url: 'images/rhodox-edited.png', size, x: 16, y: 16};
+    const sprite = {url: 'images/rhodox-edited.png', size, x: int(16), y: int(16)};
     mesh.mesh = env.renderer.addSpriteMesh(sprite);
-    mesh.mesh.setFrame(data.texture.x + 16 * data.texture.y);
+    mesh.mesh.setFrame(int(data.texture.x + 16 * data.texture.y));
 
     const epsilon = 0.01;
     const s = Math.floor(16 * (1 - side) * Math.random()) / 16;
@@ -446,7 +447,7 @@ const tryToModifyBlock =
     if (intersect) return;
   }
 
-  const x = kTmpPos[0], y = kTmpPos[1], z = kTmpPos[2];
+  const x = int(kTmpPos[0]), y = int(kTmpPos[1]), z = int(kTmpPos[2]);
   const old_block = add ? kEmptyBlock : env.world.getBlock(x, y, z);
   const block = add && env.blocks ? env.blocks.dirt : kEmptyBlock;
   env.world.setBlock(x, y, z, block);
@@ -462,7 +463,7 @@ const tryToModifyBlock =
   }
 };
 
-const runMovement = (env: TypedEnv, dt: int, state: MovementState) => {
+const runMovement = (env: TypedEnv, dt: number, state: MovementState) => {
   dt = dt / 1000;
   const body = env.physics.getX(state.id);
   const grounded = body.resting[1] < 0;
@@ -514,7 +515,7 @@ const Movement = (env: TypedEnv): Component<MovementState> => ({
     hoverFallForce: 160,
     hoverRiseForce: 80,
   }),
-  onUpdate: (dt: int, states: MovementState[]) => {
+  onUpdate: (dt: number, states: MovementState[]) => {
     for (const state of states) runMovement(env, dt, state);
   }
 });
@@ -558,9 +559,9 @@ const runInputs = (env: TypedEnv, id: EntityId) => {
   if (inputs.call) {
     const body = env.physics.get(id);
     if (body) {
-      const x = Math.floor((body.min[0] + body.max[0]) / 2);
-      const y = Math.floor((body.min[1] + body.max[1]) / 2);
-      const z = Math.floor((body.min[2] + body.max[2]) / 2);
+      const x = int(Math.floor((body.min[0] + body.max[0]) / 2));
+      const y = int(Math.floor((body.min[1] + body.max[1]) / 2));
+      const z = int(Math.floor((body.min[2] + body.max[2]) / 2));
       env.pathing.each(other => other.target = [x, y, z]);
     }
     inputs.call = false;
@@ -577,7 +578,7 @@ const runInputs = (env: TypedEnv, id: EntityId) => {
 
 const Inputs = (env: TypedEnv): Component => ({
   init: () => ({id: kNoEntity, index: 0}),
-  onUpdate: (dt: int, states: ComponentState[]) => {
+  onUpdate: (dt: number, states: ComponentState[]) => {
     for (const state of states) runInputs(env, state.id);
   }
 });
@@ -613,8 +614,8 @@ const hasDirectPath = (env: TypedEnv, start: Point, end: Point): boolean => {
       const a = Math.floor(i * dx / dz);
       const b = Math.ceil((i + 1) * dx / dz) + extra;
       for (let j = a; j < b; j++) {
-        const x = ex >= sx ? sx + j : sx - j - 1;
-        const z = ez >= sz ? sz + i : sz - i - 1;
+        const x = int(ex >= sx ? sx + j : sx - j - 1);
+        const z = int(ez >= sz ? sz + i : sz - i - 1);
         elements.push([x, y, z]);
       }
     }
@@ -624,8 +625,8 @@ const hasDirectPath = (env: TypedEnv, start: Point, end: Point): boolean => {
       const a = Math.floor(i * dz / dx);
       const b = Math.ceil((i + 1) * dz / dx) + extra;
       for (let j = a; j < b; j++) {
-        const x = ex >= sx ? sx + i : sx - i - 1;
-        const z = ez >= sz ? sz + j : sz - j - 1;
+        const x = int(ex >= sx ? sx + i : sx - i - 1);
+        const z = int(ez >= sz ? sz + j : sz - j - 1);
         elements.push([x, y, z]);
       }
     }
@@ -635,9 +636,10 @@ const hasDirectPath = (env: TypedEnv, start: Point, end: Point): boolean => {
   for (const element of elements) {
     const [x, y, z] = element;
     for (let i = 0; i < n; i++) {
-      const ix = x + (i & 1);
-      const iz = z + ((i >> 1) & 1);
-      if (solid(env, ix, y, iz) || !solid(env, ix, y - 1, iz)) return false;
+      const ix = int(x + (i & 1));
+      const iz = int(z + ((i >> 1) & 1));
+      if (solid(env, ix, y, iz)) return false;
+      if (!solid(env, ix, int(y - 1), iz)) return false;
     }
   }
   return true;
@@ -646,9 +648,9 @@ const hasDirectPath = (env: TypedEnv, start: Point, end: Point): boolean => {
 const findPath = (env: TypedEnv, state: PathingState,
                   body: PhysicsState): void => {
   const min = body.min;
-  const sx = Math.floor(min[0]);
-  const sy = Math.floor(min[1]);
-  const sz = Math.floor(min[2]);
+  const sx = int(Math.floor(min[0]));
+  const sy = int(Math.floor(min[1]));
+  const sz = int(Math.floor(min[2]));
   const [tx, ty, tz] = nonnull(state.target);
 
   console.log(`Pathing: (${sx}, ${sy}, ${sz}) -> (${tx}, ${ty}, ${tz})`);
@@ -663,9 +665,10 @@ const findPath = (env: TypedEnv, state: PathingState,
   const mask = (1 << shift) - 1;
 
   const compute_key = (x: int, y: int, z: int): int => {
-    return (y << (2 * shift)) |
-           (((x - sx) & mask) << shift) |
-           (((z - sz) & mask));
+    const result = (y << (2 * shift)) |
+                   (((x - sx) & mask) << shift) |
+                   (((z - sz) & mask));
+    return int(result);
   };
 
   const visited: Map<int, Point | null> = new Map();
@@ -675,13 +678,13 @@ const findPath = (env: TypedEnv, state: PathingState,
     for (const pp of prev) {
       const npY = pp[1];
       for (let dir = 0; dir < 4; dir++) {
-        const npX = pp[0] + ((dir & 1) ? dir - 2 : 0);
-        const npZ = pp[2] + ((dir & 1) ? 0 : dir - 1);
+        const npX = int(pp[0] + ((dir & 1) ? dir - 2 : 0));
+        const npZ = int(pp[2] + ((dir & 1) ? 0 : dir - 1));
         const key = compute_key(npX, npY, npZ);
         if (visited.has(key)) continue;
 
         if (solid(env, npX, npY, npZ)) continue;
-        if (!solid(env, npX, npY - 1, npZ)) continue;
+        if (!solid(env, npX, int(npY - 1), npZ)) continue;
 
         visited.set(key, pp);
         next.push([npX, npY, npZ]);
@@ -778,7 +781,7 @@ const Pathing = (env: TypedEnv): Component<PathingState> => ({
     path_index: 0,
     target: null,
   }),
-  onUpdate: (dt: int, states: PathingState[]) => {
+  onUpdate: (dt: number, states: PathingState[]) => {
     for (const state of states) runPathing(env, state);
   }
 });
@@ -808,12 +811,12 @@ const Meshes = (env: TypedEnv): Component<MeshState> => ({
     row: 0,
   }),
   onRemove: (state: MeshState) => { if (state.mesh) state.mesh.dispose(); },
-  onRender: (dt: int, states: MeshState[]) => {
+  onRender: (dt: number, states: MeshState[]) => {
     for (const state of states) {
       if (!state.mesh) continue;
       const {x, y, z, h} = env.position.getX(state.id);
       const lit = env.world.isBlockLit(
-          Math.floor(x), Math.floor(y), Math.floor(z));
+          int(Math.floor(x)), int(Math.floor(y)), int(Math.floor(z)));
       state.mesh.setPosition(x, y - h / 2, z);
       state.mesh.setLight(lit ? 1 : 0.64);
 
@@ -822,11 +825,11 @@ const Meshes = (env: TypedEnv): Component<MeshState> => ({
         const camera_heading = Math.atan2(x - pos[0], z - pos[2]);
         const delta = state.heading - camera_heading;
         state.row = Math.floor(8.5 - 2 * delta / Math.PI) & 3;
-        state.mesh.setFrame(state.column + state.row * state.columns);
+        state.mesh.setFrame(int(state.column + state.row * state.columns));
       }
     }
   },
-  onUpdate: (dt: int, states: MeshState[]) => {
+  onUpdate: (dt: number, states: MeshState[]) => {
     for (const state of states) {
       if (!state.mesh || !state.columns) return;
       const body = env.physics.get(state.id);
@@ -840,7 +843,7 @@ const Meshes = (env: TypedEnv): Component<MeshState> => ({
         const value = Math.floor(state.frame);
         return value & 1 ? 0 : (value + 2) >> 1;
       })();
-      state.mesh.setFrame(state.column + state.row * state.columns);
+      state.mesh.setFrame(int(state.column + state.row * state.columns));
     }
   },
 });
@@ -858,7 +861,7 @@ interface ShadowState {
 const Shadow = (env: TypedEnv): Component<ShadowState> => ({
   init: () => ({id: kNoEntity, index: 0, mesh: null, extent: 16, height: 0}),
   onRemove: (state: ShadowState) => { if (state.mesh) state.mesh.dispose(); },
-  onRender: (dt: int, states: ShadowState[]) => {
+  onRender: (dt: number, states: ShadowState[]) => {
     for (const state of states) {
       if (!state.mesh) state.mesh = env.renderer.addShadowMesh();
       const {x, y, z, w, h} = env.position.getX(state.id);
@@ -868,16 +871,16 @@ const Shadow = (env: TypedEnv): Component<ShadowState> => ({
       state.mesh.setSize(size);
     }
   },
-  onUpdate: (dt: int, states: ShadowState[]) => {
+  onUpdate: (dt: number, states: ShadowState[]) => {
     for (const state of states) {
       const position = env.position.getX(state.id);
-      const x = Math.floor(position.x);
-      const y = Math.floor(position.y);
-      const z = Math.floor(position.z);
+      const x = int(Math.floor(position.x));
+      const y = int(Math.floor(position.y));
+      const z = int(Math.floor(position.z));
       state.height = (() => {
         for (let i = 0; i < state.extent; i++) {
           const h = y - i;
-          if (solid(env, x, h - 1, z)) return h;
+          if (solid(env, x, int(h - 1), z)) return h;
         }
         return 0;
       })();
@@ -889,7 +892,7 @@ const Shadow = (env: TypedEnv): Component<ShadowState> => ({
 
 const CameraTarget = (env: TypedEnv): Component => ({
   init: () => ({id: kNoEntity, index: 0}),
-  onRender: (dt: int, states: ComponentState[]) => {
+  onRender: (dt: number, states: ComponentState[]) => {
     for (const state of states) {
       const {x, y, z, h, w} = env.position.getX(state.id);
       env.setCameraTarget(x, y + h / 3, z);
@@ -898,7 +901,7 @@ const CameraTarget = (env: TypedEnv): Component => ({
       if (mesh && mesh.mesh) mesh.mesh.enabled = zoom > 2 * w;
     }
   },
-  onUpdate: (dt: int, states: ComponentState[]) => {
+  onUpdate: (dt: number, states: ComponentState[]) => {
     for (const state of states) {
       const {x, y, z} = env.position.getX(state.id);
       env.world.recenter(x, y, z);
@@ -916,8 +919,8 @@ const safeHeight = (position: PositionState): number => {
   const bz = Math.ceil(position.z + radius);
 
   let height = 0;
-  for (let x = ax; x <= bx; x++) {
-    for (let z = az; z <= bz; z++) {
+  for (let x = int(ax); x <= bx; x++) {
+    for (let z = int(az); z <= bz; z++) {
       height = Math.max(height, getHeight(x, z));
     }
   }
@@ -935,7 +938,7 @@ const addEntity = (env: TypedEnv, image: string,
   position.y = safeHeight(position);
 
   const mesh = env.meshes.add(entity);
-  const sprite = {url: `images/${image}.png`, size: 1, x: 32, y: 32};
+  const sprite = {url: `images/${image}.png`, size: 1, x: int(32), y: int(32)};
   mesh.mesh = env.renderer.addSpriteMesh(sprite);
   mesh.columns = 3;
 
@@ -959,7 +962,7 @@ const main = () => {
   const texture = (x: int, y: int, alphaTest: boolean = false,
                    sparkle: boolean = false): Texture => {
     const url = 'images/rhodox-edited.png';
-    return {alphaTest, sparkle, url, x, y, w: 16, h: 16};
+    return {alphaTest, sparkle, url, x, y, w: int(16), h: int(16)};
   };
 
   const registry = env.registry;
