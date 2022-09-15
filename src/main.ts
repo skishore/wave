@@ -4,6 +4,7 @@ import {BlockId, Column, Env} from './engine.js';
 import {kChunkWidth, kEmptyBlock, kWorldHeight} from './engine.js';
 import {Component, ComponentState, ComponentStore} from './ecs.js';
 import {EntityId, kNoEntity} from './ecs.js';
+import {AStar, Check, Point as AStarPoint} from './pathing.js';
 import {SpriteMesh, ShadowMesh, Texture} from './renderer.js';
 import {sweep} from './sweep.js';
 import {Blocks, getHeight, loadChunk, loadFrontier} from './worldgen.js';
@@ -653,66 +654,19 @@ const findPath = (env: TypedEnv, state: PathingState,
   const sz = int(Math.floor(min[2]));
   const [tx, ty, tz] = nonnull(state.target);
 
-  console.log(`Pathing: (${sx}, ${sy}, ${sz}) -> (${tx}, ${ty}, ${tz})`);
+  const path = AStar(new AStarPoint(sx, sy, sz),
+                     new AStarPoint(tx, ty, tz),
+                     p => !solid(env, p.x, p.y, p.z));
+  if (path === null) return;
 
-  const limit = 64;
-  let prev: Point[] = [[sx, sy, sz]];
-  let next: Point[] = [];
-  let done: boolean = false;
-
-  let shift = 1;
-  while ((1 << shift) < 2 * limit) shift++;
-  const mask = (1 << shift) - 1;
-
-  const compute_key = (x: int, y: int, z: int): int => {
-    const result = (y << (2 * shift)) |
-                   (((x - sx) & mask) << shift) |
-                   (((z - sz) & mask));
-    return int(result);
-  };
-
-  const visited: Map<int, Point | null> = new Map();
-  visited.set(compute_key(sx, sy, sz), null);
-
-  for (let i = 0; i < limit; i++) {
-    for (const pp of prev) {
-      const npY = pp[1];
-      for (let dir = 0; dir < 4; dir++) {
-        const npX = int(pp[0] + ((dir & 1) ? dir - 2 : 0));
-        const npZ = int(pp[2] + ((dir & 1) ? 0 : dir - 1));
-        const key = compute_key(npX, npY, npZ);
-        if (visited.has(key)) continue;
-
-        if (solid(env, npX, npY, npZ)) continue;
-        if (!solid(env, npX, int(npY - 1), npZ)) continue;
-
-        visited.set(key, pp);
-        next.push([npX, npY, npZ]);
-        if (npX === tx && npY === ty && npZ === tz) done = true;
-      }
-    }
-    if (done) break;
-    [prev, next] = [next, prev];
-    next.length === 0;
-  }
-
-  if (!done) return;
-
-  const full: Point[] = [];
-  let cur: Point | null | void = [tx, ty, tz];
-  while (cur) {
-    full.push(cur);
-    cur = visited.get(compute_key(cur[0], cur[1], cur[2]));
-  }
-  full.reverse();
-
-  const result = [full[0]];
-  for (let i = 2; i < full.length; i++) {
+  const full = path.map((p: AStarPoint): Point => [p.x, p.y, p.z]);
+  const result: Point[] = [[sx, sy, sz]];
+  for (let i = 1; i < full.length; i++) {
     const last = result[result.length - 1];
     if (hasDirectPath(env, last, full[i])) continue;
     result.push(full[i - 1]);
   }
-  if (full.length > 1) result.push(full[full.length - 1]);
+  if (full.length > 0) result.push(full[full.length - 1]);
 
   state.path = result;
   state.path_index = 0;
@@ -752,6 +706,7 @@ const followPath = (env: TypedEnv, state: PathingState,
   const normalization = length > 1 ? 1 / length : 1;
   movement.inputX = inputX * normalization;
   movement.inputZ = inputZ * normalization;
+  movement.jumping = node[1] > body.min[1];
 
   const mesh = env.meshes.get(state.id);
   if (!mesh) return;

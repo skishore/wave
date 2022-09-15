@@ -36,35 +36,23 @@ class Point {
     return this.x === o.x && this.y === o.y && this.z === o.z;
   }
 
-  // An injection from Z x Z x Z -> Z suitable for use as a Map key.
-  key(): int {
-    const {x, y, z} = this;
-    const ax = x < 0 ? -2 * x + 1 : 2 * x;
-    const ay = y < 0 ? -2 * y + 1 : 2 * y;
-    const az = z < 0 ? -2 * z + 1 : 2 * z;
-
-    const a = ax + ay + az;
-    const b = ax + ay;
-    const c = ax;
-
-    return int(a * (a + 1) * (a + 2) / 6 + b * (b + 1) / 2 + c);
-  }
-
-  toString(): string { return `Point(${this.x}, ${this.y}, {this.z})`; }
+  toString(): string { return `Point(${this.x}, ${this.y}, ${this.z})`; }
 };
 
 //////////////////////////////////////////////////////////////////////////////
 
 class Direction extends Point {
-  static none = new Direction(0,  0, 0);
-  static n    = new Direction(0,  0, -1);
-  static ne   = new Direction(1,  0, -1);
-  static e    = new Direction(1,  0, 0);
-  static se   = new Direction(1,  0, 1);
-  static s    = new Direction(0,  0, 1);
-  static sw   = new Direction(-1, 0, 1);
-  static w    = new Direction(-1, 0, 0);
-  static nw   = new Direction(-1, 0, -1);
+  static none = new Direction( 0,  0,  0);
+  static n    = new Direction( 0,  0, -1);
+  static ne   = new Direction( 1,  0, -1);
+  static e    = new Direction( 1,  0,  0);
+  static se   = new Direction( 1,  0,  1);
+  static s    = new Direction( 0,  0,  1);
+  static sw   = new Direction(-1,  0,  1);
+  static w    = new Direction(-1,  0,  0);
+  static nw   = new Direction(-1,  0, -1);
+  static up   = new Direction( 0,  1,  0);
+  static down = new Direction( 0, -1,  0);
 
   static all = [Direction.n, Direction.ne, Direction.e, Direction.se,
                 Direction.s, Direction.sw, Direction.w, Direction.nw];
@@ -163,30 +151,61 @@ const AStarHeapExtractMin = (heap: AStarHeap): AStarNode => {
 
 //////////////////////////////////////////////////////////////////////////////
 
+type Check = (p: Point) => boolean;
+
 const AStarUnitCost = 16;
 const AStarDiagonalPenalty = 2;
 const AStarLOSDeltaPenalty = 1;
-const AStarOccupiedPenalty = 64;
+const AStarLimit = int(256);
 
-enum Status { FREE, BLOCKED, OCCUPIED };
-
-const AStarHeuristic = (p: Point): number => {
-  return 0;
+const AStarKey = (p: Point, source: Point): int => {
+  const result = (((p.x - source.x) & 0x3ff) << 0) |
+                 (((p.y - source.y) & 0x3ff) << 10) |
+                 (((p.z - source.z) & 0x3ff) << 20);
+  return result as int;
 };
 
-const AStar = (source: Point, target: Point, check: (p: Point) => Status,
-               record?: Point[]): Point[] | null => {
+const AStarHeuristic = (p: Point, target: Point): number => {
+  const ax = p.x - target.x;
+  const ay = p.y - target.y;
+  const az = p.z - target.z;
+  return AStarUnitCost * (Math.abs(ax) + Math.abs(ay) + Math.abs(az));
+};
+
+const AStarHeight =
+    (source: Point, target: Point, check: Check): int | null => {
+  if (!check(target)) {
+    const jump = check(source.add(Direction.up)) &&
+                 check(target.add(Direction.up));
+    return jump ? int(target.y + 1) : null;
+  }
+  let floor = target.add(Direction.down);
+  while (floor.y >= 0 && check(floor)) {
+    floor = floor.add(Direction.down);
+  }
+  return int(floor.y + 1);
+};
+
+const AStar = (source: Point, target: Point, check: Check,
+               limit?: int, record?: Point[]): Point[] | null => {
+  console.log(`AStar: ${source.toString()} -> ${target.toString()}`);
+
+  let count = 0;
+  limit = limit ? limit : AStarLimit;
+
   const map: Map<int, AStarNode> = new Map();
   const heap: AStarHeap = [];
 
-  const score = AStarHeuristic(source);
+  const score = AStarHeuristic(source, target);
   const node = new AStarNode(source, null, 0, score);
+  map.set(AStarKey(source, source), node);
   AStarHeapPush(heap, node);
-  map.set(Point.origin.key(), node);
 
-  while (heap.length > 0) {
+  while (count < limit && heap.length > 0) {
     const cur = AStarHeapExtractMin(heap);
+    console.log(`  ${count}: ${cur.toString()}: distance = ${cur.distance}, score = ${cur.score}`);
     if (record) record.push(cur);
+    count++;
 
     if (cur.equal(target)) {
       let current = cur;
@@ -195,21 +214,21 @@ const AStar = (source: Point, target: Point, check: (p: Point) => Status,
         result.push(current);
         current = current.parent;
       }
+      console.log(`Found ${result.length}-node path:`);
+      for (let i = result.length - 1; i >= 0; i--) {
+        console.log(`  ${result[i].toString()}`);
+      }
       return result.reverse();
     }
 
-    for (const direction of Direction.all) {
+    for (const direction of Direction.cardinal) {
       const next = cur.add(direction);
-      const test = next.equal(target) ? Status.FREE : check(next);
-      if (test === Status.BLOCKED) continue;
+      const y = AStarHeight(cur, next, check);
+      if (y === null) continue;
 
-      const diagonal = direction.x !== 0 && direction.y !== 0;
-      const occupied = test === Status.OCCUPIED;
-      const distance = cur.distance + AStarUnitCost +
-                       (diagonal ? AStarDiagonalPenalty : 0) +
-                       (occupied ? AStarOccupiedPenalty : 0);
-
-      const key = next.sub(source).key();
+      const adjusted = y === next.y ? next : new Point(next.x, y, next.z);
+      const distance = cur.distance + (Math.abs(y - cur.y) + 1) * AStarUnitCost;
+      const key = AStarKey(adjusted, source);
       const existing = map.get(key);
 
       // index !== null is a check to see if we've already popped this node
@@ -223,8 +242,8 @@ const AStar = (source: Point, target: Point, check: (p: Point) => Status,
         existing.parent = cur;
         AStarHeapify(heap, existing, existing.index);
       } else if (!existing) {
-        const score = distance + AStarHeuristic(next);
-        const created = new AStarNode(next, cur, distance, score);
+        const score = distance + AStarHeuristic(adjusted, target);
+        const created = new AStarNode(adjusted, cur, distance, score);
         AStarHeapPush(heap, created);
         map.set(key, created);
       }
@@ -236,4 +255,4 @@ const AStar = (source: Point, target: Point, check: (p: Point) => Status,
 
 //////////////////////////////////////////////////////////////////////////////
 
-export {AStar, Point, Status};
+export {AStar, Check, Point};
