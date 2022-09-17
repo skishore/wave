@@ -165,11 +165,30 @@ const AStarKey = (p: Point, source: Point): int => {
   return result as int;
 };
 
-const AStarHeuristic = (p: Point, target: Point): number => {
-  const ax = p.x - target.x;
-  const ay = p.y - target.y;
-  const az = p.z - target.z;
-  return AStarUnitCost * (Math.abs(ax) + Math.abs(ay) + Math.abs(az));
+const AStarHeuristic = (source: Point, target: Point) => {
+  let dx = target.x - source.x;
+  let dy = target.y - source.y;
+  let dz = target.z - source.z;
+  if (dx !== 0 || dy !== 0 || dz !== 0) {
+    const length = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    dx /= length;
+    dy /= length;
+    dz /= length;
+  }
+
+  return (p: Point): number => {
+    const ax = p.x - target.x;
+    const ay = p.y - target.y;
+    const az = p.z - target.z;
+
+    const dot = ax * dx + ay * dy + az * dz;
+    const ox = ax - dot * dx;
+    const oy = ay - dot * dy;
+    const oz = az - dot * dz;
+    const off = Math.sqrt(ox * ox + oy * oy + oz * oz);
+
+    return AStarUnitCost * (Math.abs(ax) + Math.abs(ay) + Math.abs(az) + off);
+  };
 };
 
 const AStarHeight =
@@ -196,7 +215,8 @@ const AStar = (source: Point, target: Point, check: Check,
   const map: Map<int, AStarNode> = new Map();
   const heap: AStarHeap = [];
 
-  const score = AStarHeuristic(source, target);
+  const heuristic = AStarHeuristic(source, target);
+  const score = heuristic(source);
   const node = new AStarNode(source, null, 0, score);
   map.set(AStarKey(source, source), node);
   AStarHeapPush(heap, node);
@@ -242,7 +262,7 @@ const AStar = (source: Point, target: Point, check: Check,
         existing.parent = cur;
         AStarHeapify(heap, existing, existing.index);
       } else if (!existing) {
-        const score = distance + AStarHeuristic(adjusted, target);
+        const score = distance + heuristic(adjusted);
         const created = new AStarNode(adjusted, cur, distance, score);
         AStarHeapPush(heap, created);
         map.set(key, created);
