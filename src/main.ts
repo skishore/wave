@@ -657,16 +657,16 @@ const findPath = (env: TypedEnv, state: PathingState,
   const path = AStar(new AStarPoint(sx, sy, sz),
                      new AStarPoint(tx, ty, tz),
                      p => !solid(env, p.x, p.y, p.z));
-  if (path === null) return;
+  if (path.length === 0) return;
 
   const full = path.map((p: AStarPoint): Point => [p.x, p.y, p.z]);
-  const result: Point[] = [[sx, sy, sz]];
-  for (let i = 1; i < full.length; i++) {
+  const result: Point[] = [full[0]];
+  for (let i = 2; i < full.length; i++) {
     const last = result[result.length - 1];
     if (hasDirectPath(env, last, full[i])) continue;
     result.push(full[i - 1]);
   }
-  if (full.length > 0) result.push(full[full.length - 1]);
+  if (full.length > 1) result.push(full[full.length - 1]);
 
   state.path = result;
   state.path_index = 0;
@@ -707,6 +707,7 @@ const followPath = (env: TypedEnv, state: PathingState,
   movement.inputX = inputX * normalization;
   movement.inputZ = inputZ * normalization;
   movement.jumping = node[1] > body.min[1];
+  if (body.resting[1] === -1) movement._jumped = false;
 
   const mesh = env.meshes.get(state.id);
   if (!mesh) return;

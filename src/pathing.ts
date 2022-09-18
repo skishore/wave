@@ -206,12 +206,13 @@ const AStarHeight =
 };
 
 const AStar = (source: Point, target: Point, check: Check,
-               limit?: int, record?: Point[]): Point[] | null => {
+               limit?: int, record?: Point[]): Point[] => {
   console.log(`AStar: ${source.toString()} -> ${target.toString()}`);
 
   let count = 0;
   limit = limit ? limit : AStarLimit;
 
+  let best: AStarNode | null = null;
   const map: Map<int, AStarNode> = new Map();
   const heap: AStarHeap = [];
 
@@ -228,17 +229,8 @@ const AStar = (source: Point, target: Point, check: Check,
     count++;
 
     if (cur.equal(target)) {
-      let current = cur;
-      const result: Point[] = [];
-      while (current.parent) {
-        result.push(current);
-        current = current.parent;
-      }
-      console.log(`Found ${result.length}-node path:`);
-      for (let i = result.length - 1; i >= 0; i--) {
-        console.log(`  ${result[i].toString()}`);
-      }
-      return result.reverse();
+      best = cur;
+      break;
     }
 
     for (const direction of Direction.cardinal) {
@@ -270,7 +262,23 @@ const AStar = (source: Point, target: Point, check: Check,
     }
   }
 
-  return null;
+  if (best === null) {
+    const heuristic = (x: AStarNode) => x.score - x.distance;
+    for (const node of map.values()) {
+      if (!best || heuristic(node) < heuristic(best)) best = node;
+    }
+  }
+
+  const result: Point[] = [];
+  while (best) {
+    result.push(best);
+    best = best.parent;
+  }
+  console.log(`Found ${result.length}-node path:`);
+  for (let i = result.length - 1; i >= 0; i--) {
+    console.log(`  ${result[i].toString()}`);
+  }
+  return result.reverse();
 };
 
 //////////////////////////////////////////////////////////////////////////////
