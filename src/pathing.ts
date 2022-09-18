@@ -154,8 +154,8 @@ const AStarHeapExtractMin = (heap: AStarHeap): AStarNode => {
 type Check = (p: Point) => boolean;
 
 const AStarUnitCost = 16;
-const AStarDiagonalPenalty = 2;
-const AStarLOSDeltaPenalty = 1;
+const AStarUpCost   = 64;
+const AStarDownCost = 4;
 const AStarLimit = int(256);
 
 const AStarKey = (p: Point, source: Point): int => {
@@ -187,7 +187,8 @@ const AStarHeuristic = (source: Point, target: Point) => {
     const oz = az - dot * dz;
     const off = Math.sqrt(ox * ox + oy * oy + oz * oz);
 
-    return AStarUnitCost * (Math.abs(ax) + Math.abs(ay) + Math.abs(az) + off);
+    const base = AStarUnitCost * (Math.abs(ax) + Math.abs(az) + off);
+    return base + ay * (ay > 0 ? AStarDownCost : -AStarUpCost);
   };
 };
 
@@ -264,10 +265,10 @@ const AStar = (source: Point, target: Point, check: Check,
     }
 
     for (const next of AStarNeighbors(cur, check)) {
-      const delta = Math.abs(cur.x - next.x) +
-                    Math.abs(cur.y - next.y) +
-                    Math.abs(cur.z - next.z);
-      const distance = cur.distance + delta * AStarUnitCost;
+      const dy = next.y - cur.y;
+      const xz = Math.abs(next.x - cur.x) + Math.abs(next.z - cur.z);
+      const ud = dy * (dy > 0 ? AStarUpCost : -AStarDownCost);
+      const distance = cur.distance + xz * AStarUnitCost + ud;
       const key = AStarKey(next, source);
       const existing = map.get(key);
 
