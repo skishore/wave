@@ -193,16 +193,46 @@ const AStarHeuristic = (source: Point, target: Point) => {
 
 const AStarHeight =
     (source: Point, target: Point, check: Check): int | null => {
+  const {up, down} = Direction;
   if (!check(target)) {
-    const jump = check(source.add(Direction.up)) &&
-                 check(target.add(Direction.up));
+    const jump = check(source.add(up)) && check(target.add(up));
     return jump ? int(target.y + 1) : null;
   }
-  let floor = target.add(Direction.down);
+  let floor = target.add(down);
   while (floor.y >= 0 && check(floor)) {
-    floor = floor.add(Direction.down);
+    floor = floor.add(down);
   }
   return int(floor.y + 1);
+};
+
+const AStarNeighbors = (source: Point, check: Check): Point[] => {
+  const result = [];
+  const {up, down} = Direction;
+
+  const adjust = (p: Point, y: int) => {
+    return y === p.y ? p : new Point(p.x, y, p.z);
+  };
+
+  for (const dir of Direction.cardinal) {
+    const next = source.add(dir);
+    const ny = AStarHeight(source, next, check);
+    if (ny === null) continue;
+
+    result.push(adjust(next, ny));
+
+    if (ny < next.y && check(source.add(up)) && check(next.add(up))) {
+      const jump = next.add(dir);
+      if (check(jump) && check(jump.add(up))) {
+        let floor = jump.add(down);
+        while (floor.y >= 0 && check(floor)) {
+          floor = floor.add(down);
+        }
+        const jy = int(floor.y + 1);
+        if (jy > ny) result.push(adjust(jump, jy));
+      }
+    }
+  }
+  return result;
 };
 
 const AStar = (source: Point, target: Point, check: Check,
@@ -233,14 +263,12 @@ const AStar = (source: Point, target: Point, check: Check,
       break;
     }
 
-    for (const direction of Direction.cardinal) {
-      const next = cur.add(direction);
-      const y = AStarHeight(cur, next, check);
-      if (y === null) continue;
-
-      const adjusted = y === next.y ? next : new Point(next.x, y, next.z);
-      const distance = cur.distance + (Math.abs(y - cur.y) + 1) * AStarUnitCost;
-      const key = AStarKey(adjusted, source);
+    for (const next of AStarNeighbors(cur, check)) {
+      const delta = Math.abs(cur.x - next.x) +
+                    Math.abs(cur.y - next.y) +
+                    Math.abs(cur.z - next.z);
+      const distance = cur.distance + delta * AStarUnitCost;
+      const key = AStarKey(next, source);
       const existing = map.get(key);
 
       // index !== null is a check to see if we've already popped this node
@@ -254,8 +282,8 @@ const AStar = (source: Point, target: Point, check: Check,
         existing.parent = cur;
         AStarHeapify(heap, existing, existing.index);
       } else if (!existing) {
-        const score = distance + heuristic(adjusted);
-        const created = new AStarNode(adjusted, cur, distance, score);
+        const score = distance + heuristic(next);
+        const created = new AStarNode(next, cur, distance, score);
         AStarHeapPush(heap, created);
         map.set(key, created);
       }
@@ -283,4 +311,4 @@ const AStar = (source: Point, target: Point, check: Check,
 
 //////////////////////////////////////////////////////////////////////////////
 
-export {AStar, Check, Point};
+export {AStar, Check, Direction, Point};

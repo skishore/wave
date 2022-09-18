@@ -674,8 +674,10 @@ const findPath = (env: TypedEnv, state: PathingState,
   console.log(state.path);
 };
 
-const PIDController = (error: number, derror: number): number => {
-  return 1.00 * error + 0.05 * derror;
+const PIDController =
+    (error: number, derror: number, grounded: boolean): number => {
+  const dfactor = grounded ? 0.05 : 0.10;
+  return 1.00 * error + dfactor * derror;
 };
 
 const followPath = (env: TypedEnv, state: PathingState,
@@ -685,39 +687,55 @@ const followPath = (env: TypedEnv, state: PathingState,
   const movement = env.movement.get(state.id);
   if (!movement) return;
 
-  const cx = (body.min[0] + body.max[0]) / 2;
-  const cz = (body.min[2] + body.max[2]) / 2;
-
   const node = path[state.path_index];
   const E = state.path_index + 1 === path.length
     ? 0.4 * (1 - (body.max[0] - body.min[0]))
     : 0;
   if (node[0] + E <= body.min[0] && body.max[0] <= node[0] + 1 - E &&
-      node[1] + 0 <= body.min[1] && body.max[1] <= node[1] + 1 - 0 &&
+      node[1] + 0 <= body.min[1] && body.min[1] <= node[1] + 1 - 0 &&
       node[2] + E <= body.min[2] && body.max[2] <= node[2] + 1 - E) {
-    state.path_index += 1;
+    state.path_index++;
   }
-  if (state.path_index === path.length) { state.path = null; return; }
+  const path_index = state.path_index;
+  if (path_index === path.length) { state.path = null; return; }
 
-  const cur = path[state.path_index];
-  let inputX = PIDController(cur[0] + 0.5 - cx, -body.vel[0]);
-  let inputZ = PIDController(cur[2] + 0.5 - cz, -body.vel[2]);
+  const cur = path[path_index];
+  const cx = (body.min[0] + body.max[0]) / 2;
+  const cz = (body.min[2] + body.max[2]) / 2;
+  const dx = cur[0] + 0.5 - cx;
+  const dz = cur[2] + 0.5 - cz;
+
+  const grounded = body.resting[1] < 0;
+  let inputX = PIDController(dx, -body.vel[0], grounded);
+  let inputZ = PIDController(dz, -body.vel[2], grounded);
   const length = Math.sqrt(inputX * inputX + inputZ * inputZ);
   const normalization = length > 1 ? 1 / length : 1;
   movement.inputX = inputX * normalization;
   movement.inputZ = inputZ * normalization;
-  movement.jumping = node[1] > body.min[1];
-  if (body.resting[1] === -1) movement._jumped = false;
+
+  if (grounded) movement._jumped = false;
+  movement.jumping = (() => {
+    if (node[1] > body.min[1]) return true;
+    if (!grounded) return false;
+
+    const x = int(Math.floor(cx));
+    const y = int(body.min[1] - 1);
+    const z = int(Math.floor(cz));
+    const fx = cx - Math.floor(cx);
+    const fz = cz - Math.floor(cz);
+
+    const J = 0.25, K = 1 - J;
+    return (dx > 1  && fx > K && !solid(env, int(x + 1), y, z)) ||
+           (dx < -1 && fx < J && !solid(env, int(x - 1), y, z)) ||
+           (dz > 1  && fz > K && !solid(env, x, y, int(z + 1))) ||
+           (dz < -1 && fz < J && !solid(env, x, y, int(z - 1)));
+  })();
 
   const mesh = env.meshes.get(state.id);
   if (!mesh) return;
-  const dx = state.path_index > 0
-    ? cur[0] - path[state.path_index - 1][0]
-    : cur[0] + 0.5 - cx;
-  const dz = state.path_index > 0
-    ? cur[2] - path[state.path_index - 1][2]
-    : cur[2] + 0.5 - cz;
-  mesh.heading = Math.atan2(dx, dz);
+  const vx = path_index > 0 ? cur[0] - path[path_index - 1][0] : cx;
+  const vz = path_index > 0 ? cur[2] - path[path_index - 1][2] : cz;
+  mesh.heading = Math.atan2(vx, vz);
 };
 
 const runPathing = (env: TypedEnv, state: PathingState): void => {
