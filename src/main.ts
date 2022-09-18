@@ -405,7 +405,7 @@ const generateParticles =
 
     const size = position.h;
     const mesh = env.meshes.add(particle);
-    const sprite = {url: 'images/rhodox-edited.png', size, x: int(16), y: int(16)};
+    const sprite = {url: 'images/frlg.png', size, x: int(16), y: int(16)};
     mesh.mesh = env.renderer.addSpriteMesh(sprite);
     mesh.mesh.setFrame(int(data.texture.x + 16 * data.texture.y));
 
@@ -648,10 +648,10 @@ const hasDirectPath = (env: TypedEnv, start: Point, end: Point): boolean => {
 
 const findPath = (env: TypedEnv, state: PathingState,
                   body: PhysicsState): void => {
-  const min = body.min;
-  const sx = int(Math.floor(min[0]));
+  const {min, max} = body;
+  const sx = int(Math.floor((min[0] + max[0]) / 2));
   const sy = int(Math.floor(min[1]));
-  const sz = int(Math.floor(min[2]));
+  const sz = int(Math.floor((min[2] + max[2]) / 2));
   const [tx, ty, tz] = nonnull(state.target);
 
   const path = AStar(new AStarPoint(sx, sy, sz),
@@ -935,7 +935,7 @@ const main = () => {
 
   const texture = (x: int, y: int, alphaTest: boolean = false,
                    sparkle: boolean = false): Texture => {
-    const url = 'images/rhodox-edited.png';
+    const url = 'images/frlg.png';
     return {alphaTest, sparkle, url, x, y, w: int(16), h: int(16)};
   };
 

@@ -169,7 +169,6 @@ const heightmap = (x: int, z: int, blocks: Blocks): HeightmapResult => {
     : height_ground;
 
   const height = (() => {
-    return 0;
     if (height_mountain > height_ground) {
       return height_mountain * mountain + height_ground * (1 - mountain);
     } else if (height_cliff > height_ground) {
