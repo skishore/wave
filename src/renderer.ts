@@ -1090,8 +1090,9 @@ class VoxelManager implements MeshManager<VoxelShader, VoxelMesh> {
 
 const kSpriteShader = `
   uniform float u_size;
+  uniform float u_height;
   uniform vec4 u_stuv;
-  uniform vec2 u_billboard;
+  uniform vec4 u_billboard;
   uniform mat4 u_transform;
   out vec2 v_uv;
 
@@ -1105,9 +1106,15 @@ const kSpriteShader = `
     float v = u_stuv[1] + u_stuv[3] * (1.0 - h);
     v_uv = vec2(u, v);
 
-    float x = u_size * (w - 0.5);
-    vec4 pos = vec4(x * u_billboard[0], u_size * h, x * u_billboard[1], 1.0);
-    gl_Position = u_transform * pos;
+    float y = 0.5 * u_height;
+    vec3 v0 = vec3(u_size * (w - 0.5), u_size * h, 0.0);
+    vec3 v1 = vec3(v0[0],
+                   (v0[1] - y) * u_billboard[2] + y,
+                   (v0[1] - y) * u_billboard[3]);
+    vec3 v2 = vec3(v1[0] * u_billboard[0] - v1[2] * u_billboard[1],
+                   v1[1],
+                   v1[0] * u_billboard[1] + v1[2] * u_billboard[0]);
+    gl_Position = u_transform * vec4(v2, 1.0);
   }
 #split
   uniform float u_frame;
@@ -1130,6 +1137,7 @@ class SpriteShader extends Shader {
   u_transform: WebGLUniformLocation | null;
   u_frame:     WebGLUniformLocation | null;
   u_light:     WebGLUniformLocation | null;
+  u_height:    WebGLUniformLocation | null;
 
   constructor(gl: WebGL2RenderingContext) {
     super(gl, kSpriteShader);
@@ -1139,6 +1147,7 @@ class SpriteShader extends Shader {
     this.u_transform = this.getUniformLocation('u_transform');
     this.u_frame     = this.getUniformLocation('u_frame');
     this.u_light     = this.getUniformLocation('u_light');
+    this.u_height    = this.getUniformLocation('u_height');
   }
 };
 
@@ -1148,6 +1157,7 @@ class SpriteMesh extends Mesh<SpriteShader, SpriteMesh> {
   private light: number;
   private manager: SpriteManager;
   private size: number;
+  private height: number;
   private stuv: Float32Array;
   private texture: WebGLTexture;
 
@@ -1157,6 +1167,7 @@ class SpriteMesh extends Mesh<SpriteShader, SpriteMesh> {
     this.light = 1;
     this.manager = manager;
     this.size = sprite.size;
+    this.height = sprite.size;
     this.stuv = new Float32Array(4);
     this.stuv[2] = 1; this.stuv[3] = 1;
     this.texture = manager.atlas.addSprite(sprite);
@@ -1175,6 +1186,7 @@ class SpriteMesh extends Mesh<SpriteShader, SpriteMesh> {
     gl.uniform4fv(shader.u_stuv, this.stuv);
     gl.uniform1f(shader.u_light, this.light);
     gl.uniform1f(shader.u_frame, this.frame);
+    gl.uniform1f(shader.u_height, this.height);
     gl.uniformMatrix4fv(shader.u_transform, false, transform);
     gl.drawArraysInstanced(gl.TRIANGLES, 0, 3, 2);
     return true;
@@ -1182,6 +1194,10 @@ class SpriteMesh extends Mesh<SpriteShader, SpriteMesh> {
 
   setFrame(frame: int): void {
     this.frame = frame;
+  }
+
+  setHeight(height: number): void {
+    this.height = height;
   }
 
   setLight(light: number): void {
@@ -1210,7 +1226,7 @@ class SpriteManager implements MeshManager<SpriteShader, SpriteMesh> {
     this.gl = gl;
     this.shader = new SpriteShader(gl);
     this.atlas = new SpriteAtlas(gl);
-    this.billboard = new Float32Array(2);
+    this.billboard = new Float32Array(4);
     this.bounds = Array(8).fill(null).map(() => Vec3.create());
     this.meshes = [];
   }
@@ -1237,9 +1253,12 @@ class SpriteManager implements MeshManager<SpriteShader, SpriteMesh> {
 
     // All sprite meshes are alpha-tested for now.
     shader.bind();
+    const pitch  = -0.33 * camera.pitch;
     billboard[0] = Math.cos(camera.heading);
     billboard[1] = -Math.sin(camera.heading);
-    gl.uniform2fv(shader.u_billboard, billboard);
+    billboard[2] = Math.cos(pitch);
+    billboard[3] = -Math.sin(pitch);
+    gl.uniform4fv(shader.u_billboard, billboard);
     for (const mesh of this.meshes) {
       if (mesh.draw(camera, planes)) drawn++;
     }
@@ -1467,6 +1486,7 @@ interface ISpriteMesh extends IMesh {
   enabled: boolean,
   setFrame: (frame: int) => void,
   setLight: (light: number) => void,
+  setHeight: (height: number) => void,
   setSTUV: (s: number, t: number, u: number, v: number) => void,
 };
 

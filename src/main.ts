@@ -794,6 +794,7 @@ const Meshes = (env: TypedEnv): Component<MeshState> => ({
           int(Math.floor(x)), int(Math.floor(y)), int(Math.floor(z)));
       state.mesh.setPosition(x, y - h / 2, z);
       state.mesh.setLight(lit ? 1 : 0.64);
+      state.mesh.setHeight(h);
 
       if (state.heading !== null) {
         const pos = env.renderer.camera.position;
