@@ -557,7 +557,7 @@ const runInputs = (env: TypedEnv, id: EntityId) => {
   }
 
   // Call any followers.
-  if (inputs.call) {
+  if (inputs.call || Math.random() < 1 / 4) {
     const body = env.physics.get(id);
     if (body) {
       const x = int(Math.floor((body.min[0] + body.max[0]) / 2));
@@ -667,11 +667,12 @@ const findPath = (env: TypedEnv, state: PathingState,
     result.push(full[i - 1]);
   }
   if (full.length > 1) result.push(full[full.length - 1]);
+  result.shift();
 
   state.path = result;
   state.path_index = 0;
   state.target = null;
-  console.log(state.path);
+  //console.log(state.path);
 };
 
 const PIDController =
@@ -733,8 +734,8 @@ const followPath = (env: TypedEnv, state: PathingState,
 
   const mesh = env.meshes.get(state.id);
   if (!mesh) return;
-  const vx = path_index > 0 ? cur[0] - path[path_index - 1][0] : cx;
-  const vz = path_index > 0 ? cur[2] - path[path_index - 1][2] : cz;
+  const vx = path_index > 0 ? cur[0] - path[path_index - 1][0] : dx;
+  const vz = path_index > 0 ? cur[2] - path[path_index - 1][2] : dz;
   mesh.heading = Math.atan2(vx, vz);
 };
 
@@ -743,8 +744,8 @@ const runPathing = (env: TypedEnv, state: PathingState): void => {
   const body = env.physics.get(state.id);
   if (!body) return;
 
-  if (state.target) return findPath(env, state, body);
-  if (state.path) return followPath(env, state, body);
+  if (state.target) findPath(env, state, body);
+  if (state.path) followPath(env, state, body);
 };
 
 const Pathing = (env: TypedEnv): Component<PathingState> => ({

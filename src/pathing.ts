@@ -194,42 +194,43 @@ const AStarHeuristic = (source: Point, target: Point) => {
 
 const AStarHeight =
     (source: Point, target: Point, check: Check): int | null => {
-  const {up, down} = Direction;
   if (!check(target)) {
+    const up = Direction.up;
     const jump = check(source.add(up)) && check(target.add(up));
     return jump ? int(target.y + 1) : null;
   }
-  let floor = target.add(down);
+  return AStarDrop(target, check);
+};
+
+const AStarDrop = (p: Point, check: Check): int => {
+  const down = Direction.down;
+  let floor = p.add(down);
   while (floor.y >= 0 && check(floor)) {
     floor = floor.add(down);
   }
   return int(floor.y + 1);
 };
 
+const AStarAdjust = (p: Point, y: int): Point => {
+  return y === p.y ? p : new Point(p.x, y, p.z);
+};
+
 const AStarNeighbors = (source: Point, check: Check): Point[] => {
   const result = [];
   const {up, down} = Direction;
-
-  const adjust = (p: Point, y: int) => {
-    return y === p.y ? p : new Point(p.x, y, p.z);
-  };
 
   for (const dir of Direction.cardinal) {
     const next = source.add(dir);
     const ny = AStarHeight(source, next, check);
     if (ny === null) continue;
 
-    result.push(adjust(next, ny));
+    result.push(AStarAdjust(next, ny));
 
     if (ny < next.y && check(source.add(up)) && check(next.add(up))) {
       const jump = next.add(dir);
       if (check(jump) && check(jump.add(up))) {
-        let floor = jump.add(down);
-        while (floor.y >= 0 && check(floor)) {
-          floor = floor.add(down);
-        }
-        const jy = int(floor.y + 1);
-        if (jy > ny) result.push(adjust(jump, jy));
+        const jy = AStarDrop(jump, check);
+        if (jy > ny) result.push(AStarAdjust(jump, jy));
       }
     }
   }
@@ -238,10 +239,11 @@ const AStarNeighbors = (source: Point, check: Check): Point[] => {
 
 const AStar = (source: Point, target: Point, check: Check,
                limit?: int, record?: Point[]): Point[] => {
-  console.log(`AStar: ${source.toString()} -> ${target.toString()}`);
+  //console.log(`AStar: ${source.toString()} -> ${target.toString()}`);
 
   let count = 0;
   limit = limit ? limit : AStarLimit;
+  target = AStarAdjust(target, AStarDrop(target, check));
 
   let best: AStarNode | null = null;
   const map: Map<int, AStarNode> = new Map();
@@ -255,7 +257,7 @@ const AStar = (source: Point, target: Point, check: Check,
 
   while (count < limit && heap.length > 0) {
     const cur = AStarHeapExtractMin(heap);
-    console.log(`  ${count}: ${cur.toString()}: distance = ${cur.distance}, score = ${cur.score}`);
+    //console.log(`  ${count}: ${cur.toString()}: distance = ${cur.distance}, score = ${cur.score}`);
     if (record) record.push(cur);
     count++;
 
@@ -303,10 +305,10 @@ const AStar = (source: Point, target: Point, check: Check,
     result.push(best);
     best = best.parent;
   }
-  console.log(`Found ${result.length}-node path:`);
-  for (let i = result.length - 1; i >= 0; i--) {
-    console.log(`  ${result[i].toString()}`);
-  }
+  //console.log(`Found ${result.length}-node path:`);
+  //for (let i = result.length - 1; i >= 0; i--) {
+  //  console.log(`  ${result[i].toString()}`);
+  //}
   return result.reverse();
 };
 
