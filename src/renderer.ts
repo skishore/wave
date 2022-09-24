@@ -726,19 +726,19 @@ class BufferAllocator {
 
 //////////////////////////////////////////////////////////////////////////////
 
-interface MeshManager<S extends Shader, T extends Mesh<S, T>> {
+interface MeshManager<S> {
   gl: WebGL2RenderingContext;
   shader: S;
 };
 
-class Mesh<S extends Shader, T extends Mesh<S, T>> {
+class Mesh<S> {
   protected gl: WebGL2RenderingContext;
   protected shader: S;
   protected index: int = -1;
-  protected meshes: Mesh<S, T>[];
+  protected meshes: Mesh<S>[];
   protected position: Vec3;
 
-  constructor(manager: MeshManager<S, T>, meshes: T[]) {
+  constructor(manager: MeshManager<S>, meshes: Mesh<S>[]) {
     this.gl = manager.gl;
     this.shader = manager.shader;
     this.meshes = meshes;
@@ -923,7 +923,7 @@ class VoxelShader extends Shader {
 
 const kDefaultMask = new Int32Array(2);
 
-class VoxelMesh extends Mesh<VoxelShader, VoxelMesh> {
+class VoxelMesh extends Mesh<VoxelShader> {
   private allocator: BufferAllocator;
   private geo: Geometry;
   private vao: WebGLVertexArrayObject | null = null;
@@ -1023,7 +1023,7 @@ class VoxelMesh extends Mesh<VoxelShader, VoxelMesh> {
   }
 };
 
-class VoxelManager implements MeshManager<VoxelShader, VoxelMesh> {
+class VoxelManager implements MeshManager<VoxelShader> {
   gl: WebGL2RenderingContext;
   shader: VoxelShader;
   atlas: TextureAtlas;
@@ -1151,7 +1151,7 @@ class SpriteShader extends Shader {
   }
 };
 
-class SpriteMesh extends Mesh<SpriteShader, SpriteMesh> {
+class SpriteMesh extends Mesh<SpriteShader> {
   enabled = true;
   private frame: int;
   private light: number;
@@ -1214,7 +1214,7 @@ class SpriteMesh extends Mesh<SpriteShader, SpriteMesh> {
   }
 };
 
-class SpriteManager implements MeshManager<SpriteShader, SpriteMesh> {
+class SpriteManager implements MeshManager<SpriteShader> {
   gl: WebGL2RenderingContext;
   shader: SpriteShader;
   atlas: SpriteAtlas;
@@ -1310,7 +1310,7 @@ class ShadowShader extends Shader {
   }
 };
 
-class ShadowMesh extends Mesh<ShadowShader, ShadowMesh> {
+class ShadowMesh extends Mesh<ShadowShader> {
   private manager: ShadowManager;
   private size: number = 0;
 
@@ -1341,7 +1341,7 @@ class ShadowMesh extends Mesh<ShadowShader, ShadowMesh> {
   }
 };
 
-class ShadowManager implements MeshManager<ShadowShader, ShadowMesh> {
+class ShadowManager implements MeshManager<ShadowShader> {
   gl: WebGL2RenderingContext;
   shader: ShadowShader;
   private bounds: Vec3[];
@@ -1559,7 +1559,7 @@ class Renderer {
     const camera = this.camera;
     const planes = camera.getCullingPlanes();
 
-    const stats = {drawn: int(0), total: int(0)};
+    const stats: Stats = {drawn: 0, total: 0};
     this.sprite_manager.render(camera, planes, stats);
     this.voxels_manager.render(camera, planes, stats, overlay, move, wave, 0);
     this.voxels_manager.render(camera, planes, stats, overlay, move, wave, 1);

@@ -1,4 +1,3 @@
-import {makeNoise2D} from '../lib/open-simplex-2d.js';
 import {assert, int, nonnull, Tensor3, Vec3} from './base.js';
 import {BlockId, Column, Env} from './engine.js';
 import {kChunkWidth, kEmptyBlock, kWorldHeight} from './engine.js';
@@ -97,7 +96,7 @@ interface LifetimeState {
 };
 
 const Lifetime: Component<LifetimeState> = {
-  init: () => ({id: kNoEntity, index: int(0), lifetime: 0, cleanup: null}),
+  init: () => ({id: kNoEntity, index: 0, lifetime: 0, cleanup: null}),
   onUpdate: (dt: number, states: LifetimeState[]) => {
     dt = dt / 1000;
     for (const state of states) {
