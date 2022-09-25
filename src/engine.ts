@@ -402,7 +402,7 @@ class Column {
     this.detectEquiLevelChanges(first);
   }
 
-  fillEquilevels(equilevels: Int16Array): void {
+  fillEquilevels(equilevels: Int8Array): void {
     let current = 0;
     const mismatches = this.mismatches;
     for (let i = 0; i < kWorldHeight; i++) {
@@ -638,7 +638,7 @@ class Chunk {
   private voxels: Tensor3;
   private heightmap: Tensor2;
   private light_map: Tensor2;
-  private equilevels: Int16Array;
+  private equilevels: Int8Array;
 
   constructor(cx: int, cz: int, world: World, loader: Loader) {
     this.cx = cx;
@@ -647,7 +647,7 @@ class Chunk {
     this.voxels = new Tensor3(kChunkWidth, kWorldHeight, kChunkWidth);
     this.heightmap = new Tensor2(kChunkWidth, kChunkWidth);
     this.light_map = new Tensor2(kChunkWidth, kChunkWidth);
-    this.equilevels = new Int16Array(kWorldHeight);
+    this.equilevels = new Int8Array(kWorldHeight);
     this.load(loader);
   }
 
@@ -868,7 +868,7 @@ class Chunk {
     }
   }
 
-  private copyEquilevels(dst: Int16Array, chunk: Chunk | null,
+  private copyEquilevels(dst: Int8Array, chunk: Chunk | null,
                          srcPos: Point, size: Point, delta: int): void {
     assert(this.voxels.stride[1] === 1);
     const data = this.voxels.data;
@@ -1243,7 +1243,7 @@ class World {
   buffer: Tensor3;
   heightmap: Tensor2;
   light_map: Tensor2;
-  equilevels: Int16Array;
+  equilevels: Int8Array;
 
   constructor(registry: Registry, renderer: Renderer) {
     const radius = (kChunkRadius | 0) + 0.5;
@@ -1268,7 +1268,7 @@ class World {
     this.buffer = new Tensor3(w, h, w);
     this.heightmap = new Tensor2(w, w);
     this.light_map = new Tensor2(w, w);
-    this.equilevels = new Int16Array(h);
+    this.equilevels = new Int8Array(h);
     this.equilevels[0] = this.equilevels[h - 1] = 1;
   }
 

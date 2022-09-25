@@ -91,7 +91,7 @@ class TerrainMesher {
   }
 
   meshChunk(voxels: Tensor3, heightmap: Tensor2, light_map: Tensor2,
-            equilevels: Int16Array, solid: Mesh, water: Mesh): [Mesh, Mesh] {
+            equilevels: Int8Array, solid: Mesh, water: Mesh): [Mesh, Mesh] {
     const solid_geo = solid ? solid.getGeometry() : kCachedGeometryA;
     const water_geo = water ? water.getGeometry() : kCachedGeometryB;
     solid_geo.clear();
@@ -164,7 +164,7 @@ class TerrainMesher {
 
   private computeChunkGeometryWithEquilevels(
       solid_geo: Geometry, water_geo: Geometry, voxels: Tensor3,
-      heightmap: Tensor2, light_map: Tensor2, equilevels: Int16Array): void {
+      heightmap: Tensor2, light_map: Tensor2, equilevels: Int8Array): void {
 
     let max_height = int(0);
     const heightmap_data = heightmap.data;
