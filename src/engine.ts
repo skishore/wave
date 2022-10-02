@@ -779,6 +779,9 @@ class Chunk {
   }
 
   private dropMeshes(): void {
+    if (this.hasMesh()) {
+      this.world.frontier.markDirty(0);
+    }
     this.solid?.dispose();
     this.water?.dispose();
     this.solid = null;
@@ -1039,29 +1042,36 @@ class LODMultiMesh {
 class FrontierChunk {
   cx: int;
   cz: int;
+  index: int;
   level: int;
   mesh: LODMultiMesh;
+  frontier: Frontier;
 
-  constructor(cx: int, cz: int, level: int, mesh: LODMultiMesh) {
+  constructor(cx: int, cz: int, level: int,
+              mesh: LODMultiMesh, frontier: Frontier) {
     this.cx = cx;
     this.cz = cz;
     this.level = level;
     this.mesh = mesh;
+    this.frontier = frontier;
+    this.index = mesh.index(this);
   }
 
   dispose() {
-    const mesh = this.mesh;
-    mesh.disable(mesh.index(this));
+    if (this.hasMesh()) {
+      this.frontier.markDirty(int(this.level + 1));
+    }
+    this.mesh.disable(this.index);
   }
 
   hasMesh() {
-    const mesh = this.mesh;
-    return mesh.meshed[mesh.index(this)];
+    return this.mesh.meshed[this.index];
   }
 };
 
 class Frontier {
   private world: World;
+  private dirty: boolean[];
   private levels: Circle<FrontierChunk>[];
   private meshes: Map<int, LODMultiMesh>;
   private solid_heightmap: Uint32Array;
@@ -1072,11 +1082,13 @@ class Frontier {
     this.world = world;
     this.meshes = new Map();
 
+    this.dirty = [];
     this.levels = [];
     let radius = (kChunkRadius | 0) + 0.5;
     for (let i = 0; i < kFrontierLevels; i++) {
       radius = (radius + kFrontierRadius) / 2;
       this.levels.push(new Circle(radius));
+      this.dirty.push(true);
     }
 
     assert(kChunkWidth % kFrontierLOD === 0);
@@ -1095,6 +1107,10 @@ class Frontier {
     }
   }
 
+  markDirty(level: int) {
+    if (level < this.dirty.length) this.dirty[level] = true;
+  }
+
   remeshFrontier() {
     for (let i = int(0); i < kFrontierLevels; i++) {
       this.computeLODAtLevel(i);
@@ -1102,6 +1118,7 @@ class Frontier {
   }
 
   private computeLODAtLevel(l: int) {
+    if (!this.dirty[l]) return;
     const world = this.world;
     const level = this.levels[l];
 
@@ -1116,6 +1133,7 @@ class Frontier {
     };
 
     let counter = 0;
+    let skipped = false;
     level.each((cx: int, cz: int): boolean => {
       let mask = int(0);
       for (let i = 0; i < 4; i++) {
@@ -1127,6 +1145,7 @@ class Frontier {
       const shown = mask !== 15;
       const extra = counter < kNumLODChunksToMeshPerFrame;
       const create = shown && (extra || mask !== 0);
+      if (shown && !create) skipped = true;
 
       const existing = level.get(cx, cz);
       if (!existing && !create) return false;
@@ -1140,11 +1159,13 @@ class Frontier {
 
       if (shown && !lod.hasMesh()) {
         this.createLODMeshes(lod);
+        this.markDirty(int(l + 1));
         counter++;
       }
       lod.mesh.show(lod.mesh.index(lod), mask);
       return false;
     });
+    this.dirty[l] = skipped;
   }
 
   private createLODMeshes(chunk: FrontierChunk): void {
@@ -1222,7 +1243,13 @@ class Frontier {
     const bits = kMultiMeshBits;
     const mesh = this.getOrCreateMultiMesh(
         int(cx >> bits), int(cz >> bits), level);
-    return new FrontierChunk(cx, cz, level, mesh);
+    const result = new FrontierChunk(cx, cz, level, mesh, this);
+    // A FrontierChunk's mesh is just a fragment of data in its LODMultiMesh.
+    // That means that we may already have a mesh when we construct the chunk,
+    // if we previously disposed it without discarding data in the multi-mesh.
+    // We count this case as meshing a chunk and mark l + 1 dirty.
+    if (result.hasMesh()) this.markDirty(int(level + 1));
+    return result;
   }
 
   private getOrCreateMultiMesh(cx: int, cz: int, level: int): LODMultiMesh {
@@ -1344,6 +1371,7 @@ class World {
       if (total > 9 && meshed >= kNumChunksToMeshPerFrame) return true;
       const chunk = chunks.get(cx, cz);
       if (!chunk || !chunk.needsRemesh()) return false;
+      if (!chunk.hasMesh()) frontier.markDirty(0);
       chunk.remeshChunk();
       meshed++;
       return false;
