@@ -278,20 +278,25 @@ const kTickResolution = 4;
 const kTicksPerFrame = 4;
 const kTicksPerSecond = 60;
 
+type Callback = (dt: number) => void;
+
 class Timing {
   private now: any;
-  private render: (dt: number) => void;
-  private update: (dt: number) => void;
+  private remesh: Callback;
+  private render: Callback;
+  private update: Callback;
   private renderBinding: () => void;
   private updateDelay: number;
   private updateLimit: number;
   private lastRender: int;
   private lastUpdate: int;
+  remeshPerf: Performance;
   renderPerf: Performance;
   updatePerf: Performance;
 
-  constructor(render: (dt: number) => void, update: (dt: number) => void) {
+  constructor(remesh: Callback, render: Callback, update: Callback) {
     this.now = performance || Date;
+    this.remesh = remesh;
     this.render = render;
     this.update = update;
 
@@ -307,6 +312,7 @@ class Timing {
     const updateInterval = this.updateDelay / kTickResolution;
     setInterval(this.updateHandler.bind(this), updateInterval);
 
+    this.remeshPerf = new Performance(this.now, 60);
     this.renderPerf = new Performance(this.now, 60);
     this.updatePerf = new Performance(this.now, 60);
   }
@@ -316,16 +322,18 @@ class Timing {
     this.updateHandler();
 
     const now = this.now.now();
-    const dt = now - this.lastRender;
+    const dt = (now - this.lastRender) / 1000;
     this.lastRender = now;
 
     try {
+      this.remeshPerf.begin();
+      this.remesh(dt);
+      this.remeshPerf.end();
       this.renderPerf.begin();
-      this.render(dt / 1000);
+      this.render(dt);
       this.renderPerf.end();
     } catch (e) {
-      this.render = () => {};
-      console.error(e);
+      this.onError(e);
     }
   }
 
@@ -340,8 +348,7 @@ class Timing {
         this.update(delay / 1000);
         this.updatePerf.end();
       } catch (e) {
-        this.update = () => {};
-        console.error(e);
+        this.onError(e);
       }
       this.lastUpdate += delay;
       now = this.now.now();
@@ -351,6 +358,11 @@ class Timing {
         break;
       }
     }
+  }
+
+  private onError(e: any) {
+    this.remesh = this.render = this.update = () => {};
+    console.error(e);
   }
 };
 
@@ -1371,7 +1383,6 @@ class Env {
   private highlightMask: Int32Array;
   private highlightSide: int = -1;
   private highlightPosition: Vec3;
-  private shouldMesh = true;
   private timing: Timing;
   private frame: int = 0;
 
@@ -1384,7 +1395,11 @@ class Env {
     this.highlight = this.world.mesher.meshHighlight();
     this.highlightMask = new Int32Array(2);
     this.highlightPosition = Vec3.create();
-    this.timing = new Timing(this.render.bind(this), this.update.bind(this));
+
+    const remesh = this.world.remesh.bind(this.world);
+    const render = this.render.bind(this);
+    const update = this.update.bind(this);
+    this.timing = new Timing(remesh, render, update);
   }
 
   getTargetedBlock(): Vec3 | null {
@@ -1426,11 +1441,11 @@ class Env {
     this.updateHighlightMesh();
     this.updateOverlayColor(wave);
     const renderer_stats = this.renderer.render(move, wave);
-    this.shouldMesh = true;
 
     const timing = this.timing;
     if (timing.renderPerf.frame() % 20 !== 0) return;
     const stats = `Update: ${this.formatStat(timing.updatePerf)}\r\n` +
+                  `Remesh: ${this.formatStat(timing.remeshPerf)}\r\n` +
                   `Render: ${this.formatStat(timing.renderPerf)}\r\n` +
                   renderer_stats;
     this.container.displayStats(stats);
@@ -1439,10 +1454,6 @@ class Env {
   update(dt: number): void {
     if (!this.container.inputs.pointer) return;
     this.entities.update(dt);
-
-    if (!this.shouldMesh) return;
-    this.shouldMesh = false;
-    this.world.remesh();
   }
 
   private formatStat(perf: Performance): string {
