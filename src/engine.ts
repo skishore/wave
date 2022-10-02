@@ -276,11 +276,11 @@ class Performance {
 
 const kTickResolution = 4;
 const kTicksPerFrame = 4;
-const kTicksPerSecond = 30;
+const kTicksPerSecond = 60;
 
 class Timing {
   private now: any;
-  private render: (dt: number, fraction: number) => void;
+  private render: (dt: number) => void;
   private update: (dt: number) => void;
   private renderBinding: () => void;
   private updateDelay: number;
@@ -290,8 +290,7 @@ class Timing {
   renderPerf: Performance;
   updatePerf: Performance;
 
-  constructor(render: (dt: number, fraction: number) => void,
-              update: (dt: number) => void) {
+  constructor(render: (dt: number) => void, update: (dt: number) => void) {
     this.now = performance || Date;
     this.render = render;
     this.update = update;
@@ -320,10 +319,9 @@ class Timing {
     const dt = now - this.lastRender;
     this.lastRender = now;
 
-    const fraction = (now - this.lastUpdate) / this.updateDelay;
     try {
       this.renderPerf.begin();
-      this.render(dt, fraction);
+      this.render(dt / 1000);
       this.renderPerf.end();
     } catch (e) {
       this.render = () => {};
@@ -339,7 +337,7 @@ class Timing {
     while (this.lastUpdate + delay < now) {
       try {
         this.updatePerf.begin();
-        this.update(delay);
+        this.update(delay / 1000);
         this.updatePerf.end();
       } catch (e) {
         this.update = () => {};
@@ -548,6 +546,7 @@ class Circle<T extends CircleElement> {
   }
 
   center(center_x: int, center_z: int): void {
+    if (center_x === this.center_x && center_z === this.center_z) return;
     this.each((cx: int, cz: int): boolean => {
       const ax = Math.abs(cx - center_x);
       const az = Math.abs(cz - center_z);
@@ -1430,7 +1429,7 @@ class Env {
     this.shouldMesh = true;
 
     const timing = this.timing;
-    if (timing.updatePerf.frame() % 10 !== 0) return;
+    if (timing.renderPerf.frame() % 20 !== 0) return;
     const stats = `Update: ${this.formatStat(timing.updatePerf)}\r\n` +
                   `Render: ${this.formatStat(timing.renderPerf)}\r\n` +
                   renderer_stats;

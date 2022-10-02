@@ -4,7 +4,7 @@ import {int, Vec3} from './base.js';
 
 type Check = (x: int, y: int, z: int) => boolean;
 
-const kSweepShift = 8;
+const kSweepShift = 12;
 const kSweepResolution = 1 << kSweepShift;
 const kSweepMask = kSweepResolution - 1;
 

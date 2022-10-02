@@ -98,7 +98,6 @@ interface LifetimeState {
 const Lifetime: Component<LifetimeState> = {
   init: () => ({id: kNoEntity, index: 0, lifetime: 0, cleanup: null}),
   onUpdate: (dt: number, states: LifetimeState[]) => {
-    dt = dt / 1000;
     for (const state of states) {
       state.lifetime -= dt;
       if (state.lifetime < 0 && state.cleanup) state.cleanup();
@@ -231,7 +230,6 @@ const runPhysics = (env: TypedEnv, dt: number, state: PhysicsState) => {
       int(Math.floor(x)), int(Math.floor(y)), int(Math.floor(z)));
   state.inFluid = block !== kEmptyBlock;
 
-  dt = dt / 1000;
   const drag = state.inFluid ? 2 : 0;
   const left = Math.max(1 - drag * dt, 0);
   const gravity = state.inFluid ? 0.25 : 1;
@@ -464,7 +462,6 @@ const tryToModifyBlock =
 };
 
 const runMovement = (env: TypedEnv, dt: number, state: MovementState) => {
-  dt = dt / 1000;
   const body = env.physics.getX(state.id);
   const grounded = body.resting[1] < 0;
   if (grounded) state._jumpCount = 0;
@@ -812,9 +809,9 @@ const Meshes = (env: TypedEnv): Component<MeshState> => ({
 
       state.column = (() => {
         if (!body.resting[1]) return 1;
-        const speed = Vec3.length(body.vel);
-        state.frame = speed ? (state.frame + 0.025 * speed) % 4 : 0;
-        if (!speed) return 0;
+        const distance = dt * Vec3.length(body.vel);
+        state.frame = distance ? (state.frame + 0.75 * distance) % 4 : 0;
+        if (!distance) return 0;
         const value = Math.floor(state.frame);
         return value & 1 ? 0 : (value + 2) >> 1;
       })();
