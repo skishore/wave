@@ -215,6 +215,11 @@ const AStarAdjust = (p: Point, y: int): Point => {
   return y === p.y ? p : new Point(p.x, y, p.z);
 };
 
+const AStarAdjustEndpoint = (p: Point, check: Check): Point => {
+  const y = AStarDrop(p, check);
+  return y >= p.y - 1 ? AStarAdjust(p, y) : p;
+};
+
 const AStarNeighbors = (source: Point, check: Check): Point[] => {
   const result = [];
   const {up, down} = Direction;
@@ -243,7 +248,8 @@ const AStar = (source: Point, target: Point, check: Check,
 
   let count = 0;
   limit = limit ? limit : AStarLimit;
-  target = AStarAdjust(target, AStarDrop(target, check));
+  source = AStarAdjustEndpoint(source, check);
+  target = AStarAdjustEndpoint(target, check);
 
   let best: AStarNode | null = null;
   const map: Map<int, AStarNode> = new Map();

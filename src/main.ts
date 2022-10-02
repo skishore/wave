@@ -225,9 +225,11 @@ const runPhysics = (env: TypedEnv, dt: number, state: PhysicsState) => {
     return !env.registry.solid[block];
   };
 
-  const [x, y, z] = state.min;
-  const block = env.world.getBlock(
-      int(Math.floor(x)), int(Math.floor(y)), int(Math.floor(z)));
+  const {min, max} = state;
+  const x = int(Math.floor((min[0] + max[0]) / 2));
+  const y = int(Math.floor(min[1]));
+  const z = int(Math.floor((min[2] + max[2]) / 2));
+  const block = env.world.getBlock(x, y, z);
   state.inFluid = block !== kEmptyBlock;
 
   const drag = state.inFluid ? 2 : 0;
@@ -556,9 +558,10 @@ const runInputs = (env: TypedEnv, id: EntityId) => {
   if (inputs.call || Math.random() < 0.25) {
     const body = env.physics.get(id);
     if (body) {
-      const x = int(Math.floor((body.min[0] + body.max[0]) / 2));
-      const y = int(Math.floor((body.min[1] + body.max[1]) / 2));
-      const z = int(Math.floor((body.min[2] + body.max[2]) / 2));
+      const {min, max} = body;
+      const x = int(Math.floor((min[0] + max[0]) / 2));
+      const y = int(Math.floor(min[1]));
+      const z = int(Math.floor((min[2] + max[2]) / 2));
       env.pathing.each(other => other.target = [x, y, z]);
     }
     inputs.call = false;
@@ -662,13 +665,15 @@ const findPath = (env: TypedEnv, state: PathingState,
     if (hasDirectPath(env, last, full[i])) continue;
     result.push(full[i - 1]);
   }
-  if (full.length > 1) result.push(full[full.length - 1]);
-  result.shift();
+  if (full.length > 1) {
+    result.push(full[full.length - 1]);
+    result.shift();
+  }
 
   state.path = result;
   state.path_index = 0;
   state.target = null;
-  //console.log(state.path);
+  //console.log(JSON.stringify(state.path));
 };
 
 const PIDController = (error: number, derror: number): number => {
@@ -685,7 +690,7 @@ const followPath = (env: TypedEnv, state: PathingState,
   const node = path[state.path_index];
   const E = state.path_index + 1 === path.length
     ? 0.4 * (1 - (body.max[0] - body.min[0]))
-    : -0.4;
+    : -0.4 * (body.max[0] - body.min[0]);
   if (node[0] + E <= body.min[0] && body.max[0] <= node[0] + 1 - E &&
       node[1] + 0 <= body.min[1] && body.min[1] <= node[1] + 1 - 0 &&
       node[2] + E <= body.min[2] && body.max[2] <= node[2] + 1 - E) {
@@ -714,7 +719,7 @@ const followPath = (env: TypedEnv, state: PathingState,
   const grounded = body.resting[1] < 0;
   if (grounded) movement._jumped = false;
   movement.jumping = (() => {
-    if (node[1] > body.min[1]) return true;
+    if (cur[1] > body.min[1]) return true;
     if (!grounded) return false;
 
     const x = int(Math.floor(cx));
