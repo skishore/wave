@@ -553,7 +553,7 @@ const runInputs = (env: TypedEnv, id: EntityId) => {
   }
 
   // Call any followers.
-  if (inputs.call || Math.random() < 1 / 4) {
+  if (inputs.call || Math.random() < 0.25) {
     const body = env.physics.get(id);
     if (body) {
       const x = int(Math.floor((body.min[0] + body.max[0]) / 2));
@@ -671,10 +671,8 @@ const findPath = (env: TypedEnv, state: PathingState,
   //console.log(state.path);
 };
 
-const PIDController =
-    (error: number, derror: number, grounded: boolean): number => {
-  const dfactor = grounded ? 0.05 : 0.10;
-  return 1.00 * error + dfactor * derror;
+const PIDController = (error: number, derror: number): number => {
+  return 10.00 * error + 0.50 * derror;
 };
 
 const followPath = (env: TypedEnv, state: PathingState,
@@ -687,7 +685,7 @@ const followPath = (env: TypedEnv, state: PathingState,
   const node = path[state.path_index];
   const E = state.path_index + 1 === path.length
     ? 0.4 * (1 - (body.max[0] - body.min[0]))
-    : 0;
+    : -0.4;
   if (node[0] + E <= body.min[0] && body.max[0] <= node[0] + 1 - E &&
       node[1] + 0 <= body.min[1] && body.min[1] <= node[1] + 1 - 0 &&
       node[2] + E <= body.min[2] && body.max[2] <= node[2] + 1 - E) {
@@ -702,14 +700,18 @@ const followPath = (env: TypedEnv, state: PathingState,
   const dx = cur[0] + 0.5 - cx;
   const dz = cur[2] + 0.5 - cz;
 
-  const grounded = body.resting[1] < 0;
-  let inputX = PIDController(dx, -body.vel[0], grounded);
-  let inputZ = PIDController(dz, -body.vel[2], grounded);
+  const penalty = body.inFluid ? movement.swimPenalty : 1;
+  const speed = penalty * movement.maxSpeed;
+  const inverse_speed = speed ? 1 / speed : 1;
+
+  let inputX = PIDController(dx, -body.vel[0]) * inverse_speed;
+  let inputZ = PIDController(dz, -body.vel[2]) * inverse_speed;
   const length = Math.sqrt(inputX * inputX + inputZ * inputZ);
   const normalization = length > 1 ? 1 / length : 1;
   movement.inputX = inputX * normalization;
   movement.inputZ = inputZ * normalization;
 
+  const grounded = body.resting[1] < 0;
   if (grounded) movement._jumped = false;
   movement.jumping = (() => {
     if (node[1] > body.min[1]) return true;
@@ -721,7 +723,7 @@ const followPath = (env: TypedEnv, state: PathingState,
     const fx = cx - Math.floor(cx);
     const fz = cz - Math.floor(cz);
 
-    const J = 0.25, K = 1 - J;
+    const J = 0.5, K = 1 - J;
     return (dx > 1  && fx > K && !solid(env, int(x + 1), y, z)) ||
            (dx < -1 && fx < J && !solid(env, int(x - 1), y, z)) ||
            (dz > 1  && fz > K && !solid(env, x, y, int(z + 1))) ||
@@ -900,7 +902,8 @@ const safeHeight = (position: PositionState): number => {
 };
 
 const addEntity = (env: TypedEnv, image: string, size: number,
-                   x: number, z: number, h: number, w: number): EntityId => {
+                   x: number, z: number, h: number, w: number,
+                   maxSpeed: number, moveForce: number): EntityId => {
   const entity = env.entities.addEntity();
   const position = env.position.add(entity);
   position.x = x + 0.5;
@@ -909,13 +912,16 @@ const addEntity = (env: TypedEnv, image: string, size: number,
   position.h = h;
   position.y = safeHeight(position);
 
+  const movement = env.movement.add(entity);
+  movement.maxSpeed = maxSpeed;
+  movement.moveForce = moveForce;
+
   const mesh = env.meshes.add(entity);
   const sprite = {url: `images/${image}.png`, size, x: int(32), y: int(32)};
   mesh.mesh = env.renderer.addSpriteMesh(sprite);
   mesh.columns = 3;
 
   env.physics.add(entity);
-  env.movement.add(entity);
   env.shadow.add(entity);
   return entity;
 };
@@ -924,11 +930,11 @@ const main = () => {
   const env = new TypedEnv('container');
 
   const size = 1.5;
-  const player = addEntity(env, 'player', size, 1, 1, 1.6, 0.8);
+  const player = addEntity(env, 'player', size, 1, 1, 1.6, 0.8, 10, 40);
   env.inputs.add(player);
   env.target.add(player);
 
-  const follower = addEntity(env, 'follower', size, 1, 1, 0.8, 0.8);
+  const follower = addEntity(env, 'follower', size, 1, 1, 0.8, 0.8, 15, 60);
   env.meshes.getX(follower).heading = 0;
   env.pathing.add(follower);
 
