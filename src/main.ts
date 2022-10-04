@@ -376,11 +376,18 @@ const handleRunning = (dt: number, state: MovementState,
 
 const generateParticles =
     (env: TypedEnv, block: BlockId, x: int, y: int, z: int, side: int) => {
-  const adjusted = side === 2 || side === 3 ? 0 : side;
-  const material = env.registry.getBlockFaceMaterial(block, adjusted);
-  if (material === kNoMaterial) return;
-  const data = env.registry.getMaterialData(material);
-  if (!data.texture) return;
+  const texture = (() => {
+    const sprite = env.registry.getBlockSprite(block);
+    if (sprite) {
+      const {url, x, y, w, h} = sprite;
+      return {alphaTest: true, sparkle: false, url, x, y, w, h};
+    }
+    const adjusted = side === 2 || side === 3 ? 0 : side;
+    const material = env.registry.getBlockFaceMaterial(block, adjusted);
+    if (material === kNoMaterial) return;
+    return env.registry.getMaterialData(material).texture;
+  })();
+  if (!texture) return;
 
   const count = Math.min(kNumParticles, kMaxNumParticles - env.particles);
   env.particles += count;
@@ -407,7 +414,7 @@ const generateParticles =
     const mesh = env.meshes.add(particle);
     const sprite = {url: 'images/frlg.png', size, x: int(16), y: int(16)};
     mesh.mesh = env.renderer.addSpriteMesh(sprite);
-    mesh.mesh.setFrame(int(data.texture.x + 16 * data.texture.y));
+    mesh.mesh.setFrame(int(texture.x + 16 * texture.y));
 
     const epsilon = 0.01;
     const s = Math.floor(16 * (1 - side) * Math.random()) / 16;
@@ -954,7 +961,6 @@ const main = () => {
   registry.addMaterialOfColor('blue', [0.1, 0.1, 0.4, 0.6], true);
   registry.addMaterialOfTexture(
     'water', texture(13, 12, false, true), [1, 1, 1, 0.8], true);
-  registry.addMaterialOfTexture('leaves', texture(4, 3, true));
   const textures: [string, int, int][] = [
     ['bedrock', 1, 1],
     ['dirt', 2, 0],
@@ -974,7 +980,7 @@ const main = () => {
     bedrock: registry.addBlock(['bedrock'], true),
     dirt:    registry.addBlock(['dirt'], true),
     grass:   registry.addBlock(['grass', 'dirt', 'grass-side'], true),
-    leaves:  registry.addBlock(['leaves'], true),
+    leaves:  registry.addBlockSprite(texture(4, 3), true),
     rock:    registry.addBlock(['rock'], true),
     sand:    registry.addBlock(['sand'], true),
     snow:    registry.addBlock(['snow'], true),

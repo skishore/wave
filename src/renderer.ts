@@ -1578,5 +1578,5 @@ class Renderer {
 
 //////////////////////////////////////////////////////////////////////////////
 
-export {kShadowAlpha, Geometry, Renderer, Texture};
+export {kShadowAlpha, Geometry, Renderer, Sprite, Texture};
 export {IMesh as Mesh, IShadowMesh as ShadowMesh, ISpriteMesh as SpriteMesh, IVoxelMesh as VoxelMesh};

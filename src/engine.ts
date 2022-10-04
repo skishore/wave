@@ -1,7 +1,7 @@
 import {assert, drop, int, nonnull} from './base.js';
 import {Color, Tensor2, Tensor3, Vec3} from './base.js';
 import {EntityComponentSystem} from './ecs.js';
-import {Renderer, Texture, VoxelMesh} from './renderer.js';
+import {Renderer, Texture, SpriteMesh, VoxelMesh} from './renderer.js';
 import {TerrainMesher} from './mesher.js';
 import {kSweepResolution, sweep} from './sweep.js';
 
@@ -139,6 +139,14 @@ interface Material {
   textureIndex: int,
 };
 
+interface BlockSprite {
+  url: string,
+  x: int,
+  y: int,
+  w: int,
+  h: int,
+};
+
 const kBlack: Color = [0, 0, 0, 1];
 const kWhite: Color = [1, 1, 1, 1];
 
@@ -151,6 +159,7 @@ class Registry {
   opaque: boolean[];
   solid: boolean[];
   private faces: MaybeMaterialId[];
+  private sprites: (BlockSprite | null)[];
   private materials: Material[];
   private ids: Map<string, MaterialId>;
 
@@ -161,6 +170,7 @@ class Registry {
     for (let i = 0; i < 12; i++) {
       this.faces.push(kNoMaterial);
     }
+    this.sprites = [null, null];
     this.materials = [];
     this.ids = new Map();
   }
@@ -197,6 +207,16 @@ class Registry {
 
     const result = this.opaque.length as BlockId;
     this.opaque.push(opaque);
+    this.sprites.push(null);
+    this.solid.push(solid);
+    return result;
+  }
+
+  addBlockSprite(sprite: BlockSprite, solid: boolean): BlockId {
+    const result = this.opaque.length as BlockId;
+    for (let i = 0; i < 6; i++) this.faces.push(kNoMaterial);
+    this.sprites.push(sprite);
+    this.opaque.push(false);
     this.solid.push(solid);
     return result;
   }
@@ -213,6 +233,10 @@ class Registry {
   // faces has 6 elements for each block type: [+x, -x, +y, -y, +z, -z]
   getBlockFaceMaterial(id: BlockId, face: int): MaybeMaterialId {
     return this.faces[id * 6 + face];
+  }
+
+  getBlockSprite(id: BlockId): BlockSprite | null {
+    return this.sprites[id];
   }
 
   getMaterialData(id: MaterialId): Material {
@@ -644,6 +668,7 @@ class Chunk {
   private dirty: boolean = false;
   private ready: boolean = false;
   private neighbors: int = 0;
+  private sprites: Map<int, SpriteMesh>;
   private solid: VoxelMesh | null = null;
   private water: VoxelMesh | null = null;
   private world: World;
@@ -656,6 +681,7 @@ class Chunk {
     this.cx = cx;
     this.cz = cz;
     this.world = world;
+    this.sprites = new Map();
     this.voxels = new Tensor3(kChunkWidth, kWorldHeight, kChunkWidth);
     this.heightmap = new Tensor2(kChunkWidth, kChunkWidth);
     this.light_map = new Tensor2(kChunkWidth, kChunkWidth);
@@ -730,6 +756,7 @@ class Chunk {
 
   remeshChunk(): void {
     assert(this.dirty);
+    this.remeshSprites();
     this.remeshTerrain();
     this.dirty = false;
   }
@@ -780,6 +807,10 @@ class Chunk {
   }
 
   private dropMeshes(): void {
+    const sprites = this.sprites;
+    for (const sprite of sprites.values()) sprite.dispose();
+    sprites.clear();
+
     if (this.hasMesh()) {
       this.world.frontier.markDirty(0);
     }
@@ -802,6 +833,37 @@ class Chunk {
     assert(this.neighbors < 4);
     this.neighbors++;
     this.ready = this.checkReady();
+  }
+
+  private remeshSprites(): void {
+    const {equilevels, sprites, voxels, world} = this;
+    const {registry, renderer} = world;
+    const {data, stride} = voxels;
+
+    const bx = this.cx << kChunkBits;
+    const bz = this.cz << kChunkBits;
+
+    for (const sprite of sprites.values()) sprite.dispose();
+    sprites.clear();
+
+    assert(stride[1] === 1);
+    for (let y = int(0); y < kWorldHeight; y++) {
+      const block = data[y] as BlockId;
+      if (equilevels[y] && !registry.getBlockSprite(block)) continue;
+      for (let x = int(0); x < kChunkWidth; x++) {
+        for (let z = int(0); z < kChunkWidth; z++) {
+          const index = voxels.index(x, y, z);
+          const sprite = registry.getBlockSprite(data[index] as BlockId);
+          if (!sprite) continue;
+
+          const hack = {url: sprite.url, size: 1, x: sprite.w, y: sprite.h};
+          const mesh = renderer.addSpriteMesh(hack);
+          mesh.setFrame(int(sprite.x + sprite.w * sprite.y));
+          mesh.setPosition(bx + x + 0.5, y, bz + z + 0.5);
+          this.sprites.set(index, mesh);
+        }
+      }
+    }
   }
 
   private remeshTerrain(): void {
