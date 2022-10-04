@@ -1,6 +1,6 @@
 import {assert, int, nonnull, Tensor3, Vec3} from './base.js';
 import {BlockId, Column, Env} from './engine.js';
-import {kChunkWidth, kEmptyBlock, kWorldHeight} from './engine.js';
+import {kChunkWidth, kEmptyBlock, kNoMaterial, kWorldHeight} from './engine.js';
 import {Component, ComponentState, ComponentStore} from './ecs.js';
 import {EntityId, kNoEntity} from './ecs.js';
 import {AStar, Check, Point as AStarPoint} from './pathing.js';
@@ -378,6 +378,7 @@ const generateParticles =
     (env: TypedEnv, block: BlockId, x: int, y: int, z: int, side: int) => {
   const adjusted = side === 2 || side === 3 ? 0 : side;
   const material = env.registry.getBlockFaceMaterial(block, adjusted);
+  if (material === kNoMaterial) return;
   const data = env.registry.getMaterialData(material);
   if (!data.texture) return;
 

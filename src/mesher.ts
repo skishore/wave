@@ -6,11 +6,12 @@ import {kShadowAlpha, Geometry, Renderer, Texture, VoxelMesh} from './renderer.j
 type Mesh = VoxelMesh | null;
 type BlockId = int & {__type__: 'BlockId'};
 type MaterialId = int & {__type__: 'MaterialId'};
+type MaybeMaterialId = MaterialId | 0;
 
 // A frontier heightmap has a (tile, height) for each (x, z) pair.
 const kHeightmapFields = 2;
 
-const kNoMaterial = 0 as MaterialId;
+const kNoMaterial = 0 as 0;
 const kEmptyBlock = 0 as BlockId;
 const kSentinel   = 1 << 30;
 
@@ -24,7 +25,7 @@ interface Material {
 interface Registry {
   solid: boolean[];
   opaque: boolean[];
-  getBlockFaceMaterial(id: BlockId, face: int): MaterialId;
+  getBlockFaceMaterial(id: BlockId, face: int): MaybeMaterialId;
   getMaterialData(id: MaterialId): Material;
 };
 
@@ -78,7 +79,7 @@ const kHighlightMaterial: Material = {
 class TerrainMesher {
   private solid: boolean[];
   private opaque: boolean[];
-  private getBlockFaceMaterial: (id: BlockId, face: int) => MaterialId;
+  private getBlockFaceMaterial: (id: BlockId, face: int) => MaybeMaterialId;
   private getMaterialData: (id: MaterialId) => Material;
   private renderer: Renderer;
 
@@ -431,8 +432,9 @@ class TerrainMesher {
     const base_y = pos[1];
     const base_z = pos[2];
     const water = voxels.get(int(base_x + 1), int(base_y), int(base_z + 1));
-    const sides = this.getBlockFaceMaterial(water as BlockId, 0);
-    const material = this.getMaterialData(sides);
+    const id = this.getBlockFaceMaterial(water as BlockId, 0);
+    if (id === kNoMaterial) return;
+    const material = this.getMaterialData(id);
 
     const patch = (x: int, z: int, face: int): boolean => {
       const ax = int(base_x + x + 1);
@@ -524,7 +526,10 @@ class TerrainMesher {
         const offset = kHeightmapFields * (x + z * sx);
         const block  = heightmap[offset + 0] as BlockId;
         const height = heightmap[offset + 1];
-        if (block === kEmptyBlock || (block & kSentinel)) continue;
+        if (block & kSentinel) continue;
+
+        const id = this.getBlockFaceMaterial(block, 2);
+        if (id === kNoMaterial) continue;
 
         const lx = sx - x, lz = sz - z;
         let w = 1, h = 1;
@@ -543,12 +548,8 @@ class TerrainMesher {
           }
         }
 
-        const d = 1;
-        const face = int(2 * d);
-        const id = this.getBlockFaceMaterial(block, face);
-        const material = this.getMaterialData(id);
-
         Vec3.set(kTmpPos, x * scale, height, z * scale);
+        const material = this.getMaterialData(id);
         const sw = scale * w, sh = scale * h;
         const wave = material.liquid ? 0b1111 : 0;
         this.addQuad(geo, material, 1, 0, 1, wave, 1, sw, sh, kTmpPos);
@@ -582,7 +583,13 @@ class TerrainMesher {
         for (let j = 0; j < lj; j++, offset += sj) {
           const block  = heightmap[offset + 0] as BlockId;
           const height = heightmap[offset + 1];
-          if (block === kEmptyBlock) continue;
+
+          // We could use the material at the side of the block with:
+          //  const face = 2 * d + ((1 - dir) >> 1);
+          //
+          // But doing so muddles grass, etc. textures at a distance.
+          const id = this.getBlockFaceMaterial(block, 2);
+          if (id === kNoMaterial) continue;
 
           const neighbor = heightmap[offset + 1 + di];
           if (neighbor >= height) continue;
@@ -602,11 +609,6 @@ class TerrainMesher {
           const hi = d === 0 ? scale * w : height - neighbor;
           Vec3.set(kTmpPos, px, neighbor, pz);
 
-          // We could use the material at the side of the block with:
-          //  const face = 2 * d + ((1 - dir) >> 1);
-          //
-          // But doing so muddles grass, etc. textures at a distance.
-          const id = this.getBlockFaceMaterial(block, 2);
           const material = this.getMaterialData(id);
           const wave = material.liquid ? 0b1111 : 0;
           this.addQuad(geo, material, dir, ao, 1, wave, d, wi, hi, kTmpPos);

@@ -130,6 +130,7 @@ class Container {
 
 type BlockId = int & {__type__: 'BlockId'};
 type MaterialId = int & {__type__: 'MaterialId'};
+type MaybeMaterialId = MaterialId | 0;
 
 interface Material {
   color: Color,
@@ -141,7 +142,7 @@ interface Material {
 const kBlack: Color = [0, 0, 0, 1];
 const kWhite: Color = [1, 1, 1, 1];
 
-const kNoMaterial = 0 as MaterialId;
+const kNoMaterial = 0 as 0;
 
 const kEmptyBlock = 0 as BlockId;
 const kUnknownBlock = 1 as BlockId;
@@ -149,7 +150,7 @@ const kUnknownBlock = 1 as BlockId;
 class Registry {
   opaque: boolean[];
   solid: boolean[];
-  private faces: MaterialId[];
+  private faces: MaybeMaterialId[];
   private materials: Material[];
   private ids: Map<string, MaterialId>;
 
@@ -210,7 +211,7 @@ class Registry {
   }
 
   // faces has 6 elements for each block type: [+x, -x, +y, -y, +z, -z]
-  getBlockFaceMaterial(id: BlockId, face: int): MaterialId {
+  getBlockFaceMaterial(id: BlockId, face: int): MaybeMaterialId {
     return this.faces[id * 6 + face];
   }
 
@@ -1491,7 +1492,11 @@ class Env {
 
   private getRenderBlock(x: int, y: int, z: int): BlockId {
     const result = this.world.getBlock(x, y, z);
-    return result === kUnknownBlock ? kEmptyBlock : result;
+    if (result === kEmptyBlock || result === kUnknownBlock ||
+        this.registry.getBlockFaceMaterial(result, 3) === kNoMaterial) {
+      return kEmptyBlock;
+    }
+    return result;
   }
 
   private setSafeZoomDistance(): void {
@@ -1605,7 +1610,9 @@ class Env {
 
     if (new_block !== old_block) {
       const material = this.registry.getBlockFaceMaterial(new_block, 3);
-      const color = this.registry.getMaterialData(material).color;
+      const color = material !== kNoMaterial
+        ? this.registry.getMaterialData(material).color
+        : kWhite;
       this.cameraColor = color.slice() as Color;
       this.cameraAlpha = color[3];
     }
@@ -1627,4 +1634,4 @@ class Env {
 //////////////////////////////////////////////////////////////////////////////
 
 export {BlockId, MaterialId, Column, Env};
-export {kChunkWidth, kEmptyBlock, kWorldHeight};
+export {kChunkWidth, kEmptyBlock, kNoMaterial, kWorldHeight};
