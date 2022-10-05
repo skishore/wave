@@ -450,7 +450,6 @@ class TextureAtlas {
 
 interface Sprite {
   url: string,
-  size: number,
   x: int,
   y: int,
 };
@@ -488,7 +487,7 @@ class SpriteAtlas {
     const w = image.width;
     const h = image.height;
     if (w % x !== 0 || h % y !== 0) {
-      throw new Error(`({w} x ${h}) image cannot fit (${x} x ${y}) frames.`);
+      throw new Error(`(${w} x ${h}) image cannot fit (${x} x ${y}) frames.`);
     }
     const cols = w / x, rows = h / y;
     const frames = cols * rows;
@@ -1025,16 +1024,16 @@ class VoxelMesh extends Mesh<VoxelShader> {
 
 class VoxelManager implements MeshManager<VoxelShader> {
   gl: WebGL2RenderingContext;
+  allocator: BufferAllocator;
   shader: VoxelShader;
   atlas: TextureAtlas;
-  allocator: BufferAllocator;
   private phases: VoxelMesh[][];
 
-  constructor(gl: WebGL2RenderingContext) {
+  constructor(gl: WebGL2RenderingContext, allocator: BufferAllocator) {
     this.gl = gl;
+    this.allocator = allocator;
     this.shader = new VoxelShader(gl);
     this.atlas = new TextureAtlas(gl);
-    this.allocator = new BufferAllocator(gl);
     this.phases = [[], [], []];
   }
 
@@ -1079,6 +1078,245 @@ class VoxelManager implements MeshManager<VoxelShader> {
       if (phase === 1) gl.depthMask(true);
       gl.enable(gl.CULL_FACE);
       gl.disable(gl.BLEND);
+    }
+
+    stats.drawn += drawn;
+    stats.total += meshes.length;
+  }
+};
+
+//////////////////////////////////////////////////////////////////////////////
+
+const kInstancedShader = `
+  uniform vec3 u_origin;
+  uniform vec4 u_billboard;
+  uniform mat4 u_transform;
+  in vec3 a_pos;
+  out vec2 v_uv;
+
+  void main() {
+    int index = gl_VertexID + (gl_VertexID > 0 ? gl_InstanceID & 1 : 0);
+
+    float w = float(((index + 1) & 3) >> 1);
+    float h = float(((index + 0) & 3) >> 1);
+    v_uv = vec2(w, 1.0 - h);
+
+    float y = 0.5;
+    vec3 v0 = vec3(w - 0.5, h, 0.0);
+    vec3 v1 = vec3(v0[0],
+                   (v0[1] - y) * u_billboard[2] + y,
+                   (v0[1] - y) * u_billboard[3]);
+    vec3 v2 = vec3(v1[0] * u_billboard[0] - v1[2] * u_billboard[1],
+                   v1[1],
+                   v1[0] * u_billboard[1] + v1[2] * u_billboard[0]);
+    gl_Position = u_transform * vec4(v2 + (a_pos - u_origin), 1.0);
+  }
+#split
+  uniform float u_frame;
+  uniform sampler2DArray u_texture;
+  in vec2 v_uv;
+  out vec4 o_color;
+
+  void main() {
+    o_color = texture(u_texture, vec3(v_uv, u_frame));
+    if (o_color[3] < 0.5) discard;
+  }
+`;
+
+class InstancedShader extends Shader {
+  u_frame:     WebGLUniformLocation | null;
+  u_origin:    WebGLUniformLocation | null;
+  u_billboard: WebGLUniformLocation | null;
+  u_transform: WebGLUniformLocation | null;
+
+  a_pos: number | null;
+
+  constructor(gl: WebGL2RenderingContext) {
+    super(gl, kInstancedShader);
+    this.u_frame     = this.getUniformLocation('u_frame');
+    this.u_origin    = this.getUniformLocation('u_origin');
+    this.u_billboard = this.getUniformLocation('u_billboard');
+    this.u_transform = this.getUniformLocation('u_transform');
+
+    this.a_pos = this.getAttribLocation('a_pos');
+  }
+};
+
+class InstancedMesh extends Mesh<InstancedShader> {
+  static Stride: int = 3;
+
+  private manager: InstancedManager;
+  private texture: WebGLTexture;
+  readonly frame: int;
+  readonly sprite: Sprite;
+
+  private freeList: int[];
+  private buffer: Buffer | null = null;
+  private data: Float32Array | null = null;
+  private vao: WebGLVertexArrayObject | null = null;
+  private dirty = false;
+  private count = 0;
+
+  constructor(manager: InstancedManager, meshes: InstancedMesh[],
+              frame: int, sprite: Sprite) {
+    super(manager, meshes);
+    this.manager = manager;
+    this.texture = manager.atlas.addSprite(sprite);
+    this.freeList = [];
+    this.frame = frame;
+    this.sprite = sprite;
+  }
+
+  draw(transform: Mat4, stats: Stats): boolean {
+    const {data, gl, shader} = this;
+    if (!data) return false;
+
+    this.prepareBuffers();
+
+    const stride = InstancedMesh.Stride;
+    assert(data.length % stride === 0);
+    const n = int(data.length / stride);
+
+    gl.bindVertexArray(this.vao);
+    gl.bindTexture(TEXTURE_2D_ARRAY, this.texture);
+    gl.uniform1f(shader.u_frame, this.frame);
+    gl.drawArraysInstanced(gl.TRIANGLES, 0, 3, n * 2);
+
+    stats.drawnInstances += this.count;
+    stats.totalInstances += n;
+    return true;
+  }
+
+  addInstance(x: number, y: number, z: number): int {
+    const stride = InstancedMesh.Stride;
+    if (this.freeList.length === 0) {
+      const old_length = this.data ? this.data.length : 0;
+      const new_length = Math.max(2 * old_length, 4 * stride);
+      assert(old_length % stride === 0);
+      for (let i = old_length; i < new_length; i += stride) {
+        this.freeList.push(int(i / stride));
+      }
+      const data = new Float32Array(new_length);
+      if (this.data) data.set(this.data);
+      this.destroyBuffers();
+      this.data = data;
+    }
+
+    assert(this.freeList.length > 0);
+    const result = this.freeList.pop()!;
+
+    const offset = result * stride;
+    const data = nonnull(this.data);
+    data[offset + 0] = x;
+    data[offset + 1] = y;
+    data[offset + 2] = z;
+    this.dirty = true;
+
+    this.count++;
+    return result;
+  }
+
+  removeInstance(index: int): void {
+    const offset = index * InstancedMesh.Stride;
+    const data = nonnull(this.data);
+    data[offset + 0] = 0;
+    data[offset + 1] = 0;
+    data[offset + 2] = 0;
+    this.dirty = true;
+
+    this.count--;
+    this.freeList.push(index);
+  }
+
+  private destroyBuffers() {
+    const {buffer, gl, vao} = this;
+    gl.deleteVertexArray(vao);
+    if (buffer) this.manager.allocator.free(buffer);
+    this.vao = null;
+    this.buffer = null;
+    this.dirty = true;
+  }
+
+  private prepareBuffers() {
+    const {gl, buffer, shader} = this;
+
+    if (this.dirty) {
+      const data = nonnull(this.data);
+      if (buffer) {
+        gl.bindBuffer(ARRAY_BUFFER, buffer.buffer);
+        gl.bufferSubData(ARRAY_BUFFER, 0, data, 0, data.length);
+      } else {
+        this.buffer = this.manager.allocator.alloc(data);
+      }
+      this.dirty = false;
+    }
+
+    if (this.vao) return;
+    this.vao = nonnull(gl.createVertexArray());
+    gl.bindVertexArray(this.vao);
+    gl.bindBuffer(ARRAY_BUFFER, nonnull(this.buffer).buffer);
+    this.prepareAttribute(shader.a_pos, 3, 0);
+  }
+
+  private prepareAttribute(
+      location: number | null, size: int, offset_in_floats: int): void {
+    if (location === null) return;
+    const gl = this.gl;
+    const offset = 4 * offset_in_floats;
+    const stride = 4 * InstancedMesh.Stride;
+    gl.enableVertexAttribArray(location);
+    gl.vertexAttribPointer(location, size, gl.FLOAT, false, stride, offset);
+    gl.vertexAttribDivisor(location, 2);
+  }
+};
+
+class InstancedManager implements MeshManager<InstancedShader> {
+  gl: WebGL2RenderingContext;
+  allocator: BufferAllocator;
+  atlas: SpriteAtlas;
+  shader: InstancedShader;
+  private billboard: Float32Array;
+  private origin_32: Float32Array;
+  private meshes: InstancedMesh[];
+  private origin: Vec3;
+
+  constructor(gl: WebGL2RenderingContext,
+              allocator: BufferAllocator, atlas: SpriteAtlas) {
+    this.gl = gl;
+    this.allocator = allocator;
+    this.atlas = atlas;
+    this.shader = new InstancedShader(gl);
+    this.billboard = new Float32Array(4);
+    this.origin_32 = new Float32Array(3);
+    this.meshes = [];
+    this.origin = Vec3.create();
+  }
+
+  addMesh(frame: int, sprite: Sprite): InstancedMesh {
+    return new InstancedMesh(this, this.meshes, frame, sprite);
+  }
+
+  render(camera: Camera, planes: CullingPlane[], stats: Stats): void {
+    const {billboard, gl, meshes, origin, origin_32, shader} = this;
+    let drawn = 0;
+
+    origin_32[0] = origin[0] = Math.floor(camera.position[0]);
+    origin_32[1] = origin[1] = Math.floor(camera.position[1]);
+    origin_32[2] = origin[2] = Math.floor(camera.position[2]);
+    const transform = camera.getTransformFor(origin);
+
+    shader.bind();
+    const pitch  = -0.33 * camera.pitch;
+    billboard[0] = Math.cos(camera.heading);
+    billboard[1] = -Math.sin(camera.heading);
+    billboard[2] = Math.cos(pitch);
+    billboard[3] = -Math.sin(pitch);
+    gl.uniform3fv(shader.u_origin, origin_32);
+    gl.uniform4fv(shader.u_billboard, billboard);
+    gl.uniformMatrix4fv(shader.u_transform, false, transform);
+
+    for (const mesh of meshes) {
+      if (mesh.draw(transform, stats)) drawn++;
     }
 
     stats.drawn += drawn;
@@ -1161,13 +1399,14 @@ class SpriteMesh extends Mesh<SpriteShader> {
   private stuv: Float32Array;
   private texture: WebGLTexture;
 
-  constructor(manager: SpriteManager, meshes: SpriteMesh[], sprite: Sprite) {
+  constructor(manager: SpriteManager, meshes: SpriteMesh[],
+              size: number, sprite: Sprite) {
     super(manager, meshes);
     this.frame = 0;
     this.light = 1;
     this.manager = manager;
-    this.size = sprite.size;
-    this.height = sprite.size;
+    this.size = size;
+    this.height = size;
     this.stuv = new Float32Array(4);
     this.stuv[2] = 1; this.stuv[3] = 1;
     this.texture = manager.atlas.addSprite(sprite);
@@ -1216,23 +1455,23 @@ class SpriteMesh extends Mesh<SpriteShader> {
 
 class SpriteManager implements MeshManager<SpriteShader> {
   gl: WebGL2RenderingContext;
-  shader: SpriteShader;
   atlas: SpriteAtlas;
+  shader: SpriteShader;
   private billboard: Float32Array;
   private bounds: Vec3[];
   private meshes: SpriteMesh[];
 
-  constructor(gl: WebGL2RenderingContext) {
+  constructor(gl: WebGL2RenderingContext, atlas: SpriteAtlas) {
     this.gl = gl;
+    this.atlas = atlas;
     this.shader = new SpriteShader(gl);
-    this.atlas = new SpriteAtlas(gl);
     this.billboard = new Float32Array(4);
     this.bounds = Array(8).fill(null).map(() => Vec3.create());
     this.meshes = [];
   }
 
-  addMesh(sprite: Sprite): SpriteMesh {
-    return new SpriteMesh(this, this.meshes, sprite);
+  addMesh(size: number, sprite: Sprite): SpriteMesh {
+    return new SpriteMesh(this, this.meshes, size, sprite);
   }
 
   getBounds(size: number): Vec3[] {
@@ -1248,10 +1487,10 @@ class SpriteManager implements MeshManager<SpriteShader> {
   }
 
   render(camera: Camera, planes: CullingPlane[], stats: Stats): void {
-    const {billboard, gl, shader} = this;
+    const {billboard, gl, meshes, shader} = this;
     let drawn = 0;
 
-    // All sprite meshes are alpha-tested for now.
+    // All sprite meshes are alpha-tested, for now.
     shader.bind();
     const pitch  = -0.33 * camera.pitch;
     billboard[0] = Math.cos(camera.heading);
@@ -1259,12 +1498,13 @@ class SpriteManager implements MeshManager<SpriteShader> {
     billboard[2] = Math.cos(pitch);
     billboard[3] = -Math.sin(pitch);
     gl.uniform4fv(shader.u_billboard, billboard);
-    for (const mesh of this.meshes) {
+
+    for (const mesh of meshes) {
       if (mesh.draw(camera, planes)) drawn++;
     }
 
     stats.drawn += drawn;
-    stats.total += this.meshes.length;
+    stats.total += meshes.length;
   }
 };
 
@@ -1370,21 +1610,21 @@ class ShadowManager implements MeshManager<ShadowShader> {
   }
 
   render(camera: Camera, planes: CullingPlane[], stats: Stats): void {
-    const {gl, shader} = this;
+    const {gl, meshes, shader} = this;
     let drawn = 0;
 
-    // All sprite meshes are alpha-blended.
+    // All shadow meshes are alpha-blended.
     shader.bind();
     gl.depthMask(false);
     gl.enable(gl.BLEND);
-    for (const mesh of this.meshes) {
+    for (const mesh of meshes) {
       if (mesh.draw(camera, planes)) drawn++;
     }
     gl.disable(gl.BLEND);
     gl.depthMask(true);
 
     stats.drawn += drawn;
-    stats.total += this.meshes.length;
+    stats.total += meshes.length;
   }
 };
 
@@ -1471,11 +1711,23 @@ class ScreenOverlay {
 
 //////////////////////////////////////////////////////////////////////////////
 
-interface Stats { drawn: int; total: int; };
+interface Stats {
+  drawn: int,
+  total: int,
+  drawnInstances: int,
+  totalInstances: int,
+};
 
 interface IMesh {
   dispose: () => void,
   setPosition: (x: number, y: number, z: number) => void,
+};
+
+interface IInstancedMesh {
+  addInstance: (x: number, y: number, z: number) => int,
+  removeInstance: (index: int) => void,
+  readonly frame: int;
+  readonly sprite: Sprite;
 };
 
 interface IShadowMesh extends IMesh {
@@ -1500,6 +1752,7 @@ class Renderer {
   camera: Camera;
   private gl: WebGL2RenderingContext;
   private overlay: ScreenOverlay;
+  private instanced_manager: InstancedManager;
   private shadow_manager: ShadowManager;
   private sprite_manager: SpriteManager;
   private voxels_manager: VoxelManager;
@@ -1526,23 +1779,31 @@ class Renderer {
     gl.disable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
+    const allocator = new BufferAllocator(gl);
+    const atlas = new SpriteAtlas(gl);
+
     this.gl = gl;
     this.overlay = new ScreenOverlay(gl);
+    this.instanced_manager = new InstancedManager(gl, allocator, atlas);
     this.shadow_manager = new ShadowManager(gl);
-    this.sprite_manager = new SpriteManager(gl);
-    this.voxels_manager = new VoxelManager(gl);
+    this.sprite_manager = new SpriteManager(gl, atlas);
+    this.voxels_manager = new VoxelManager(gl, allocator);
   }
 
   addTexture(texture: Texture): int {
     return this.voxels_manager.atlas.addTexture(texture);
   }
 
+  addInstancedMesh(frame: int, sprite: Sprite): IInstancedMesh {
+    return this.instanced_manager.addMesh(frame, sprite);
+  }
+
   addShadowMesh(): IShadowMesh {
     return this.shadow_manager.addMesh();
   }
 
-  addSpriteMesh(sprite: Sprite): ISpriteMesh {
-    return this.sprite_manager.addMesh(sprite);
+  addSpriteMesh(size: number, sprite: Sprite): ISpriteMesh {
+    return this.sprite_manager.addMesh(size, sprite);
   }
 
   addVoxelMesh(geo: Geometry, phase: int): IVoxelMesh {
@@ -1559,8 +1820,10 @@ class Renderer {
     const camera = this.camera;
     const planes = camera.getCullingPlanes();
 
-    const stats: Stats = {drawn: 0, total: 0};
+    const stats: Stats =
+        {drawn: 0, total: 0, drawnInstances: 0, totalInstances: 0};
     this.sprite_manager.render(camera, planes, stats);
+    this.instanced_manager.render(camera, planes, stats);
     this.voxels_manager.render(camera, planes, stats, overlay, move, wave, 0);
     this.voxels_manager.render(camera, planes, stats, overlay, move, wave, 1);
     this.shadow_manager.render(camera, planes, stats);
@@ -1568,7 +1831,8 @@ class Renderer {
     overlay.draw();
 
     return `${this.voxels_manager.allocator.stats()}\r\n` +
-           `Draw calls: ${stats.drawn} / ${stats.total}`;
+           `Draw calls: ${stats.drawn} / ${stats.total}\r\n` +
+           `Instances: ${stats.drawnInstances} / ${stats.totalInstances}`;
   }
 
   setOverlayColor(color: Color) {
@@ -1579,4 +1843,5 @@ class Renderer {
 //////////////////////////////////////////////////////////////////////////////
 
 export {kShadowAlpha, Geometry, Renderer, Sprite, Texture};
-export {IMesh as Mesh, IShadowMesh as ShadowMesh, ISpriteMesh as SpriteMesh, IVoxelMesh as VoxelMesh};
+export {IInstancedMesh as InstancedMesh, IShadowMesh as ShadowMesh,
+        ISpriteMesh as SpriteMesh, IVoxelMesh as VoxelMesh};

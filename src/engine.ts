@@ -1,7 +1,7 @@
 import {assert, drop, int, nonnull} from './base.js';
 import {Color, Tensor2, Tensor3, Vec3} from './base.js';
 import {EntityComponentSystem} from './ecs.js';
-import {Renderer, Texture, SpriteMesh, VoxelMesh} from './renderer.js';
+import {Renderer, Texture, InstancedMesh, VoxelMesh} from './renderer.js';
 import {TerrainMesher} from './mesher.js';
 import {kSweepResolution, sweep} from './sweep.js';
 
@@ -159,7 +159,7 @@ class Registry {
   opaque: boolean[];
   solid: boolean[];
   private faces: MaybeMaterialId[];
-  private sprites: (BlockSprite | null)[];
+  private meshes: (InstancedMesh | null)[];
   private materials: Material[];
   private ids: Map<string, MaterialId>;
 
@@ -170,7 +170,7 @@ class Registry {
     for (let i = 0; i < 12; i++) {
       this.faces.push(kNoMaterial);
     }
-    this.sprites = [null, null];
+    this.meshes = [null, null];
     this.materials = [];
     this.ids = new Map();
   }
@@ -207,15 +207,15 @@ class Registry {
 
     const result = this.opaque.length as BlockId;
     this.opaque.push(opaque);
-    this.sprites.push(null);
     this.solid.push(solid);
+    this.meshes.push(null);
     return result;
   }
 
-  addBlockSprite(sprite: BlockSprite, solid: boolean): BlockId {
+  addBlockMesh(mesh: InstancedMesh, solid: boolean): BlockId {
     const result = this.opaque.length as BlockId;
     for (let i = 0; i < 6; i++) this.faces.push(kNoMaterial);
-    this.sprites.push(sprite);
+    this.meshes.push(mesh);
     this.opaque.push(false);
     this.solid.push(solid);
     return result;
@@ -235,8 +235,8 @@ class Registry {
     return this.faces[id * 6 + face];
   }
 
-  getBlockSprite(id: BlockId): BlockSprite | null {
-    return this.sprites[id];
+  getBlockMesh(id: BlockId): InstancedMesh | null {
+    return this.meshes[id];
   }
 
   getMaterialData(id: MaterialId): Material {
@@ -668,7 +668,7 @@ class Chunk {
   private dirty: boolean = false;
   private ready: boolean = false;
   private neighbors: int = 0;
-  private sprites: Map<int, SpriteMesh>;
+  private instances: Map<InstancedMesh, Map<int, int>>;
   private solid: VoxelMesh | null = null;
   private water: VoxelMesh | null = null;
   private world: World;
@@ -681,7 +681,7 @@ class Chunk {
     this.cx = cx;
     this.cz = cz;
     this.world = world;
-    this.sprites = new Map();
+    this.instances = new Map();
     this.voxels = new Tensor3(kChunkWidth, kWorldHeight, kChunkWidth);
     this.heightmap = new Tensor2(kChunkWidth, kChunkWidth);
     this.light_map = new Tensor2(kChunkWidth, kChunkWidth);
@@ -807,10 +807,7 @@ class Chunk {
   }
 
   private dropMeshes(): void {
-    const sprites = this.sprites;
-    for (const sprite of sprites.values()) sprite.dispose();
-    sprites.clear();
-
+    this.dropInstancedMeshes();
     if (this.hasMesh()) {
       this.world.frontier.markDirty(0);
     }
@@ -819,6 +816,14 @@ class Chunk {
     this.solid = null;
     this.water = null;
     this.dirty = true;
+  }
+
+  private dropInstancedMeshes(): void {
+    const instances = this.instances;
+    for (const [mesh, map] of instances.entries()) {
+      for (const index of map.values()) mesh.removeInstance(index);
+    }
+    instances.clear();
   }
 
   private notifyNeighborDisposed(): void {
@@ -836,31 +841,27 @@ class Chunk {
   }
 
   private remeshSprites(): void {
-    const {equilevels, sprites, voxels, world} = this;
+    this.dropInstancedMeshes();
+    const {equilevels, instances, voxels, world} = this;
     const {registry, renderer} = world;
     const {data, stride} = voxels;
 
     const bx = this.cx << kChunkBits;
     const bz = this.cz << kChunkBits;
 
-    for (const sprite of sprites.values()) sprite.dispose();
-    sprites.clear();
-
     assert(stride[1] === 1);
     for (let y = int(0); y < kWorldHeight; y++) {
       const block = data[y] as BlockId;
-      if (equilevels[y] && !registry.getBlockSprite(block)) continue;
+      if (equilevels[y] && !registry.getBlockMesh(block)) continue;
       for (let x = int(0); x < kChunkWidth; x++) {
         for (let z = int(0); z < kChunkWidth; z++) {
           const index = voxels.index(x, y, z);
-          const sprite = registry.getBlockSprite(data[index] as BlockId);
-          if (!sprite) continue;
+          const mesh = registry.getBlockMesh(data[index] as BlockId);
+          if (!mesh) continue;
 
-          const hack = {url: sprite.url, size: 1, x: sprite.w, y: sprite.h};
-          const mesh = renderer.addSpriteMesh(hack);
-          mesh.setFrame(int(sprite.x + sprite.w * sprite.y));
-          mesh.setPosition(bx + x + 0.5, y, bz + z + 0.5);
-          this.sprites.set(index, mesh);
+          if (!instances.get(mesh)) instances.set(mesh, new Map());
+          const map = instances.get(mesh)!;
+          map.set(index, mesh.addInstance(bx + x + 0.5, y, bz + z + 0.5));
         }
       }
     }

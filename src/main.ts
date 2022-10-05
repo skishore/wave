@@ -377,9 +377,10 @@ const handleRunning = (dt: number, state: MovementState,
 const generateParticles =
     (env: TypedEnv, block: BlockId, x: int, y: int, z: int, side: int) => {
   const texture = (() => {
-    const sprite = env.registry.getBlockSprite(block);
-    if (sprite) {
-      const {url, x, y, w, h} = sprite;
+    const mesh = env.registry.getBlockMesh(block);
+    if (mesh) {
+      const {frame, sprite: {url, x: w, y: h}} = mesh;
+      const x = frame % w, y = Math.floor(frame / w);
       return {alphaTest: true, sparkle: false, url, x, y, w, h};
     }
     const adjusted = side === 2 || side === 3 ? 0 : side;
@@ -396,11 +397,11 @@ const generateParticles =
     const particle = env.entities.addEntity();
     const position = env.position.add(particle);
 
-    const side = Math.floor(3 * Math.random() + 1) / 16;
-    position.x = x + (1 - side) * Math.random() + side / 2;
-    position.y = y + (1 - side) * Math.random() + side / 2;
-    position.z = z + (1 - side) * Math.random() + side / 2;
-    position.w = position.h = side;
+    const size = Math.floor(3 * Math.random() + 1) / 16;
+    position.x = x + (1 - size) * Math.random() + size / 2;
+    position.y = y + (1 - size) * Math.random() + size / 2;
+    position.z = z + (1 - size) * Math.random() + size / 2;
+    position.w = position.h = size;
 
     const kParticleSpeed = 8;
     const body = env.physics.add(particle);
@@ -410,16 +411,15 @@ const generateParticles =
     body.friction = 10;
     body.restitution = 0.5;
 
-    const size = position.h;
     const mesh = env.meshes.add(particle);
-    const sprite = {url: 'images/frlg.png', size, x: int(16), y: int(16)};
-    mesh.mesh = env.renderer.addSpriteMesh(sprite);
-    mesh.mesh.setFrame(int(texture.x + 16 * texture.y));
+    const sprite = {url: texture.url, x: texture.w, y: texture.h};
+    mesh.mesh = env.renderer.addSpriteMesh(size, sprite);
+    mesh.mesh.setFrame(int(texture.x + texture.y * texture.w));
 
     const epsilon = 0.01;
-    const s = Math.floor(16 * (1 - side) * Math.random()) / 16;
-    const t = Math.floor(16 * (1 - side) * Math.random()) / 16;
-    const uv = side - 2 * epsilon;
+    const s = Math.floor(16 * (1 - size) * Math.random()) / 16;
+    const t = Math.floor(16 * (1 - size) * Math.random()) / 16;
+    const uv = size - 2 * epsilon;
     mesh.mesh.setSTUV(s + epsilon, t + epsilon, uv, uv);
 
     const lifetime = env.lifetime.add(particle);
@@ -930,8 +930,8 @@ const addEntity = (env: TypedEnv, image: string, size: number,
   movement.moveForce = moveForce;
 
   const mesh = env.meshes.add(entity);
-  const sprite = {url: `images/${image}.png`, size, x: int(32), y: int(32)};
-  mesh.mesh = env.renderer.addSpriteMesh(sprite);
+  const sprite = {url: `images/${image}.png`, x: int(32), y: int(32)};
+  mesh.mesh = env.renderer.addSpriteMesh(size, sprite);
   mesh.columns = 3;
 
   env.physics.add(entity);
@@ -954,7 +954,13 @@ const main = () => {
   const texture = (x: int, y: int, alphaTest: boolean = false,
                    sparkle: boolean = false): Texture => {
     const url = 'images/frlg.png';
-    return {alphaTest, sparkle, url, x, y, w: int(16), h: int(16)};
+    return {alphaTest, sparkle, url, x, y, w: 16, h: 16};
+  };
+
+  const block = (x: int, y: int) => {
+    const url = 'images/frlg.png';
+    const frame = int(x + 16 * y);
+    return env.renderer.addInstancedMesh(frame, {url, x: 16, y: 16});
   };
 
   const registry = env.registry;
@@ -980,7 +986,7 @@ const main = () => {
     bedrock: registry.addBlock(['bedrock'], true),
     dirt:    registry.addBlock(['dirt'], true),
     grass:   registry.addBlock(['grass', 'dirt', 'grass-side'], true),
-    leaves:  registry.addBlockSprite(texture(4, 3), true),
+    leaves:  registry.addBlockMesh(block(4, 3), true),
     rock:    registry.addBlock(['rock'], true),
     sand:    registry.addBlock(['sand'], true),
     snow:    registry.addBlock(['snow'], true),
