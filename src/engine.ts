@@ -1,7 +1,7 @@
 import {assert, drop, int, nonnull} from './base.js';
 import {Color, Tensor2, Tensor3, Vec3} from './base.js';
 import {EntityComponentSystem} from './ecs.js';
-import {Renderer, Texture, InstancedMesh, VoxelMesh} from './renderer.js';
+import {InstancedMesh, Mesh, Renderer, Texture, VoxelMesh} from './renderer.js';
 import {TerrainMesher} from './mesher.js';
 import {kSweepResolution, sweep} from './sweep.js';
 
@@ -668,7 +668,7 @@ class Chunk {
   private dirty: boolean = false;
   private ready: boolean = false;
   private neighbors: int = 0;
-  private instances: Map<InstancedMesh, Map<int, int>>;
+  private instances: Map<int, Mesh>;
   private solid: VoxelMesh | null = null;
   private water: VoxelMesh | null = null;
   private world: World;
@@ -820,9 +820,7 @@ class Chunk {
 
   private dropInstancedMeshes(): void {
     const instances = this.instances;
-    for (const [mesh, map] of instances.entries()) {
-      for (const index of map.values()) mesh.removeInstance(index);
-    }
+    for (const mesh of instances.values()) mesh.dispose();
     instances.clear();
   }
 
@@ -859,9 +857,9 @@ class Chunk {
           const mesh = registry.getBlockMesh(data[index] as BlockId);
           if (!mesh) continue;
 
-          if (!instances.get(mesh)) instances.set(mesh, new Map());
-          const map = instances.get(mesh)!;
-          map.set(index, mesh.addInstance(bx + x + 0.5, y, bz + z + 0.5));
+          const item = mesh.addInstance();
+          item.setPosition(bx + x + 0.5, y, bz + z + 0.5);
+          instances.set(index, item);
         }
       }
     }

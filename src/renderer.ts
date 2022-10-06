@@ -1087,6 +1087,16 @@ class VoxelManager implements MeshManager<VoxelShader> {
 
 //////////////////////////////////////////////////////////////////////////////
 
+class Instance {
+  constructor(public mesh: InstancedMesh, public index: int) {}
+  dispose(): void {
+    this.mesh.removeInstance(this.index);
+  }
+  setPosition(x: number, y: number, z: number): void {
+    this.mesh.setInstancePosition(this.index, x, y, z);
+  }
+};
+
 const kInstancedShader = `
   uniform vec3 u_origin;
   uniform vec4 u_billboard;
@@ -1187,7 +1197,7 @@ class InstancedMesh extends Mesh<InstancedShader> {
     return true;
   }
 
-  addInstance(x: number, y: number, z: number): int {
+  addInstance(): Instance {
     const stride = InstancedMesh.Stride;
     if (this.freeList.length === 0) {
       const old_length = this.data ? this.data.length : 0;
@@ -1203,17 +1213,10 @@ class InstancedMesh extends Mesh<InstancedShader> {
     }
 
     assert(this.freeList.length > 0);
-    const result = this.freeList.pop()!;
-
-    const offset = result * stride;
-    const data = nonnull(this.data);
-    data[offset + 0] = x;
-    data[offset + 1] = y;
-    data[offset + 2] = z;
-    this.dirty = true;
-
+    const index = this.freeList.pop()!;
+    this.setInstancePosition(index, 0, 0, 0);
     this.count++;
-    return result;
+    return new Instance(this, index);
   }
 
   removeInstance(index: int): void {
@@ -1226,6 +1229,15 @@ class InstancedMesh extends Mesh<InstancedShader> {
 
     this.count--;
     this.freeList.push(index);
+  }
+
+  setInstancePosition(index: int, x: number, y: number, z: number): void {
+    const offset = index * InstancedMesh.Stride;
+    const data = nonnull(this.data);
+    data[offset + 0] = x;
+    data[offset + 1] = y;
+    data[offset + 2] = z;
+    this.dirty = true;
   }
 
   private destroyBuffers() {
@@ -1724,8 +1736,7 @@ interface IMesh {
 };
 
 interface IInstancedMesh {
-  addInstance: (x: number, y: number, z: number) => int,
-  removeInstance: (index: int) => void,
+  addInstance: () => IMesh,
   readonly frame: int;
   readonly sprite: Sprite;
 };
@@ -1843,5 +1854,5 @@ class Renderer {
 //////////////////////////////////////////////////////////////////////////////
 
 export {kShadowAlpha, Geometry, Renderer, Sprite, Texture};
-export {IInstancedMesh as InstancedMesh, IShadowMesh as ShadowMesh,
-        ISpriteMesh as SpriteMesh, IVoxelMesh as VoxelMesh};
+export {IMesh as Mesh, ISpriteMesh as SpriteMesh, IShadowMesh as ShadowMesh,
+        IInstancedMesh as InstancedMesh, IVoxelMesh as VoxelMesh};
