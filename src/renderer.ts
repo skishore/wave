@@ -1162,9 +1162,9 @@ class InstancedMesh extends Mesh<InstancedShader> {
 
   private data: Float32Array;
   private instances: Instance[];
+  private dirtyInstances: Set<int>;
   private buffer: Buffer | null = null;
   private vao: WebGLVertexArrayObject | null = null;
-  private dirty = false;
 
   constructor(manager: InstancedManager, meshes: InstancedMesh[],
               frame: int, sprite: Sprite) {
@@ -1174,20 +1174,17 @@ class InstancedMesh extends Mesh<InstancedShader> {
     this.frame = frame;
     this.sprite = sprite;
 
-    this.instances = [];
     this.data = new Float32Array(4 * InstancedMesh.Stride);
+    this.dirtyInstances = new Set();
+    this.instances = [];
   }
 
   draw(transform: Mat4, stats: Stats): boolean {
-    const {data, gl, instances, shader} = this;
-    if (instances.length === 0) return false;
+    const {data, gl, shader} = this;
+    const n = this.instances.length;
+    if (n === 0) return false;
 
     this.prepareBuffers();
-
-    const stride = InstancedMesh.Stride;
-    assert(data.length % stride === 0);
-    const m = data.length / stride;
-    const n = instances.length;
 
     gl.bindVertexArray(this.vao);
     gl.bindTexture(TEXTURE_2D_ARRAY, this.texture);
@@ -1195,7 +1192,7 @@ class InstancedMesh extends Mesh<InstancedShader> {
     gl.drawArraysInstanced(gl.TRIANGLES, 0, 3, n * 2);
 
     stats.drawnInstances += n;
-    stats.totalInstances += m;
+    stats.totalInstances += this.capacity();
     return true;
   }
 
@@ -1232,7 +1229,7 @@ class InstancedMesh extends Mesh<InstancedShader> {
     for (let i = 0; i < stride; i++) {
       data[target + i] = data[source + i];
     }
-    this.dirty = true;
+    this.dirtyInstances.add(index);
 
     instances[index] = popped;
     popped.index = index;
@@ -1244,7 +1241,7 @@ class InstancedMesh extends Mesh<InstancedShader> {
     data[offset + 0] = x;
     data[offset + 1] = y;
     data[offset + 2] = z;
-    this.dirty = true;
+    this.dirtyInstances.add(index);
   }
 
   private capacity(): int {
@@ -1260,21 +1257,25 @@ class InstancedMesh extends Mesh<InstancedShader> {
     if (buffer) this.manager.allocator.free(buffer);
     this.vao = null;
     this.buffer = null;
-    this.dirty = true;
   }
 
   private prepareBuffers() {
-    const {gl, buffer, shader} = this;
+    const {buffer, data, dirtyInstances, gl, shader} = this;
 
-    if (this.dirty) {
-      const data = nonnull(this.data);
-      if (buffer) {
-        gl.bindBuffer(ARRAY_BUFFER, buffer.buffer);
-        gl.bufferSubData(ARRAY_BUFFER, 0, data, 0, data.length);
-      } else {
-        this.buffer = this.manager.allocator.alloc(data);
+    if (!buffer) {
+      this.buffer = this.manager.allocator.alloc(data);
+    } else if (dirtyInstances.size > 64) {
+      gl.bindBuffer(ARRAY_BUFFER, buffer.buffer);
+      gl.bufferSubData(ARRAY_BUFFER, 0, data, 0, data.length);
+      dirtyInstances.clear();
+    } else if (dirtyInstances.size > 0) {
+      const stride = InstancedMesh.Stride;
+      gl.bindBuffer(ARRAY_BUFFER, buffer.buffer);
+      for (const index of dirtyInstances.values()) {
+        const offset = index * stride;
+        gl.bufferSubData(ARRAY_BUFFER, 4 * offset, data, offset, stride);
       }
-      this.dirty = false;
+      dirtyInstances.clear();
     }
 
     if (this.vao) return;
