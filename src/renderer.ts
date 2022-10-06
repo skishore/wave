@@ -1160,75 +1160,82 @@ class InstancedMesh extends Mesh<InstancedShader> {
   readonly frame: int;
   readonly sprite: Sprite;
 
-  private freeList: int[];
+  private data: Float32Array;
+  private instances: Instance[];
   private buffer: Buffer | null = null;
-  private data: Float32Array | null = null;
   private vao: WebGLVertexArrayObject | null = null;
   private dirty = false;
-  private count = 0;
 
   constructor(manager: InstancedManager, meshes: InstancedMesh[],
               frame: int, sprite: Sprite) {
     super(manager, meshes);
     this.manager = manager;
     this.texture = manager.atlas.addSprite(sprite);
-    this.freeList = [];
     this.frame = frame;
     this.sprite = sprite;
+
+    this.instances = [];
+    this.data = new Float32Array(4 * InstancedMesh.Stride);
   }
 
   draw(transform: Mat4, stats: Stats): boolean {
-    const {data, gl, shader} = this;
-    if (!data) return false;
+    const {data, gl, instances, shader} = this;
+    if (instances.length === 0) return false;
 
     this.prepareBuffers();
 
     const stride = InstancedMesh.Stride;
     assert(data.length % stride === 0);
-    const n = int(data.length / stride);
+    const m = data.length / stride;
+    const n = instances.length;
 
     gl.bindVertexArray(this.vao);
     gl.bindTexture(TEXTURE_2D_ARRAY, this.texture);
     gl.uniform1f(shader.u_frame, this.frame);
     gl.drawArraysInstanced(gl.TRIANGLES, 0, 3, n * 2);
 
-    stats.drawnInstances += this.count;
-    stats.totalInstances += n;
+    stats.drawnInstances += n;
+    stats.totalInstances += m;
     return true;
   }
 
   addInstance(): Instance {
-    const stride = InstancedMesh.Stride;
-    if (this.freeList.length === 0) {
-      const old_length = this.data ? this.data.length : 0;
-      const new_length = Math.max(2 * old_length, 4 * stride);
-      assert(old_length % stride === 0);
-      for (let i = old_length; i < new_length; i += stride) {
-        this.freeList.push(int(i / stride));
-      }
-      const data = new Float32Array(new_length);
-      if (this.data) data.set(this.data);
+    const capacity = this.capacity();
+    const instances = this.instances;
+
+    assert(instances.length <= capacity);
+    if (instances.length === capacity) {
       this.destroyBuffers();
+      const data = new Float32Array(2 * this.data.length);
+      data.set(this.data);
       this.data = data;
+      assert(instances.length < this.capacity());
     }
 
-    assert(this.freeList.length > 0);
-    const index = this.freeList.pop()!;
+    const index = int(instances.length);
+    const instance = new Instance(this, index);
     this.setInstancePosition(index, 0, 0, 0);
-    this.count++;
-    return new Instance(this, index);
+    instances.push(instance);
+    return instance;
   }
 
   removeInstance(index: int): void {
-    const offset = index * InstancedMesh.Stride;
-    const data = nonnull(this.data);
-    data[offset + 0] = 0;
-    data[offset + 1] = 0;
-    data[offset + 2] = 0;
+    const instances = this.instances;
+    const popped = instances.pop()!;
+    assert(popped.index === instances.length);
+    if (popped.index === index) return;
+
+    const data = this.data;
+    const stride = InstancedMesh.Stride;
+    const source = stride * popped.index;
+    const target = stride * index;
+    for (let i = 0; i < stride; i++) {
+      data[target + i] = data[source + i];
+    }
     this.dirty = true;
 
-    this.count--;
-    this.freeList.push(index);
+    instances[index] = popped;
+    popped.index = index;
   }
 
   setInstancePosition(index: int, x: number, y: number, z: number): void {
@@ -1238,6 +1245,13 @@ class InstancedMesh extends Mesh<InstancedShader> {
     data[offset + 1] = y;
     data[offset + 2] = z;
     this.dirty = true;
+  }
+
+  private capacity(): int {
+    const length = this.data.length;
+    const stride = InstancedMesh.Stride;
+    assert(length % stride === 0);
+    return int(length / stride);
   }
 
   private destroyBuffers() {
