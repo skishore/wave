@@ -653,10 +653,12 @@ class Buffer {
   length: int;
   usage: int = 0;
 
-  constructor(gl: WebGL2RenderingContext, length: int, freeList: Buffer[]) {
+  constructor(gl: WebGL2RenderingContext, dynamic: boolean,
+              length: int, freeList: Buffer[]) {
     const buffer = nonnull(gl.createBuffer());
+    const mode = dynamic ? gl.DYNAMIC_DRAW : gl.STATIC_DRAW;
     gl.bindBuffer(ARRAY_BUFFER, buffer);
-    gl.bufferData(ARRAY_BUFFER, length, gl.STATIC_DRAW);
+    gl.bufferData(ARRAY_BUFFER, length, mode);
 
     this.freeList = freeList;
     this.buffer = buffer;
@@ -666,28 +668,31 @@ class Buffer {
 
 class BufferAllocator {
   private gl: WebGL2RenderingContext;
-  private freeLists: Buffer[][];
+  private freeListsStatics: Buffer[][];
+  private freeListsDynamic: Buffer[][];
   private bytes_total: int = 0;
   private bytes_alloc: int = 0;
   private bytes_usage: int = 0;
 
   constructor(gl: WebGL2RenderingContext) {
     this.gl = gl;
-    this.freeLists = new Array(32).fill(null).map(() => []);
+    this.freeListsStatics = new Array(32).fill(null).map(() => []);
+    this.freeListsDynamic = new Array(32).fill(null).map(() => []);
   }
 
-  alloc(data: Float32Array): Buffer {
+  alloc(data: Float32Array, dynamic: boolean): Buffer {
     const gl = this.gl;
     const bytes = int(4 * data.length);
     const sizeClass = this.sizeClass(bytes);
-    const freeList = this.freeLists[sizeClass];
+    const freeLists = dynamic ? this.freeListsDynamic : this.freeListsStatics;
+    const freeList = freeLists[sizeClass];
     const length = int(1 << sizeClass);
 
     let buffer = freeList.pop();
     if (buffer) {
       gl.bindBuffer(ARRAY_BUFFER, buffer.buffer);
     } else {
-      buffer = new Buffer(gl, length, freeList);
+      buffer = new Buffer(gl, dynamic, length, freeList);
       this.bytes_total += length;
     }
 
@@ -1018,7 +1023,7 @@ class VoxelMesh extends Mesh<VoxelShader> {
   private prepareQuads(data: Float32Array) {
     const n = this.geo.num_quads * Geometry.Stride;
     const subarray = data.length > n ? data.subarray(0, n) : data;
-    this.quads = this.allocator.alloc(subarray);
+    this.quads = this.allocator.alloc(subarray, false);
   }
 };
 
@@ -1263,7 +1268,7 @@ class InstancedMesh extends Mesh<InstancedShader> {
     const {buffer, data, dirtyInstances, gl, shader} = this;
 
     if (!buffer) {
-      this.buffer = this.manager.allocator.alloc(data);
+      this.buffer = this.manager.allocator.alloc(data, true);
     } else if (dirtyInstances.size > 64) {
       gl.bindBuffer(ARRAY_BUFFER, buffer.buffer);
       gl.bufferSubData(ARRAY_BUFFER, 0, data, 0, data.length);
@@ -1778,6 +1783,7 @@ class Renderer {
   camera: Camera;
   private gl: WebGL2RenderingContext;
   private overlay: ScreenOverlay;
+  private allocator: BufferAllocator;
   private instanced_manager: InstancedManager;
   private shadow_manager: ShadowManager;
   private sprite_manager: SpriteManager;
@@ -1807,6 +1813,7 @@ class Renderer {
 
     const allocator = new BufferAllocator(gl);
     const atlas = new SpriteAtlas(gl);
+    this.allocator = allocator;
 
     this.gl = gl;
     this.overlay = new ScreenOverlay(gl);
@@ -1856,7 +1863,7 @@ class Renderer {
     this.voxels_manager.render(camera, planes, stats, overlay, move, wave, 2);
     overlay.draw();
 
-    return `${this.voxels_manager.allocator.stats()}\r\n` +
+    return `${this.allocator.stats()}\r\n` +
            `Draw calls: ${stats.drawn} / ${stats.total}\r\n` +
            `Instances: ${stats.drawnInstances} / ${stats.totalInstances}`;
   }
