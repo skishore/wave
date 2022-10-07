@@ -557,15 +557,14 @@ class Geometry {
   dirty: boolean;
   private lower_bound: Vec3;
   private upper_bound: Vec3;
-  private bounds: Vec3[];
+  private bounds: Float64Array;
 
   constructor(quads: Float32Array, num_quads: int) {
     this.quads = quads;
     this.num_quads = num_quads;
     this.lower_bound = Vec3.create();
     this.upper_bound = Vec3.create();
-    this.bounds = Array(8).fill(null);
-    for (let i = 0; i < 8; i++) this.bounds[i] = Vec3.create();
+    this.bounds = new Float64Array(24);
     this.dirty = true;
   }
 
@@ -584,14 +583,14 @@ class Geometry {
     this.quads = expanded;
   }
 
-  getBounds(): Vec3[] {
+  getBounds(): Float64Array {
     if (this.dirty) this.computeBounds();
     return this.bounds;
   }
 
   private computeBounds() {
     if (!this.dirty) return this.bounds;
-    const {lower_bound, upper_bound} = this;
+    const {bounds, lower_bound, upper_bound} = this;
     Vec3.set(lower_bound, Infinity, Infinity, Infinity);
     Vec3.set(upper_bound, -Infinity, -Infinity, -Infinity);
 
@@ -626,9 +625,9 @@ class Geometry {
     lower_bound[1] -= 1; // because of the vertical "wave" shift
 
     for (let i = 0; i < 8; i++) {
-      const bound = this.bounds[i];
+      const offset = 3 * i;
       for (let j = 0; j < 3; j++) {
-        bound[j] = (i & (1 << j)) ? upper_bound[j] : lower_bound[j];
+        bounds[offset + j] = (i & (1 << j)) ? upper_bound[j] : lower_bound[j];
       }
     }
     this.dirty = false;
@@ -750,7 +749,7 @@ class Mesh<S> {
     this.addToMeshes();
   }
 
-  cull(bounds: Vec3[], camera: Camera, planes: CullingPlane[]): boolean {
+  cull(bounds: Float64Array, camera: Camera, planes: CullingPlane[]): boolean {
     const position = this.position;
     const camera_position = camera.position;
     const dx = position[0] - camera_position[0];
@@ -759,8 +758,10 @@ class Mesh<S> {
 
     for (const plane of planes) {
       const {x, y, z, index} = plane;
-      const bound = bounds[index];
-      const bx = bound[0], by = bound[1], bz = bound[2];
+      const offset = 3 * index;
+      const bx = bounds[offset + 0];
+      const by = bounds[offset + 1];
+      const bz = bounds[offset + 2];
       const value = (bx + dx) * x + (by + dy) * y + (bz + dz) * z;
       if (value < 0) return true;
     }
@@ -1490,7 +1491,7 @@ class SpriteManager implements MeshManager<SpriteShader> {
   atlas: SpriteAtlas;
   shader: SpriteShader;
   private billboard: Float32Array;
-  private bounds: Vec3[];
+  private bounds: Float64Array;
   private meshes: SpriteMesh[];
 
   constructor(gl: WebGL2RenderingContext, atlas: SpriteAtlas) {
@@ -1498,7 +1499,7 @@ class SpriteManager implements MeshManager<SpriteShader> {
     this.atlas = atlas;
     this.shader = new SpriteShader(gl);
     this.billboard = new Float32Array(4);
-    this.bounds = Array(8).fill(null).map(() => Vec3.create());
+    this.bounds = new Float64Array(24);
     this.meshes = [];
   }
 
@@ -1506,14 +1507,14 @@ class SpriteManager implements MeshManager<SpriteShader> {
     return new SpriteMesh(this, this.meshes, size, sprite);
   }
 
-  getBounds(size: number): Vec3[] {
+  getBounds(size: number): Float64Array {
     const result = this.bounds;
     const half_size = 0.5 * size;
     for (let i = 0; i < 8; i++) {
-      const bound = result[i];
-      bound[0] = (i & 1) ? half_size : -half_size;
-      bound[1] = (i & 2) ? size : 0;
-      bound[2] = (i & 4) ? half_size : -half_size;
+      const offset = 3 * i;
+      result[offset + 0] = (i & 1) ? half_size : -half_size;
+      result[offset + 1] = (i & 2) ? size : 0;
+      result[offset + 2] = (i & 4) ? half_size : -half_size;
     }
     return result;
   }
@@ -1616,13 +1617,13 @@ class ShadowMesh extends Mesh<ShadowShader> {
 class ShadowManager implements MeshManager<ShadowShader> {
   gl: WebGL2RenderingContext;
   shader: ShadowShader;
-  private bounds: Vec3[];
+  private bounds: Float64Array;
   private meshes: ShadowMesh[];
 
   constructor(gl: WebGL2RenderingContext) {
     this.gl = gl;
     this.shader = new ShadowShader(gl);
-    this.bounds = Array(8).fill(null).map(() => Vec3.create());
+    this.bounds = new Float64Array(24);
     this.meshes = [];
   }
 
@@ -1630,13 +1631,13 @@ class ShadowManager implements MeshManager<ShadowShader> {
     return new ShadowMesh(this, this.meshes);
   }
 
-  getBounds(size: number): Vec3[] {
+  getBounds(size: number): Float64Array {
     const result = this.bounds;
     const half_size = 0.5 * size;
     for (let i = 0; i < 8; i++) {
-      const bound = result[i];
-      bound[0] = (i & 1) ? size : -size;
-      bound[2] = (i & 4) ? size : -size;
+      const offset = 3 * i;
+      result[offset + 0] = (i & 1) ? size : -size;
+      result[offset + 2] = (i & 4) ? size : -size;
     }
     return result;
   }
