@@ -140,6 +140,7 @@ interface PhysicsState {
   restitution: number,
   mass: number,
   autoStep: number,
+  autoStepMax: number,
 };
 
 const kTmpGravity = Vec3.from(0, -40, 0);
@@ -182,18 +183,40 @@ const applyFriction = (axis: int, state: PhysicsState, dv: Vec3) => {
 };
 
 const tryAutoStepping =
-    (dt: number, state: PhysicsState, min: Vec3, max: Vec3,
+    (env: TypedEnv, dt: number, state: PhysicsState, min: Vec3, max: Vec3,
      check: (x: int, y: int, z: int) => boolean) => {
   if (state.resting[1] > 0 && !state.inFluid) return;
 
-  const threshold = 4;
-  const speed_x = Math.abs(state.vel[0]);
-  const speed_z = Math.abs(state.vel[2]);
-  const step_x = (state.resting[0] !== 0 && threshold * speed_x > speed_z);
-  const step_z = (state.resting[2] !== 0 && threshold * speed_z > speed_x);
+  const {resting, vel} = state;
+  const {opaque, solid} = env.registry;
+
+  const threshold = 16;
+  const speed_x = Math.abs(vel[0]);
+  const speed_z = Math.abs(vel[2]);
+
+  const step_x = (() => {
+    if (resting[0] === 0) return false;
+    if (threshold * speed_x <= speed_z) return false;
+    const x = int(Math.floor(vel[0] > 0 ? max[0] + 0.5 : min[0] - 0.5));
+    const y = int(Math.floor(min[1]));
+    const z = int(Math.floor((min[2] + max[2]) / 2));
+    const block = env.world.getBlock(x, y, z);
+    return opaque[block] && solid[block];
+  })();
+  const step_z = (() => {
+    if (resting[2] === 0) return false;
+    if (threshold * speed_z <= speed_x) return false;
+    const x = int(Math.floor((min[0] + max[0]) / 2));
+    const y = int(Math.floor(min[1]));
+    const z = int(Math.floor(vel[2] > 0 ? max[2] + 0.5 : min[2] - 0.5));
+    const block = env.world.getBlock(x, y, z);
+    return opaque[block] && solid[block];
+  })();
   if (!step_x && !step_z) return;
 
   const height = 1 - min[1] + Math.floor(min[1]);
+  if (height > state.autoStepMax) return;
+
   Vec3.set(kTmpDelta, 0, height, 0);
   sweep(min, max, kTmpDelta, kTmpResting, check);
   if (kTmpResting[1] !== 0) return;
@@ -260,7 +283,7 @@ const runPhysics = (env: TypedEnv, dt: number, state: PhysicsState) => {
   Vec3.set(state.impulses, 0, 0, 0);
 
   if (state.autoStep) {
-    tryAutoStepping(dt, state, kTmpMin, kTmpMax, check);
+    tryAutoStepping(env, dt, state, kTmpMin, kTmpMax, check);
   }
 
   for (let i = 0; i < 3; i++) {
@@ -283,7 +306,8 @@ const Physics = (env: TypedEnv): Component<PhysicsState> => ({
     friction: 0,
     restitution: 0,
     mass: 1,
-    autoStep: 0,
+    autoStep: 0.0625,
+    autoStepMax: 0.5,
   }),
   onAdd: (state: PhysicsState) => {
     setPhysicsFromPosition(env.position.getX(state.id), state);
@@ -514,8 +538,8 @@ const Movement = (env: TypedEnv): Component<MovementState> => ({
     airMoveMultiplier: 0.5,
     airJumps: 0,
     jumpTime: 0.2,
-    jumpForce: 15,
-    jumpImpulse: 10,
+    jumpForce: 10,
+    jumpImpulse: 7.5,
     _jumped: false,
     _jumpCount: 0,
     _jumpTimeLeft: 0,
@@ -922,7 +946,8 @@ const safeHeight = (position: PositionState): number => {
 
 const addEntity = (env: TypedEnv, image: string, size: number,
                    x: number, z: number, h: number, w: number,
-                   maxSpeed: number, moveForceFactor: number): EntityId => {
+                   maxSpeed: number, moveForceFactor: number,
+                   jumpForce: number, jumpImpulse: number): EntityId => {
   const entity = env.entities.addEntity();
   const position = env.position.add(entity);
   position.x = x + 0.5;
@@ -934,6 +959,8 @@ const addEntity = (env: TypedEnv, image: string, size: number,
   const movement = env.movement.add(entity);
   movement.maxSpeed = maxSpeed;
   movement.moveForce = maxSpeed * moveForceFactor;
+  movement.jumpForce = jumpForce;
+  movement.jumpImpulse = jumpImpulse;
 
   const mesh = env.meshes.add(entity);
   const sprite = {url: `images/${image}.png`, x: int(32), y: int(32)};
@@ -948,12 +975,12 @@ const addEntity = (env: TypedEnv, image: string, size: number,
 const main = () => {
   const env = new TypedEnv('container');
 
-  const size = 1.5;
-  const player = addEntity(env, 'player', size, 1, 1, 1.6, 0.8, 10, 4);
+  const size = 1;
+  const player = addEntity(env, 'player', size, 1, 1, 0.8, 0.6, 8, 4, 10, 7.5);
   env.inputs.add(player);
   env.target.add(player);
 
-  const follower = addEntity(env, 'follower', size, 1, 1, 0.8, 0.8, 15, 8);
+  const follower = addEntity(env, 'follower', size, 1, 1, 0.6, 0.6, 12, 8, 15, 10);
   env.meshes.getX(follower).heading = 0;
   env.pathing.add(follower);
 
