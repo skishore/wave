@@ -116,18 +116,15 @@ const carve_caves = (x: int, z: int, column: Column, limit: int): int => {
 
 // Tree generation.
 
-const hash_fnv32 = (k: int): int => {
-  let result = int(-2128831035);
-  for (let i = 0; i < 4; i++) {
-    result = int((result ^ (k & 0xff)) * 16777619);
-    k = (k >> 8) as int;
-  }
-  return result;
-};
+const randomness = new Uint8Array(1 << 20);
 
-const kMask = int((1 << 15) - 1);
+for (let i = 0; i < randomness.length; i++) {
+  randomness[i] = (Math.random() * 256) & 0xff;
+}
+
+const kMask = int((1 << 10) - 1);
 const hash_point = (x: int, z: int): int => {
-  return hash_fnv32((((x & kMask) << 15) | (z & kMask)) as int);
+  return int(randomness[(((x & kMask) << 10) | (z & kMask)) as int]);
 };
 
 // Terrain generation.
