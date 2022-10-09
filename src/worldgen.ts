@@ -18,12 +18,13 @@ const kCaveWaveRadius = 256;
 
 interface Blocks {
   bedrock: BlockId,
+  bush:    BlockId,
   dirt:    BlockId,
   grass:   BlockId,
-  leaves:  BlockId,
   rock:    BlockId,
   sand:    BlockId,
   snow:    BlockId,
+  stone:   BlockId,
   trunk:   BlockId,
   water:   BlockId,
 };
@@ -125,9 +126,8 @@ const hash_fnv32 = (k: int): int => {
 };
 
 const kMask = int((1 << 15) - 1);
-const has_tree = (x: int, z: int): boolean => {
-  const base = hash_fnv32((((x & kMask) << 15) | (z & kMask)) as int);
-  return (base & 63) <= 3;
+const hash_point = (x: int, z: int): int => {
+  return hash_fnv32((((x & kMask) << 15) | (z & kMask)) as int);
 };
 
 // Terrain generation.
@@ -183,7 +183,7 @@ const heightmap = (x: int, z: int, blocks: Blocks): HeightmapResult => {
     if (truncated < -1) return blocks.dirt;
     if (height_mountain > height_ground) {
       const base = height - (72 - 8 * mountain);
-      return base > 0 ? blocks.snow : blocks.rock;
+      return base > 0 ? blocks.snow : blocks.stone;
     }
     if (height_cliff > height_ground) return blocks.dirt;
     return truncated < 1 ? blocks.sand : blocks.grass;
@@ -207,12 +207,13 @@ const kNeighborOffsets = [0, 1, -1, kExpandedWidth, -kExpandedWidth];
 
 const kDefaultBlocks: Blocks = {
   bedrock: kEmptyBlock,
+  bush:    kEmptyBlock,
   dirt:    kEmptyBlock,
   grass:   kEmptyBlock,
-  leaves:  kEmptyBlock,
   rock:    kEmptyBlock,
   sand:    kEmptyBlock,
   snow:    kEmptyBlock,
+  stone:   kEmptyBlock,
   trunk:   kEmptyBlock,
   water:   kEmptyBlock,
 };
@@ -248,9 +249,9 @@ const loadChunk = (blocks: Blocks) => (x: int, z: int, column: Column) => {
   const snow_depth = int(kChunkHeightmap[offset + 2]);
 
   if (tile === blocks.snow) {
-    column.push(blocks.rock, int(height - snow_depth));
-  } else if (tile !== blocks.rock) {
-    column.push(blocks.rock, int(height - 4));
+    column.push(blocks.stone, int(height - snow_depth));
+  } else if (tile !== blocks.stone) {
+    column.push(blocks.stone, int(height - 4));
     column.push(blocks.dirt, int(height - 1));
   }
   column.push(tile, height);
@@ -265,8 +266,10 @@ const loadChunk = (blocks: Blocks) => (x: int, z: int, column: Column) => {
   }
   const cave_height = carve_caves(x, z, column, limit);
 
-  if (tile === blocks.grass && has_tree(x, z) && cave_height < height) {
-    column.push(blocks.leaves, int(height + 1));
+  if (tile === blocks.grass && cave_height < height) {
+    const hash = hash_point(x, z) & 63;
+    if (hash < 2) column.push(blocks.bush, int(height + 1));
+    else if (hash < 4) column.push(blocks.rock, int(height + 1));
   }
 };
 

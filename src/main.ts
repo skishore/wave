@@ -972,7 +972,7 @@ const main = () => {
     ['dirt', 2, 0],
     ['grass', 0, 0],
     ['grass-side', 3, 0],
-    ['rock', 1, 0],
+    ['stone', 1, 0],
     ['sand', 0, 11],
     ['snow', 2, 4],
     ['trunk', 5, 1],
@@ -984,12 +984,13 @@ const main = () => {
 
   const blocks = {
     bedrock: registry.addBlock(['bedrock'], true),
+    bush:    registry.addBlockMesh(block(4, 3), true),
     dirt:    registry.addBlock(['dirt'], true),
     grass:   registry.addBlock(['grass', 'dirt', 'grass-side'], true),
-    leaves:  registry.addBlockMesh(block(4, 3), true),
-    rock:    registry.addBlock(['rock'], true),
+    rock:    registry.addBlockMesh(block(1, 3), true),
     sand:    registry.addBlock(['sand'], true),
     snow:    registry.addBlock(['snow'], true),
+    stone:   registry.addBlock(['stone'], true),
     trunk:   registry.addBlock(['trunk', 'trunk-side'], true),
     water:   registry.addBlock(['water', 'blue', 'blue'], false),
   };
