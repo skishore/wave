@@ -695,16 +695,45 @@ class TerrainMesher {
 
   private packAOMask(data: Int16Array, ipos: int, ineg: int,
                      dj: int, dk: int): int {
-    let a00 = 0; let a01 = 0; let a10 = 0; let a11 = 0;
-    if (this.solid[data[ipos + dj]]) { a10++; a11++; }
-    if (this.solid[data[ipos - dj]]) { a00++; a01++; }
-    if (this.solid[data[ipos + dk]]) { a01++; a11++; }
-    if (this.solid[data[ipos - dk]]) { a00++; a10++; }
+    const {opaque, solid} = this;
+    if (solid[data[ipos]]) return int(0b01010101);
 
-    if (a00 === 0 && this.solid[data[ipos - dj - dk]]) a00++;
-    if (a01 === 0 && this.solid[data[ipos - dj + dk]]) a01++;
-    if (a10 === 0 && this.solid[data[ipos + dj - dk]]) a10++;
-    if (a11 === 0 && this.solid[data[ipos + dj + dk]]) a11++;
+    let a00 = 0; let a01 = 0; let a10 = 0; let a11 = 0;
+
+    const b0 = data[ipos + dj];
+    const b1 = data[ipos - dj];
+    const b2 = data[ipos + dk];
+    const b3 = data[ipos - dk];
+
+    // Optimize for the special case of completely unoccluded blocks.
+    if (b0 + b1 + b2 + b3 === kEmptyBlock) {
+      const d0 = data[ipos - dj - dk];
+      const d1 = data[ipos - dj + dk];
+      const d2 = data[ipos + dj - dk];
+      const d3 = data[ipos + dj + dk];
+      if (d0 + d1 + d2 + d3 === kEmptyBlock) return 0;
+
+      if (solid[d0]) a00++;
+      if (solid[d1]) a01++;
+      if (solid[d2]) a10++;
+      if (solid[d3]) a11++;
+      return ((a01 << 6) | (a11 << 4) | (a10 << 2) | a00) as int;
+    }
+
+    if (solid[b0]) { a10++; a11++; }
+    if (solid[b1]) { a00++; a01++; }
+    if (solid[b2]) { a01++; a11++; }
+    if (solid[b3]) { a00++; a10++; }
+
+    if (solid[b0] && !opaque[b0]) { a10 = a11 = 1; }
+    if (solid[b1] && !opaque[b1]) { a00 = a01 = 1; }
+    if (solid[b2] && !opaque[b2]) { a01 = a11 = 1; }
+    if (solid[b3] && !opaque[b3]) { a00 = a10 = 1; }
+
+    if (a00 === 0 && solid[data[ipos - dj - dk]]) a00++;
+    if (a01 === 0 && solid[data[ipos - dj + dk]]) a01++;
+    if (a10 === 0 && solid[data[ipos + dj - dk]]) a10++;
+    if (a11 === 0 && solid[data[ipos + dj + dk]]) a11++;
 
     // Order here matches the order in which we push vertices in addQuad.
     return ((a01 << 6) | (a11 << 4) | (a10 << 2) | a00) as int;

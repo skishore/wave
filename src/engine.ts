@@ -932,14 +932,14 @@ class Chunk {
       this.heightmap.data[offset] = end;
     }
 
-    const solid = this.world.registry.solid;
-    if (!solid[block] && start < light_ && light_ <= end) {
+    const opaque = this.world.registry.opaque;
+    if (!opaque[block] && start < light_ && light_ <= end) {
       let i = 0;
       for (; i < start; i++) {
-        if (solid[voxels.data[index - i - 1]]) break;
+        if (opaque[voxels.data[index - i - 1]]) break;
       }
       this.light_map.data[offset] = start - i;
-    } else if (solid[block] && light_ <= end) {
+    } else if (opaque[block] && light_ <= end) {
       this.light_map.data[offset] = end;
     }
   }
