@@ -587,17 +587,23 @@ const runInputs = (env: TypedEnv, id: EntityId) => {
   }
 
   // Call any followers.
-  if (inputs.call || Math.random() < 0.25) {
-    const body = env.physics.get(id);
-    if (body) {
-      const {min, max} = body;
-      const x = int(Math.floor((min[0] + max[0]) / 2));
-      const y = int(Math.floor(min[1]));
-      const z = int(Math.floor((min[2] + max[2]) / 2));
-      env.pathing.each(other => other.target = [x, y, z]);
-    }
-    inputs.call = false;
+  const body = env.physics.get(state.id);
+  if (body && (inputs.call || true)) {
+    const {min, max} = body;
+    const x = (min[0] + max[0]) / 2;
+    const y = min[1];
+    const z = (min[2] + max[2]) / 2;
+
+    const ix = int(Math.floor(x));
+    const iy = int(Math.floor(y));
+    const iz = int(Math.floor(z));
+
+    env.pathing.each(other => {
+      other.target = [ix, iy, iz];
+      other.soft_target = [x, y, z];
+    });
   }
+  inputs.call = false;
 
   // Turn mouse inputs into actions.
   if (inputs.mouse0 || inputs.mouse1) {
@@ -623,6 +629,7 @@ interface PathingState {
   path_index: int,
   path: Point[] | null,
   target: Point | null,
+  soft_target: [number, number, number] | null,
 };
 
 const solid = (env: TypedEnv, x: int, y: int, z: int): boolean => {
@@ -679,13 +686,14 @@ const hasDirectPath = (env: TypedEnv, start: Point, end: Point): boolean => {
 
 const findPath = (env: TypedEnv, state: PathingState,
                   body: PhysicsState): void => {
+  const grounded = body.resting[1] < 0;
+  if (!grounded) return;
+
   const {min, max} = body;
   const sx = int(Math.floor((min[0] + max[0]) / 2));
   const sy = int(Math.floor(min[1]));
   const sz = int(Math.floor((min[2] + max[2]) / 2));
   const [tx, ty, tz] = nonnull(state.target);
-
-  if (body.resting[1] >= 0 && body.vel[1] > 0) return;
 
   const path = AStar(new AStarPoint(sx, sy, sz),
                      new AStarPoint(tx, ty, tz),
@@ -739,10 +747,17 @@ const followPath = (env: TypedEnv, state: PathingState,
   if (path_index === path.length) { state.path = null; return; }
 
   const cur = path[path_index];
+  const soft = state.soft_target;
+  const last = path_index === path.length - 1;
+  const usable = last && soft &&
+                 cur[0] === Math.floor(soft[0]) &&
+                 cur[1] === Math.floor(soft[1]) &&
+                 cur[2] === Math.floor(soft[2]);
+
   const cx = (body.min[0] + body.max[0]) / 2;
   const cz = (body.min[2] + body.max[2]) / 2;
-  const dx = cur[0] + 0.5 - cx;
-  const dz = cur[2] + 0.5 - cz;
+  const dx = (last && soft && usable ? soft[0] : cur[0] + 0.5) - cx;
+  const dz = (last && soft && usable ? soft[2] : cur[2] + 0.5) - cz;
 
   const penalty = body.inFluid ? movement.swimPenalty : 1;
   const speed = penalty * movement.maxSpeed;
@@ -796,6 +811,7 @@ const Pathing = (env: TypedEnv): Component<PathingState> => ({
     path: null,
     path_index: 0,
     target: null,
+    soft_target: null,
   }),
   onUpdate: (dt: number, states: PathingState[]) => {
     for (const state of states) runPathing(env, state);
