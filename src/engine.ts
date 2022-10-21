@@ -1588,6 +1588,7 @@ class Env {
 
     let move = false;
     this.highlightMask[0] = (1 << 6) - 1;
+    this.highlightSide = -1;
 
     const check = (x: int, y: int, z: int) => {
       const block = this.world.getBlock(x, y, z);
@@ -1634,7 +1635,7 @@ class Env {
       const pos = this.highlightPosition;
       this.highlight.setPosition(pos[0], pos[1], pos[2]);
     }
-    this.highlight.show(this.highlightMask, true);
+    this.highlight.show(this.highlightMask, this.highlightSide >= 0);
   }
 
   private updateOverlayColor(wave: number): void {
