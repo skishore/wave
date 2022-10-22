@@ -153,6 +153,7 @@ const AStarHeapExtractMin = (heap: AStarHeap): AStarNode => {
 
 type Check = (p: Point) => boolean;
 
+const AStarDiagonalPenalty = 1;
 const AStarUnitCost = 16;
 const AStarUpCost   = 64;
 const AStarDownCost = 4;
@@ -177,18 +178,20 @@ const AStarHeuristic = (source: Point, target: Point) => {
   }
 
   return (p: Point): number => {
-    const ax = p.x - target.x;
-    const ay = p.y - target.y;
-    const az = p.z - target.z;
+    const px = p.x - target.x;
+    const py = p.y - target.y;
+    const pz = p.z - target.z;
 
-    const dot = ax * dx + ay * dy + az * dz;
-    const ox = ax - dot * dx;
-    const oy = ay - dot * dy;
-    const oz = az - dot * dz;
+    const dot = px * dx + py * dy + pz * dz;
+    const ox = px - dot * dx;
+    const oy = py - dot * dy;
+    const oz = pz - dot * dz;
     const off = Math.sqrt(ox * ox + oy * oy + oz * oz);
 
-    const base = AStarUnitCost * (Math.abs(ax) + Math.abs(az) + off);
-    return base + ay * (ay > 0 ? AStarDownCost : -AStarUpCost);
+    const ax = Math.abs(px), az = Math.abs(pz);
+    const base = Math.max(ax, az) * AStarUnitCost +
+                 Math.min(ax, az) * AStarDiagonalPenalty;
+    return base + off + py * (py > 0 ? AStarDownCost : -AStarUpCost);
   };
 };
 
@@ -230,9 +233,21 @@ const AStarNeighbors =
     if (y !== source.y) result.push(new Point(source.x, y, source.z));
   }
 
-  for (const dir of Direction.cardinal) {
+  let blocked = 0;
+  const directions = Direction.all;
+
+  for (let i = 0; i < 8; i++) {
+    const diagonal = i & 4;
+    const index = ((i & 3) << 1) | (diagonal ? 1 : 0);
+    if (diagonal && (blocked & (1 << index))) continue;
+    const dir = directions[index];
+
     const next = source.add(dir);
     const ny = AStarHeight(source, next, check);
+    if (!diagonal && (ny === null || ny > next.y)) {
+      blocked |= 1 << ((index - 1) & 7);
+      blocked |= 1 << ((index + 1) & 7);
+    }
     if (ny === null) continue;
 
     result.push(AStarAdjust(next, ny));
@@ -280,9 +295,12 @@ const AStar = (source: Point, target: Point, check: Check,
 
     for (const next of AStarNeighbors(cur, check, count === 1)) {
       const dy = next.y - cur.y;
-      const xz = Math.abs(next.x - cur.x) + Math.abs(next.z - cur.z);
-      const ud = dy * (dy > 0 ? AStarUpCost : -AStarDownCost);
-      const distance = cur.distance + xz * AStarUnitCost + ud;
+      const ax = Math.abs(next.x - cur.x);
+      const az = Math.abs(next.z - cur.z);
+      const distance = cur.distance +
+                       Math.max(ax, az) * AStarUnitCost +
+                       Math.min(ax, az) * AStarDiagonalPenalty +
+                       dy * (dy > 0 ? AStarUpCost : -AStarDownCost);
       const key = AStarKey(next, source);
       const existing = map.get(key);
 
