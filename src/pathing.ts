@@ -218,11 +218,6 @@ const AStarAdjust = (p: Point, y: int): Point => {
   return y === p.y ? p : new Point(p.x, y, p.z);
 };
 
-const AStarAdjustEndpoint = (p: Point, check: Check): Point => {
-  const y = AStarDrop(p, check);
-  return y >= p.y - 1 ? AStarAdjust(p, y) : p;
-};
-
 const AStarNeighbors =
     (source: Point, check: Check, first: boolean): Point[] => {
   const result = [];
@@ -269,8 +264,12 @@ const AStar = (source: Point, target: Point, check: Check,
 
   let count = int(0);
   limit = limit ? limit : AStarLimit;
-  source = AStarAdjustEndpoint(source, check);
-  target = AStarAdjustEndpoint(target, check);
+
+  const sy = AStarDrop(source, check);
+  source = sy >= source.y - 1 ? AStarAdjust(source, sy) : source;
+  const ty = AStarDrop(target, check);
+  const drop = target.y - ty;
+  target = AStarAdjust(target, ty);
 
   let best: AStarNode | null = null;
   const map: Map<int, AStarNode> = new Map();
@@ -335,11 +334,19 @@ const AStar = (source: Point, target: Point, check: Check,
     result.push(best);
     best = best.parent;
   }
+  result.reverse();
+
+  if (drop > 1) {
+    for (let i = 0; i < result.length - 1; i++) {
+      if (result[i].y - result[i + 1].y > 1) return [];
+    }
+  }
+
   //console.log(`Found ${result.length}-node path:`);
-  //for (let i = result.length - 1; i >= 0; i--) {
-  //  console.log(`  ${result[i].toString()}`);
+  //for (const step of result) {
+  //  console.log(`  ${step.toString()}`);
   //}
-  return result.reverse();
+  return result;
 };
 
 //////////////////////////////////////////////////////////////////////////////
