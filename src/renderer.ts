@@ -14,10 +14,10 @@ const kTmpDelta = Vec3.create();
 const kTmpPlane = Vec3.create();
 
 class Camera {
-  heading: number; // In radians: [0, 2π)
-  pitch: number;   // In radians: (-π/2, π/2)
-  zoom: number;
-  safe_zoom: number;
+  heading = 0; // In radians: [0, 2π)
+  pitch = 0;   // In radians: (-π/2, π/2)
+  zoom = 0;
+  safe_zoom = 0;
   direction: Vec3;
   position: Vec3;
   target: Vec3;
@@ -39,10 +39,6 @@ class Camera {
   private minZ: number;
 
   constructor(width: int, height: int) {
-    this.pitch = 0;
-    this.heading = 0;
-    this.zoom = 0;
-    this.safe_zoom = 0;
     this.direction = Vec3.from(0, 0, 1);
     this.position = Vec3.create();
     this.target = Vec3.create();
@@ -142,9 +138,10 @@ class Camera {
     this.minZ = minZ;
   }
 
-  setSafeZoomDistance(zoom: number) {
+  setSafeZoomDistance(bump: number, zoom: number) {
     zoom = Math.max(Math.min(zoom, this.zoom), 0);
     Vec3.scaleAndAdd(this.position, this.target, this.direction, -zoom);
+    this.position[1] += bump;
     this.safe_zoom = zoom;
   }
 

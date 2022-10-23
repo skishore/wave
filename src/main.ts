@@ -844,6 +844,14 @@ const Meshes = (env: TypedEnv): Component<MeshState> => ({
   }),
   onRemove: (state: MeshState) => state.mesh?.dispose(),
   onRender: (dt: number, states: MeshState[]) => {
+    const camera = env.renderer.camera;
+    let cx = camera.position[0], cz = camera.position[2];
+    env.target.each(state => {
+      const {x, y, z, h, w} = env.position.getX(state.id);
+      cx = x - camera.zoom * Math.sin(camera.heading);
+      cz = z - camera.zoom * Math.cos(camera.heading);
+    });
+
     for (const state of states) {
       if (!state.mesh) continue;
       const {x, y, z, h} = env.position.getX(state.id);
@@ -854,8 +862,7 @@ const Meshes = (env: TypedEnv): Component<MeshState> => ({
       state.mesh.setHeight(h);
 
       if (state.heading !== null) {
-        const pos = env.renderer.camera.position;
-        const camera_heading = Math.atan2(x - pos[0], z - pos[2]);
+        const camera_heading = Math.atan2(x - cx, z - cz);
         const delta = state.heading - camera_heading;
         state.row = Math.floor(8.5 - 2 * delta / Math.PI) & 3;
         state.mesh.setFrame(int(state.column + state.row * state.columns));
