@@ -247,11 +247,18 @@ const AStarNeighbors =
 
     result.push(AStarAdjust(next, ny));
 
-    if (ny < next.y && check(source.add(up)) && check(next.add(up))) {
-      const jump = next.add(dir);
-      if (check(jump) && check(jump.add(up))) {
-        const jy = AStarDrop(jump, check);
-        if (jy > ny) result.push(AStarAdjust(jump, jy));
+    if (!diagonal && ny < next.y &&
+        check(source.add(up)) && check(next.add(up))) {
+      const flat_limit = 4;
+      const jump_limit = 3;
+      for (let j = 0, jump = next; j < flat_limit; j++) {
+        jump = jump.add(dir);
+        const jump_up = jump.add(up);
+        if (!check(jump_up)) break;
+        if (!(j < jump_limit || check(jump))) break;
+        const jy = AStarDrop(jump_up, check);
+        result.push(AStarAdjust(jump, jy));
+        if (jy > source.y) break;
       }
     }
   }
