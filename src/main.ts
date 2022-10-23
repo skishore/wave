@@ -23,6 +23,7 @@ const kWaterDisplacements = [
 ];
 
 type Point = [int, int, int];
+type Position = [number, number, number];
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -591,7 +592,7 @@ const runInputs = (env: TypedEnv, id: EntityId) => {
   if (body && (inputs.call || true)) {
     const {min, max} = body;
     const x = (min[0] + max[0]) / 2;
-    const y = min[1];
+    const y = (min[1] + body.autoStepMax);
     const z = (min[2] + max[2]) / 2;
 
     const ix = int(Math.floor(x));
@@ -626,10 +627,13 @@ const Inputs = (env: TypedEnv): Component => ({
 interface PathingState {
   id: EntityId,
   index: int,
-  path_index: int,
+  // Current path:
   path: Point[] | null,
+  path_index: int,
+  path_soft_target: Position | null,
+  // Next path request:
   target: Point | null,
-  soft_target: [number, number, number] | null,
+  soft_target: Position | null,
 };
 
 const solid = (env: TypedEnv, x: int, y: int, z: int): boolean => {
@@ -712,9 +716,14 @@ const findPath = (env: TypedEnv, state: PathingState,
     result.shift();
   }
 
+  const last = result[result.length - 1];
+  const use_soft = last[0] === tx && last[2] === tz;
+
   state.path = result;
   state.path_index = 0;
-  state.target = null;
+  state.path_soft_target = use_soft ? state.soft_target : null;
+  state.target = state.soft_target = null;
+
   //console.log(JSON.stringify(state.path));
 };
 
@@ -746,18 +755,14 @@ const followPath = (env: TypedEnv, state: PathingState,
   const path_index = state.path_index;
   if (path_index === path.length) { state.path = null; return; }
 
-  const cur = path[path_index];
-  const soft = state.soft_target;
+  const soft = state.path_soft_target;
   const last = path_index === path.length - 1;
-  const usable = last && soft &&
-                 cur[0] === Math.floor(soft[0]) &&
-                 cur[1] === Math.floor(soft[1]) &&
-                 cur[2] === Math.floor(soft[2]);
 
+  const cur = path[path_index];
   const cx = (body.min[0] + body.max[0]) / 2;
   const cz = (body.min[2] + body.max[2]) / 2;
-  const dx = (last && soft && usable ? soft[0] : cur[0] + 0.5) - cx;
-  const dz = (last && soft && usable ? soft[2] : cur[2] + 0.5) - cz;
+  const dx = (last && soft ? soft[0] : cur[0] + 0.5) - cx;
+  const dz = (last && soft ? soft[2] : cur[2] + 0.5) - cz;
 
   const penalty = body.inFluid ? movement.swimPenalty : 1;
   const speed = penalty * movement.maxSpeed;
@@ -810,6 +815,7 @@ const Pathing = (env: TypedEnv): Component<PathingState> => ({
     index: 0,
     path: null,
     path_index: 0,
+    path_soft_target: null,
     target: null,
     soft_target: null,
   }),

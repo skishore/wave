@@ -1,0 +1,20 @@
+Pathfinding TODOs:
+
+Pikachu-class (walk + jump):
+- Support diagonal jumps
+- Penalize paths that go through water
+- Optimization: cache tile-type checks (required for multi-tile entities)
+
+Other classes:
+- Multi-grid-cell entities
+- Entities that can break some cell types
+- Diggers (move through ground-type cells)
+- Swimmers (walk, jump, and water-surface)
+- Divers (move through fluids)
+- Levitate (move through air cells)
+- Flyers ("jump" through air cells - constant motion?)
+- Phasing (levitate + move through solid cells?)
+- Combinations of the above attributes
+
+It may be that digging, swimming, and levitatation are the same ability just
+applied to different types of cells.
