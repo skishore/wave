@@ -262,10 +262,11 @@ const AStarNeighbors =
   const result = [];
   const {up, down} = Direction;
 
-  if (first) {
-    const y = AStarDrop(source, check);
-    if (y !== source.y) result.push(new Point(source.x, y, source.z));
-  }
+  // The source may not be a grounded block. Every other node in the path
+  // will be grounded, due to the logic in this neighbor lookup function.
+  const y = first ? AStarDrop(source, check) : source.y;
+  const grounded = y === source.y;
+  if (!grounded) result.push(new Point(source.x, y, source.z));
 
   let blocked = 0;
   const directions = Direction.all;
@@ -286,7 +287,8 @@ const AStarNeighbors =
 
     result.push(AStarAdjust(next, ny));
 
-    if (ny < next.y && check(source.add(up)) && check(next.add(up))) {
+    if (ny < next.y && grounded &&
+        check(source.add(up)) && check(next.add(up))) {
       const flat_limit = 4;
       const jump_limit = 3;
       if (!diagonal) {
@@ -326,10 +328,10 @@ const AStarNeighbors =
             scratch[index] = false;
           } else {
             const dx = int(value.x * dir.x), dz = int(value.z * dir.z);
-            const target = source.add(new Point(dx, 0, dz));
-            okay = check_two(target);
+            const jump = source.add(new Point(dx, 0, dz));
+            okay = check_two(jump);
             scratch[index] = okay;
-            if (okay) result.push(AStarAdjust(target, AStarDrop(target, check)));
+            if (okay) result.push(AStarAdjust(jump, AStarDrop(jump, check)));
           }
         }
       }

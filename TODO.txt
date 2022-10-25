@@ -4,6 +4,8 @@ Pikachu-class (walk + jump):
 - Penalize paths that go through water
 - Optimization: cache tile-type checks (required for multi-tile entities)
 - Leave a buffer around the player when following
+- Fix path-following bug: if we need to jump, path to the center of a square where z++ is free
+- Try to de-dupe diagonal and direct jumps without losing optimizations
 
 Other classes:
 - Multi-grid-cell entities
