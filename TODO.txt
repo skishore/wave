@@ -1,9 +1,9 @@
 Pathfinding TODOs:
 
 Pikachu-class (walk + jump):
-- Support diagonal jumps
 - Penalize paths that go through water
 - Optimization: cache tile-type checks (required for multi-tile entities)
+- Leave a buffer around the player when following
 
 Other classes:
 - Multi-grid-cell entities

@@ -1,4 +1,5 @@
-import {assert, int, nonnull} from './base.js';
+import {assert, int, nonnull, Vec3} from './base.js';
+import {sweep} from './sweep.js';
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -68,6 +69,44 @@ class Direction extends Point {
     return nonnull(Direction.all.filter(x => x.equal(point))[0]);
   }
 };
+
+//////////////////////////////////////////////////////////////////////////////
+
+const precomputeDiagonal = (x: int, z: int): Point[] => {
+  const result: Point[] = [];
+  result.push(Point.origin);
+
+  const check = (x: int, y: int, z: int) => {
+    result.push(new Point(x, y, z));
+    return true;
+  };
+  const min = Vec3.from(0, 0, 0);
+  const max = Vec3.from(1, 1, 1);
+  const delta = Vec3.from(x, 0, z);
+  const impacts = Vec3.create();
+
+  sweep(min, max, delta, impacts, check);
+
+  result.forEach(p => {
+    assert(p.x >= 0);
+    assert(p.y === 0);
+    assert(p.z >= 0);
+  });
+  return result;
+};
+
+const kDiagonalDistance = 5;
+const kDiagonalArea = kDiagonalDistance * kDiagonalDistance;
+const kDiagonalScratch: boolean[] = new Array(kDiagonalArea).fill(true);
+const kDiagonalChecks: Point[][] = [];
+
+for (let x = int(1); x < kDiagonalDistance; x++) {
+  for (let z = int(1); z < kDiagonalDistance; z++) {
+    if (x === 1 && z === 1) continue;
+    if (x * x + z * z > kDiagonalArea) continue;
+    kDiagonalChecks.push(precomputeDiagonal(x, z));
+  }
+}
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -247,18 +286,52 @@ const AStarNeighbors =
 
     result.push(AStarAdjust(next, ny));
 
-    if (!diagonal && ny < next.y &&
-        check(source.add(up)) && check(next.add(up))) {
+    if (ny < next.y && check(source.add(up)) && check(next.add(up))) {
       const flat_limit = 4;
       const jump_limit = 3;
-      for (let j = 0, jump = next; j < flat_limit; j++) {
-        jump = jump.add(dir);
-        const jump_up = jump.add(up);
-        if (!check(jump_up)) break;
-        if (!(j < jump_limit || check(jump))) break;
-        const jy = AStarDrop(jump_up, check);
-        result.push(AStarAdjust(jump, jy));
-        if (jy > source.y) break;
+      if (!diagonal) {
+        for (let j = 0, jump = next; j < flat_limit; j++) {
+          jump = jump.add(dir);
+          const jump_up = jump.add(up);
+          if (!check(jump_up)) break;
+          if (!(j < jump_limit || check(jump))) break;
+          const jy = AStarDrop(jump_up, check);
+          result.push(AStarAdjust(jump, jy));
+          if (jy > source.y) break;
+        }
+      } else {
+        const d = kDiagonalDistance;
+        const scratch = kDiagonalScratch;
+        const check_two = (p: Point) => check(p) && check(p.add(up));
+
+        for (let i = 1; i < kDiagonalDistance; i++) {
+          const x = int(i * dir.x), z = int(i * dir.z);
+          scratch[x * 1] = check_two(source.add(new Point(x, 0, 0)));
+          scratch[z * d] = check_two(source.add(new Point(0, 0, z)));
+        }
+
+        for (const path of kDiagonalChecks) {
+          let okay = true;
+          const limit = path.length - 1;
+          for (let j = 1; j < limit; j++) {
+            const value = path[j];
+            const index = value.x + value.z * d;
+            if (scratch[index]) continue;
+            okay = false;
+            break;
+          }
+          const value = path[limit];
+          const index = value.x + value.z * d;
+          if (!okay) {
+            scratch[index] = false;
+          } else {
+            const dx = int(value.x * dir.x), dz = int(value.z * dir.z);
+            const target = source.add(new Point(dx, 0, dz));
+            okay = check_two(target);
+            scratch[index] = okay;
+            if (okay) result.push(AStarAdjust(target, AStarDrop(target, check)));
+          }
+        }
       }
     }
   }
