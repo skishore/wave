@@ -4,8 +4,17 @@ Pikachu-class (walk + jump):
 - Penalize paths that go through water
 - Optimization: cache tile-type checks (required for multi-tile entities)
 - Leave a buffer around the player when following
+  - We must intelligently select a point near the player to path to, instead
+  - (Going from non-zero acceleration to zero and back results in jerky follower movement)
 - Fix path-following bug: if we need to jump, path to the center of a square where z++ is free
+  - Need a more general fix: check that there are no obstructions in the sweep from the current cell towards the next one
 - Try to de-dupe diagonal and direct jumps without losing optimizations
+  - We can do this by building a "jump trie"
+- Use dynamic programming to shorten paths
+  - The "hasDirectPath" check should pass if every step on the path is a height drop
+- When in the air, path from the landing site
+  - Combined with the DP check above, we can more intelligently merge jumps
+  - Similarly, if we're grounded but our center is not, adjust the source
 
 Other classes:
 - Multi-grid-cell entities
