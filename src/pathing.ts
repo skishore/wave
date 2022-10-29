@@ -108,6 +108,46 @@ for (let x = int(1); x < kDiagonalDistance; x++) {
   }
 }
 
+const kSweepDistance = 16;
+const kSweeps: Point[][] = [];
+
+for (let z = int(0); z < kSweepDistance; z++) {
+  for (let x = int(0); x < kSweepDistance; x++) {
+    kSweeps.push(precomputeDiagonal(x, z));
+  }
+}
+
+const hasDirectPath = (source: Point, target: Point, check: Check): boolean => {
+  if (source.y < target.y) return false;
+
+  const sx = source.x;
+  const sz = source.z;
+  const dx = int(target.x - sx);
+  const dz = int(target.z - sz);
+  const ax = int(Math.abs(dx));
+  const az = int(Math.abs(dz));
+  if (ax >= kSweepDistance || az >= kSweepDistance) return false;
+
+  const index = ax + az * kSweepDistance;
+  const sweep = kSweeps[index];
+  const limit = sweep.length - 1;
+
+  const last = sweep[limit];
+  assert(last.x === ax);
+  assert(last.z === az);
+
+  let y = source.y;
+  for (let i = 1; i < limit; i++) {
+    const p = sweep[i];
+    const x = dx > 0 ? int(sx + p.x) : int(sx - p.x);
+    const z = dz > 0 ? int(sz + p.z) : int(sz - p.z);
+    if (!check(new Point(x, y, z))) return false;
+    while (y >= target.y && check(new Point(x, int(y - 1), z))) y--;
+    if (y < target.y) return false;
+  }
+  return true;
+};
+
 //////////////////////////////////////////////////////////////////////////////
 
 class AStarNode extends Point {
@@ -340,12 +380,9 @@ const AStarNeighbors =
   return result;
 };
 
-const AStar = (source: Point, target: Point, check: Check,
-               limit?: int, record?: Point[]): Point[] => {
-  //console.log(`AStar: ${source.toString()} -> ${target.toString()}`);
-
+const AStarCore = (source: Point, target: Point, check: Check): Point[] => {
   let count = int(0);
-  limit = limit ? limit : AStarLimit;
+  const limit = AStarLimit;
 
   const sy = AStarDrop(source, check);
   source = sy >= source.y - 1 ? AStarAdjust(source, sy) : source;
@@ -365,8 +402,9 @@ const AStar = (source: Point, target: Point, check: Check,
 
   while (count < limit && heap.length > 0) {
     const cur = AStarHeapExtractMin(heap);
-    //console.log(`  ${count}: ${cur.toString()}: distance = ${cur.distance}, score = ${cur.score}`);
-    if (record) record.push(cur);
+    //console.log(`  ${count}: ${cur.toString()}: ` +
+    //            `distance = ${cur.distance}, ` +
+    //            `score = ${cur.score}`);
     count = int(count + 1);
 
     if (cur.equal(target)) {
@@ -411,18 +449,42 @@ const AStar = (source: Point, target: Point, check: Check,
     }
   }
 
+  assert(best !== null);
   const result: Point[] = [];
   while (best) {
     result.push(best);
     best = best.parent;
   }
-  result.reverse();
+  return result.reverse();
+};
+
+
+const AStar = (source: Point, target: Point, check: Check): Point[] => {
+  //console.log(`AStar: ${source.toString()} -> ${target.toString()}`);
+
+  const sy = AStarDrop(source, check);
+  source = sy >= source.y - 1 ? AStarAdjust(source, sy) : source;
+  const ty = AStarDrop(target, check);
+  const drop = target.y - ty;
+  target = AStarAdjust(target, ty);
+
+  const path = AStarCore(source, target, check);
 
   if (drop > 1) {
-    for (let i = 0; i < result.length - 1; i++) {
-      if (result[i].y - result[i + 1].y > 1) return [];
+    for (let i = 0; i < path.length - 1; i++) {
+      if (path[i].y - path[i + 1].y > 1) return [];
     }
   }
+
+  // NOTE: We could use dynamic programming here for further simplification.
+  assert(path.length > 0);
+  const result: Point[] = [path[0]];
+  for (let i = 2; i < path.length; i++) {
+    const last = result[result.length - 1];
+    if (hasDirectPath(last, path[i], check)) continue;
+    result.push(path[i - 1]);
+  }
+  if (path.length > 1) result.push(path[path.length - 1]);
 
   //console.log(`Found ${result.length}-node path:`);
   //for (const step of result) {

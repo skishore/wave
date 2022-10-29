@@ -641,53 +641,6 @@ const solid = (env: TypedEnv, x: int, y: int, z: int): boolean => {
   return env.registry.solid[block];
 };
 
-const hasDirectPath = (env: TypedEnv, start: Point, end: Point): boolean => {
-  if (start[1] !== end[1]) return false;
-  if (start[0] === end[0] && start[2] === end[2]) return true;
-
-  const [sx, y, sz] = start;
-  const [ex, _, ez] = end;
-  const dx = Math.abs(ex - sx);
-  const dz = Math.abs(ez - sz);
-  const elements: Point[] = [];
-
-  if (dx <= dz) {
-    const extra = dx === 0 ? 1 : 0;
-    for (let i = 0; i < dz; i++) {
-      const a = Math.floor(i * dx / dz);
-      const b = Math.ceil((i + 1) * dx / dz) + extra;
-      for (let j = a; j < b; j++) {
-        const x = int(ex >= sx ? sx + j : sx - j - 1);
-        const z = int(ez >= sz ? sz + i : sz - i - 1);
-        elements.push([x, y, z]);
-      }
-    }
-  } else {
-    const extra = dz === 0 ? 1 : 0;
-    for (let i = 0; i < dx; i++) {
-      const a = Math.floor(i * dz / dx);
-      const b = Math.ceil((i + 1) * dz / dx) + extra;
-      for (let j = a; j < b; j++) {
-        const x = int(ex >= sx ? sx + i : sx - i - 1);
-        const z = int(ez >= sz ? sz + j : sz - j - 1);
-        elements.push([x, y, z]);
-      }
-    }
-  }
-
-  const n = dx && dz ? 4 : 1;
-  for (const element of elements) {
-    const [x, y, z] = element;
-    for (let i = 0; i < n; i++) {
-      const ix = int(x + (i & 1));
-      const iz = int(z + ((i >> 1) & 1));
-      if (solid(env, ix, y, iz)) return false;
-      if (!solid(env, ix, int(y - 1), iz)) return false;
-    }
-  }
-  return true;
-};
-
 const findPath = (env: TypedEnv, state: PathingState,
                   body: PhysicsState): void => {
   const grounded = body.resting[1] < 0;
@@ -699,22 +652,15 @@ const findPath = (env: TypedEnv, state: PathingState,
   const sz = int(Math.floor((min[2] + max[2]) / 2));
   const [tx, ty, tz] = nonnull(state.target);
 
-  const path = AStar(new AStarPoint(sx, sy, sz),
-                     new AStarPoint(tx, ty, tz),
-                     p => !solid(env, p.x, p.y, p.z));
+  const source = new AStarPoint(sx, sy, sz);
+  const target = new AStarPoint(tx, ty, tz);
+  const check = (p: AStarPoint) => !solid(env, p.x, p.y, p.z);
+
+  const path = AStar(source, target, check);
   if (path.length === 0) return;
 
-  const full = path.map((p: AStarPoint): Point => [p.x, p.y, p.z]);
-  const result: Point[] = [full[0]];
-  for (let i = 2; i < full.length; i++) {
-    const last = result[result.length - 1];
-    if (hasDirectPath(env, last, full[i])) continue;
-    result.push(full[i - 1]);
-  }
-  if (full.length > 1) {
-    result.push(full[full.length - 1]);
-    result.shift();
-  }
+  const result = path.map((p: AStarPoint): Point => [p.x, p.y, p.z]);
+  if (result.length > 1) result.shift();
 
   const last = result[result.length - 1];
   const use_soft = last[0] === tx && last[2] === tz;
