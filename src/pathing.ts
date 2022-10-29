@@ -463,14 +463,20 @@ const AStar = (source: Point, target: Point, check: Check): Point[] => {
   //console.log(`AStar: ${source.toString()} -> ${target.toString()}`);
 
   const sy = AStarDrop(source, check);
-  source = sy >= source.y - 1 ? AStarAdjust(source, sy) : source;
+  const sdrop = sy === source.y - 1 ? 1 : 0;
+  source = AStarAdjust(source, int(source.y - sdrop));
+
   const ty = AStarDrop(target, check);
-  const drop = target.y - ty;
-  target = AStarAdjust(target, ty);
+  const tdrop = target.y - ty;
+  target = AStarAdjust(target, int(target.y - tdrop));
 
   const path = AStarCore(source, target, check);
 
-  if (drop > 1) {
+  if (sdrop && path.length > 1 && path[1].y > path[0].y) {
+    path[0] = path[0].add(Direction.up);
+  }
+
+  if (tdrop > 1) {
     for (let i = 0; i < path.length - 1; i++) {
       if (path[i].y - path[i + 1].y > 1) return [];
     }

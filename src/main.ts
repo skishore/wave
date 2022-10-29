@@ -631,6 +631,7 @@ interface PathingState {
   path: Point[] | null,
   path_index: int,
   path_soft_target: Position | null,
+  path_needs_precision: boolean[] | null,
   // Next path request:
   target: Point | null,
   soft_target: Position | null,
@@ -660,14 +661,14 @@ const findPath = (env: TypedEnv, state: PathingState,
   if (path.length === 0) return;
 
   const result = path.map((p: AStarPoint): Point => [p.x, p.y, p.z]);
-  if (result.length > 1) result.shift();
-
   const last = result[result.length - 1];
   const use_soft = last[0] === tx && last[2] === tz;
 
   state.path = result;
   state.path_index = 0;
   state.path_soft_target = use_soft ? state.soft_target : null;
+  state.path_needs_precision = result.map(_ => false);
+  state.path_needs_precision[result.length - 1] = true;
   state.target = state.soft_target = null;
 
   //console.log(JSON.stringify(state.path));
@@ -679,6 +680,70 @@ const PIDController =
   return 20.00 * error + dfactor * derror;
 };
 
+const nextPathStep = (env: TypedEnv, state: PathingState,
+                      body: PhysicsState, grounded: boolean): boolean => {
+  if (!grounded) return false;
+
+  const {min, max} = body;
+  const path = nonnull(state.path);
+  const path_index = state.path_index;
+  const path_needs_precision = nonnull(state.path_needs_precision);
+  const soft = state.path_soft_target;
+
+  const node = path[path_index];
+  const last = path_index === path.length - 1;
+  const use_soft = grounded && last && soft;
+  const needs_precision = path_needs_precision[path_index];
+
+  const x = use_soft ? soft[0] - 0.5 : node[0];
+  const z = use_soft ? soft[2] - 0.5 : node[2];
+  const y = node[1];
+
+  const E = (() => {
+    const width = max[0] - min[0];
+    if (needs_precision) return 0.4 * (1 - width);
+    return (path_index === 0 ? -0.6 : -0.4) * width;
+  })();
+
+  const result = x + E <= min[0] && max[0] <= x + 1 - E &&
+                 y + 0 <= min[1] && max[1] <= y + 1 - 0 &&
+                 z + E <= min[2] && max[2] <= z + 1 - E;
+
+  if (result && !needs_precision && path_index < path.length - 1) {
+    const blocked = (() => {
+      const check = (x: int, y: int, z: int) => {
+        const block = env.world.getBlock(x, y, z);
+        return !env.registry.solid[block];
+      };
+
+      const check_move = (x: number, y: number, z: number) => {
+        Vec3.set(kTmpDelta, x, y, z);
+        sweep(kTmpMin, kTmpMax, kTmpDelta, kTmpResting, check, true);
+        return kTmpResting[0] || kTmpResting[1] || kTmpResting[2];
+      };
+
+      Vec3.copy(kTmpMax, body.max);
+      Vec3.copy(kTmpMin, body.min);
+
+      const prev = path[path_index];
+      const next = path[path_index + 1];
+      const dx = next[0] + 0.5 - 0.5 * (body.min[0] + body.max[0]);
+      const dz = next[2] + 0.5 - 0.5 * (body.min[2] + body.max[2]);
+      const dy = next[1] - body.min[1];
+
+      return (dy <= 0 || check_move(0, dy, 0)) &&
+             (!(dx || dz) || check_move(dx, 0, dz));
+    })();
+
+    if (blocked) {
+      path_needs_precision[path_index] = true;
+      return false;
+    }
+  }
+
+  return result;
+};
+
 const followPath = (env: TypedEnv, state: PathingState,
                     body: PhysicsState): void => {
   const path = nonnull(state.path);
@@ -687,20 +752,10 @@ const followPath = (env: TypedEnv, state: PathingState,
   if (!movement) return;
 
   const grounded = body.resting[1] < 0;
-  const node = path[state.path_index];
-  const E = state.path_index + 1 === path.length
-    ? 0.4 * (1 - (body.max[0] - body.min[0]))
-    : -0.4 * (body.max[0] - body.min[0]);
+  if (nextPathStep(env, state, body, grounded)) state.path_index++;
+  if (state.path_index === path.length) { state.path = null; return; }
 
-  if (node[0] + E <= body.min[0] && body.max[0] <= node[0] + 1 - E &&
-      node[1] + 0 <= body.min[1] && body.min[1] <= node[1] + 1 - 0 &&
-      node[2] + E <= body.min[2] && body.max[2] <= node[2] + 1 - E &&
-      grounded) {
-    state.path_index++;
-  }
   const path_index = state.path_index;
-  if (path_index === path.length) { state.path = null; return; }
-
   const soft = state.path_soft_target;
   const last = path_index === path.length - 1;
   const use_soft = grounded && last && soft;
@@ -742,8 +797,9 @@ const followPath = (env: TypedEnv, state: PathingState,
 
   const mesh = env.meshes.get(state.id);
   if (!mesh) return;
-  const vx = path_index > 0 ? cur[0] - path[path_index - 1][0] : dx;
-  const vz = path_index > 0 ? cur[2] - path[path_index - 1][2] : dz;
+  const use_dx = use_soft || path_index === 0;
+  const vx = use_dx ? dx : cur[0] - path[path_index - 1][0];
+  const vz = use_dx ? dz : cur[2] - path[path_index - 1][2];
   mesh.heading = Math.atan2(vx, vz);
 };
 
@@ -763,6 +819,7 @@ const Pathing = (env: TypedEnv): Component<PathingState> => ({
     path: null,
     path_index: 0,
     path_soft_target: null,
+    path_needs_precision: null,
     target: null,
     soft_target: null,
   }),

@@ -3,11 +3,12 @@ Pathfinding TODOs:
 Pikachu-class (walk + jump):
 - Penalize paths that go through water
 - Optimization: cache tile-type checks (required for multi-tile entities)
+- Fix bugs in hasDirectPath computation
+- Fix bug: we may need to jump in the x direction even if abs(dx) === 1, etc.
+  - We should save the "needs jump" bit when we compute the path, and use it when following the path
 - Leave a buffer around the player when following
   - We must intelligently select a point near the player to path to, instead
   - (Going from non-zero acceleration to zero and back results in jerky follower movement)
-- Fix path-following bug: if we need to jump, path to the center of a square where z++ is free
-  - Need a more general fix: check that there are no obstructions in the sweep from the current cell towards the next one
 - Try to de-dupe diagonal and direct jumps without losing optimizations
   - We can do this by building a "jump trie"
 - Use dynamic programming to shorten paths
