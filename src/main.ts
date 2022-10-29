@@ -703,12 +703,13 @@ const followPath = (env: TypedEnv, state: PathingState,
 
   const soft = state.path_soft_target;
   const last = path_index === path.length - 1;
+  const use_soft = grounded && last && soft;
 
   const cur = path[path_index];
   const cx = (body.min[0] + body.max[0]) / 2;
   const cz = (body.min[2] + body.max[2]) / 2;
-  const dx = (last && soft ? soft[0] : cur[0] + 0.5) - cx;
-  const dz = (last && soft ? soft[2] : cur[2] + 0.5) - cz;
+  const dx = (use_soft ? soft[0] : cur[0] + 0.5) - cx;
+  const dz = (use_soft ? soft[2] : cur[2] + 0.5) - cz;
 
   const penalty = body.inFluid ? movement.swimPenalty : 1;
   const speed = penalty * movement.maxSpeed;
