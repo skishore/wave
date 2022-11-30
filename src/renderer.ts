@@ -362,8 +362,8 @@ class TextureAtlas {
       const size = Math.floor(image.width / texture.w);
       const element = document.createElement('canvas');
       element.width = element.height = size;
-      const canvas = nonnull(element.getContext('2d'));
-      this.canvas = canvas;
+      const canvas = element.getContext('2d', {willReadFrequently: true});
+      this.canvas = nonnull(canvas);
     }
 
     const canvas = this.canvas;
@@ -491,8 +491,8 @@ class SpriteAtlas {
 
     if (this.canvas === null) {
       const element = document.createElement('canvas');
-      const canvas = nonnull(element.getContext('2d'));
-      this.canvas = canvas;
+      const canvas = element.getContext('2d', {willReadFrequently: true});
+      this.canvas = nonnull(canvas);
     }
 
     const canvas = this.canvas;
@@ -1356,20 +1356,20 @@ class InstancedManager implements MeshManager<InstancedShader> {
 
 //////////////////////////////////////////////////////////////////////////////
 
+const kUnitSquarePos = Float32Array.from([0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1]);
+
 const kSpriteShader = `
   uniform float u_size;
   uniform float u_height;
   uniform vec4 u_stuv;
   uniform vec4 u_billboard;
   uniform mat4 u_transform;
+  in vec2 a_pos;
   out vec2 v_uv;
 
   void main() {
-    int index = gl_VertexID + (gl_VertexID > 0 ? gl_InstanceID : 0);
-
-    float w = float(((index + 1) & 3) >> 1);
-    float h = float(((index + 0) & 3) >> 1);
-
+    float w = a_pos[0];
+    float h = a_pos[1];
     float u = u_stuv[0] + u_stuv[2] * w;
     float v = u_stuv[1] + u_stuv[3] * (1.0 - h);
     v_uv = vec2(u, v);
@@ -1457,7 +1457,7 @@ class SpriteMesh extends Mesh<SpriteShader> {
     gl.uniform1f(shader.u_frame, this.frame);
     gl.uniform1f(shader.u_height, this.height);
     gl.uniformMatrix4fv(shader.u_transform, false, transform);
-    gl.drawArraysInstanced(gl.TRIANGLES, 0, 3, 2);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
     return true;
   }
 
@@ -1490,10 +1490,13 @@ class SpriteManager implements MeshManager<SpriteShader> {
   private billboard: Float32Array;
   private bounds: Float64Array;
   private meshes: SpriteMesh[];
+  private unit_square_vao: WebGLVertexArrayObject;
 
-  constructor(gl: WebGL2RenderingContext, atlas: SpriteAtlas) {
+  constructor(gl: WebGL2RenderingContext, atlas: SpriteAtlas,
+              unit_square_vao: WebGLVertexArrayObject) {
     this.gl = gl;
     this.atlas = atlas;
+    this.unit_square_vao = unit_square_vao;
     this.shader = new SpriteShader(gl);
     this.billboard = new Float32Array(4);
     this.bounds = new Float64Array(24);
@@ -1517,11 +1520,12 @@ class SpriteManager implements MeshManager<SpriteShader> {
   }
 
   render(camera: Camera, planes: CullingPlane[], stats: Stats): void {
-    const {billboard, gl, meshes, shader} = this;
+    const {billboard, gl, meshes, shader, unit_square_vao} = this;
     let drawn = 0;
 
     // All sprite meshes are alpha-tested, for now.
     shader.bind();
+    gl.bindVertexArray(unit_square_vao);
     const pitch  = -0.33 * camera.pitch;
     billboard[0] = Math.cos(camera.heading);
     billboard[1] = -Math.sin(camera.heading);
@@ -1545,13 +1549,12 @@ const kShadowAlpha = 0.36;
 const kShadowShader = `
   uniform float u_size;
   uniform mat4 u_transform;
+  in vec2 a_pos;
   out vec2 v_pos;
 
   void main() {
-    int index = gl_VertexID + (gl_VertexID > 0 ? gl_InstanceID : 0);
-
-    float w = float(((index + 1) & 3) >> 1);
-    float h = float(((index + 0) & 3) >> 1);
+    float w = a_pos[0];
+    float h = a_pos[1];
     v_pos = vec2(w - 0.5, h - 0.5);
 
     float x = 2.0 * u_size * v_pos[0];
@@ -1598,7 +1601,7 @@ class ShadowMesh extends Mesh<ShadowShader> {
     const {gl, shader} = this;
     gl.uniform1f(shader.u_size, this.size);
     gl.uniformMatrix4fv(shader.u_transform, false, transform);
-    gl.drawArraysInstanced(gl.TRIANGLES, 0, 3, 2);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
     return true;
   }
 
@@ -1616,9 +1619,12 @@ class ShadowManager implements MeshManager<ShadowShader> {
   shader: ShadowShader;
   private bounds: Float64Array;
   private meshes: ShadowMesh[];
+  private unit_square_vao: WebGLVertexArrayObject;
 
-  constructor(gl: WebGL2RenderingContext) {
+  constructor(gl: WebGL2RenderingContext,
+              unit_square_vao: WebGLVertexArrayObject) {
     this.gl = gl;
+    this.unit_square_vao = unit_square_vao;
     this.shader = new ShadowShader(gl);
     this.bounds = new Float64Array(24);
     this.meshes = [];
@@ -1640,11 +1646,12 @@ class ShadowManager implements MeshManager<ShadowShader> {
   }
 
   render(camera: Camera, planes: CullingPlane[], stats: Stats): void {
-    const {gl, meshes, shader} = this;
+    const {gl, meshes, shader, unit_square_vao} = this;
     let drawn = 0;
 
     // All shadow meshes are alpha-blended.
     shader.bind();
+    gl.bindVertexArray(unit_square_vao);
     gl.depthMask(false);
     gl.enable(gl.BLEND);
     for (const mesh of meshes) {
@@ -1664,10 +1671,11 @@ const kDefaultFogColor = [0.6, 0.8, 1.0];
 const kDefaultSkyColor = [0.6, 0.8, 1.0];
 
 const kScreenOverlayShader = `
+  in vec2 a_pos;
+
   void main() {
-    int index = gl_VertexID + (gl_VertexID > 0 ? gl_InstanceID : 0);
-    float w = float(((index + 1) & 3) >> 1);
-    float h = float(((index + 0) & 3) >> 1);
+    float w = a_pos[0];
+    float h = a_pos[1];
     gl_Position = vec4(2.0 * w - 1.0, 2.0 * h - 1.0, 1.0, 1.0);
   }
 #split
@@ -1694,11 +1702,14 @@ class ScreenOverlay {
   private fog_color: Float32Array;
   private gl: WebGL2RenderingContext;
   private shader: ScreenOverlayShader;
+  private unit_square_vao: WebGLVertexArrayObject;
 
-  constructor(gl: WebGL2RenderingContext) {
+  constructor(gl: WebGL2RenderingContext,
+              unit_square_vao: WebGLVertexArrayObject) {
+    this.gl = gl;
+    this.unit_square_vao = unit_square_vao;
     this.color = new Float32Array([1, 1, 1, 1]);
     this.fog_color = new Float32Array(kDefaultFogColor);
-    this.gl = gl;
     this.shader = new ScreenOverlayShader(gl);
   }
 
@@ -1706,17 +1717,19 @@ class ScreenOverlay {
     const alpha = this.color[3];
     if (alpha === 1) return;
 
-    this.shader.bind();
-    const gl = this.gl;
-    this.color[3] = 1;
-    gl.uniform4fv(this.shader.u_color, this.color);
-    gl.drawArraysInstanced(gl.TRIANGLES, 0, 3, 2);
-    this.color[3] = alpha;
+    const {color, gl, shader, unit_square_vao} = this;
+
+    shader.bind();
+    gl.bindVertexArray(unit_square_vao);
+    color[3] = 1;
+    gl.uniform4fv(shader.u_color, color);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    color[3] = alpha;
 
     gl.enable(gl.BLEND);
     gl.disable(gl.DEPTH_TEST);
-    gl.uniform4fv(this.shader.u_color, this.color);
-    gl.drawArraysInstanced(gl.TRIANGLES, 0, 3, 2);
+    gl.uniform4fv(shader.u_color, color);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
     gl.enable(gl.DEPTH_TEST);
     gl.disable(gl.BLEND);
   }
@@ -1813,11 +1826,17 @@ class Renderer {
     const atlas = new SpriteAtlas(gl);
     this.allocator = allocator;
 
+    const unit_square_vao = nonnull(gl.createVertexArray());
+    const unit_square_buffer = this.allocator.alloc(kUnitSquarePos, false);
+    gl.bindVertexArray(unit_square_vao);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
     this.gl = gl;
-    this.overlay = new ScreenOverlay(gl);
+    this.overlay = new ScreenOverlay(gl, unit_square_vao);
     this.instanced_manager = new InstancedManager(gl, allocator, atlas);
-    this.shadow_manager = new ShadowManager(gl);
-    this.sprite_manager = new SpriteManager(gl, atlas);
+    this.shadow_manager = new ShadowManager(gl, unit_square_vao);
+    this.sprite_manager = new SpriteManager(gl, atlas, unit_square_vao);
     this.voxels_manager = new VoxelManager(gl, allocator);
   }
 
