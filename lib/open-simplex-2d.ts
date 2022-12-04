@@ -8,10 +8,18 @@ const NORM_2D = 1.0 / 47.0;
 const SQUISH_2D = (Math.sqrt(2 + 1) - 1) / 2;
 const STRETCH_2D = (1 / Math.sqrt(2 + 1) - 1) / 2;
 
+let numInstances = 0;
+const kMaxNumInstances = 64;
+const kInstancePermutations: Uint8Array[] = [];
+
 export type Noise2D = (x: number, y: number) => number;
 
 export function makeNoise2D(clientSeed: number): Noise2D {
   console.log('Using faster noise');
+  const instance = numInstances++;
+  if (numInstances > kMaxNumInstances) {
+    throw new Error(`We only support ${kMaxNumInstances} noise instance.`);
+  }
 
   const perm = new Uint8Array(256);
   const source = new Uint8Array(256);
@@ -27,6 +35,9 @@ export function makeNoise2D(clientSeed: number): Noise2D {
     perm[i] = source[r[0]];
     source[r[0]] = source[i];
   }
+
+  kInstancePermutations.push(perm);
+  return (x: number, y: number) => kWasmHelper.noise2D(instance, x, y);
 
   return (x: number, y: number): number => {
     const stretchOffset = (x + y) * STRETCH_2D;
@@ -145,7 +156,7 @@ const [kContributions, kLookup] = (() => {
 })();
 
 // Stored packed: accessed at query time
-const gradients2D = new Int32Array([
+const gradients2D = new Float64Array([
   5, 2,
   2, 5,
   -5, 2,
@@ -155,3 +166,39 @@ const gradients2D = new Int32Array([
   -5, -2,
   -2, -5,
 ]);
+
+interface WasmHelper {
+  memory: WebAssembly.Memory;
+  getContributions: () => number;
+  getLookup: () => number;
+  getPermutations: (i: number) => number;
+  noise2D: (i: number, x: number, y: number) => number;
+};
+
+let kWasmHelper: WasmHelper = (null as any);
+
+export const initWasm = (async () => {
+  const wasm     = await (await fetch('exports.wasm.opt')).arrayBuffer();
+  const module   = await WebAssembly.compile(wasm);
+  const instance = await WebAssembly.instantiate(module);
+  kWasmHelper = (instance.exports as any);
+
+  const buffer = kWasmHelper.memory.buffer;
+  const contributions = new Float64Array(
+      buffer, kWasmHelper.getContributions(), kContributions.length);
+  for (let i = 0; i < kContributions.length; i++) {
+    contributions[i] = kContributions[i];
+  }
+  const lookup = new Uint8Array(
+      buffer, kWasmHelper.getLookup(), kLookup.length);
+  for (let i = 0; i < kLookup.length; i++) {
+    lookup[i] = kLookup[i];
+  }
+  kInstancePermutations.forEach((perm, instance) => {
+    const permutations = new Uint8Array(
+        buffer, kWasmHelper.getPermutations(instance), perm.length);
+    for (let i = 0; i < perm.length; i++) {
+      permutations[i] = perm[i];
+    }
+  });
+});

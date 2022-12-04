@@ -7,6 +7,7 @@ import {AStar, Check, Point as AStarPoint} from './pathing.js';
 import {SpriteMesh, ShadowMesh, Texture} from './renderer.js';
 import {sweep} from './sweep.js';
 import {Blocks, getHeight, loadChunk, loadFrontier} from './worldgen.js';
+import {initWasm} from '../lib/open-simplex-2d.js';
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -1085,6 +1086,11 @@ const main = () => {
   env.refresh();
 };
 
-window.onload = main;
+const wrapper = async () => {
+  await initWasm();
+  main();
+};
+
+window.onload = wrapper;
 
 export {};
