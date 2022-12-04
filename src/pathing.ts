@@ -348,8 +348,8 @@ const AStarNeighbors =
 
         for (let i = 1; i < kDiagonalDistance; i++) {
           const x = int(i * dir.x), z = int(i * dir.z);
-          scratch[x * 1] = check_two(source.add(new Point(x, 0, 0)));
-          scratch[z * d] = check_two(source.add(new Point(0, 0, z)));
+          scratch[i * 1] = check_two(source.add(new Point(x, 0, 0)));
+          scratch[i * d] = check_two(source.add(new Point(0, 0, z)));
         }
 
         for (const path of kDiagonalChecks) {

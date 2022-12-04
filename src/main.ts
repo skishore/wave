@@ -732,6 +732,22 @@ const nextPathStep = (env: TypedEnv, state: PathingState,
       const dz = next[2] + 0.5 - 0.5 * (body.min[2] + body.max[2]);
       const dy = next[1] - body.min[1];
 
+      // TODO(shaunak): When applied to path_index 0, this check can result in
+      // a kind of infinite loop that prevents path following. It occurs if
+      // the A-star algorithm returns a path where the first step (from the
+      // sprite's original cell to the next cell) includes a collision. A-star
+      // isn't supposed to do that, but that's a fragile invariant to rely on.
+      //
+      // When the invariant is broken, then path_needs_precision will be set
+      // for path_index 0. We'll move to the center of that cell, then move
+      // to the next path step. But as soon as we move away from the center,
+      // the next call to A-star will still have the same origin, and will
+      // re-start the loop.
+      //
+      // How can we fix this issue safely? We could double-check here that if
+      // the current path is blocked, then the path from the center of the cell
+      // is not blocked (i.e. double-check the supposed invariant). If it fails,
+      // then pathing to the block center is useless and we'll skip it.
       return (dy <= 0 || check_move(0, dy, 0)) &&
              (!(dx || dz) || check_move(dx, 0, dz));
     })();
