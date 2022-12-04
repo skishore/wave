@@ -226,6 +226,9 @@ const loadChunk = (blocks: Blocks) => (x: int, z: int, column: Column) => {
   const dx = cx * kChunkWidth - kBuffer;
   const dz = cz * kChunkWidth - kBuffer;
   if (cx !== kCurrentChunk.cx || cz !== kCurrentChunk.cz) {
+    const start = Date.now();
+    for (let iii = 0; iii < 1000; iii++) {
+
     for (let i = 0; i < kExpandedWidth; i++) {
       for (let j = 0; j < kExpandedWidth; j++) {
         const offset = 3 * (i + j * kExpandedWidth);
@@ -236,6 +239,10 @@ const loadChunk = (blocks: Blocks) => (x: int, z: int, column: Column) => {
         kChunkHeightmap[offset + 2] = snow_depth;
       }
     }
+
+    }
+    console.log(Date.now() - start);
+
     kCurrentChunk.cx = cx;
     kCurrentChunk.cz = cz;
   }
