@@ -631,7 +631,11 @@ class Circle<T extends CircleElement> {
 const kChunkBits   = int(4);
 const kChunkWidth  = int(1 << kChunkBits);
 const kChunkMask   = int(kChunkWidth - 1);
-const kWorldHeight = int(256);
+const kHeightBits  = int(8);
+const kWorldHeight = int(1 << kHeightBits);
+
+const kChunkShiftX = kHeightBits;
+const kChunkShiftZ = kHeightBits + kChunkBits;
 
 const kChunkRadius = 12;
 
@@ -687,6 +691,12 @@ class Chunk {
     this.light_map = new Tensor2(kChunkWidth, kChunkWidth);
     this.equilevels = new Int8Array(kWorldHeight);
     this.load(loader);
+
+    // Check the invariants we use to optimize getBlock.
+    const [sx, sy, sz] = this.voxels.stride;
+    assert(sx === (1 << kChunkShiftX));
+    assert(sz === (1 << kChunkShiftZ));
+    assert(sy === 1);
   }
 
   dispose(): void {
@@ -703,7 +713,8 @@ class Chunk {
 
   getBlock(x: int, y: int, z: int): BlockId {
     const xm = int(x & kChunkMask), zm = int(z & kChunkMask);
-    return this.voxels.get(xm, y, zm) as BlockId;
+    const index = (xm << kChunkShiftX) | y | (zm << kChunkShiftZ);
+    return this.voxels.data[index] as BlockId;
   }
 
   getLitHeight(x: int, z: int): int {

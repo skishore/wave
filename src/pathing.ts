@@ -284,11 +284,15 @@ const AStarHeight =
   return AStarDrop(target, check);
 };
 
+const AStarDropTmpPoint = new Point(0, 0, 0);
+
 const AStarDrop = (p: Point, check: Check): int => {
-  const down = Direction.down;
-  let floor = p.add(down);
+  const floor = AStarDropTmpPoint;
+  (floor as any).x = p.x;
+  (floor as any).y = p.y - 1;
+  (floor as any).z = p.z;
   while (floor.y >= 0 && check(floor)) {
-    floor = floor.add(down);
+    (floor as any).y--;
   }
   return int(floor.y + 1);
 };
