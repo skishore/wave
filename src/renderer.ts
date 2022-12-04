@@ -99,7 +99,7 @@ class Camera {
 
     // Scrolling is trivial to apply: add and clamp.
     if (dscroll === 0) return;
-    this.zoom = Math.max(0, Math.min(10, this.zoom + Math.sign(dscroll)));
+    this.zoom = Math.max(0, Math.min(15, this.zoom + Math.sign(dscroll)));
   }
 
   getCullingPlanes(): CullingPlane[] {

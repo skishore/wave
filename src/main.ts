@@ -1009,12 +1009,12 @@ const addEntity = (env: TypedEnv, image: string, size: number,
 const main = () => {
   const env = new TypedEnv('container');
 
-  const size = 1;
-  const player = addEntity(env, 'player', size, 1, 1, 0.8, 0.6, 8, 4, 10, 7.5);
+  const size = 1.5;
+  const player = addEntity(env, 'player', size, 1, 1, 1.5, 0.75, 8, 4, 10, 7.5);
   env.inputs.add(player);
   env.target.add(player);
 
-  const follower = addEntity(env, 'follower', size, 1, 1, 0.6, 0.6, 12, 8, 15, 10);
+  const follower = addEntity(env, 'follower', size, 1, 1, 0.75, 0.75, 12, 8, 15, 10);
   env.meshes.getX(follower).heading = 0;
   env.pathing.add(follower);
 
