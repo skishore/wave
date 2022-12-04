@@ -265,9 +265,10 @@ const runPhysics = (env: TypedEnv, dt: number, state: PhysicsState) => {
   Vec3.scale(kTmpDelta, kTmpAcceleration, dt);
   Vec3.scaleAndAdd(kTmpDelta, kTmpDelta, state.impulses, 1 / state.mass);
   if (state.friction) {
-    applyFriction(0, state, kTmpDelta);
-    applyFriction(1, state, kTmpDelta);
-    applyFriction(2, state, kTmpDelta);
+    Vec3.add(kTmpAcceleration, kTmpDelta, state.vel);
+    applyFriction(0, state, kTmpAcceleration);
+    applyFriction(1, state, kTmpAcceleration);
+    applyFriction(2, state, kTmpAcceleration);
   }
 
   if (state.autoStep) {
