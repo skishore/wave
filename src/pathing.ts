@@ -72,6 +72,17 @@ class Direction extends Point {
 
 //////////////////////////////////////////////////////////////////////////////
 
+class PathNode extends Point {
+  readonly jump: boolean;
+
+  constructor(p: Point, jump: boolean) {
+    super(p.x, p.y, p.z);
+    this.jump = jump;
+  }
+};
+
+//////////////////////////////////////////////////////////////////////////////
+
 const precomputeDiagonal = (x: int, z: int): Point[] => {
   const result: Point[] = [];
   result.push(Point.origin);
@@ -233,6 +244,7 @@ const AStarHeapExtractMin = (heap: AStarHeap): AStarNode => {
 type Check = (p: Point) => boolean;
 
 const AStarDiagonalPenalty = 1;
+const AStarJumpPenalty = 2;
 const AStarUnitCost = 16;
 const AStarUpCost   = 64;
 const AStarDownCost = 4;
@@ -423,6 +435,7 @@ const AStarCore = (source: Point, target: Point, check: Check): Point[] => {
       const distance = cur.distance +
                        Math.max(ax, az) * AStarUnitCost +
                        Math.min(ax, az) * AStarDiagonalPenalty +
+                       ((ax > 1 || az > 1) ? AStarJumpPenalty : 0) +
                        dy * (dy > 0 ? AStarUpCost : -AStarDownCost);
       const key = AStarKey(next, source);
       const existing = map.get(key);
@@ -463,7 +476,7 @@ const AStarCore = (source: Point, target: Point, check: Check): Point[] => {
 };
 
 
-const AStar = (source: Point, target: Point, check: Check): Point[] => {
+const AStar = (source: Point, target: Point, check: Check): PathNode[] => {
   //console.log(`AStar: ${source.toString()} -> ${target.toString()}`);
 
   const sy = AStarDrop(source, check);
@@ -475,9 +488,15 @@ const AStar = (source: Point, target: Point, check: Check): Point[] => {
   target = AStarAdjust(target, int(target.y - tdrop));
 
   const path = AStarCore(source, target, check);
+  assert(path.length > 0);
 
-  if (sdrop && path.length > 1 && path[1].y > path[0].y) {
-    path[0] = path[0].add(Direction.up);
+  if (sdrop) {
+    const original = path[0].add(Direction.up);
+    if (path.length > 1 && path[1].y > path[0].y) {
+      path[0] = original;
+    } else {
+      path.unshift(original);
+    }
   }
 
   if (tdrop > 1) {
@@ -486,15 +505,22 @@ const AStar = (source: Point, target: Point, check: Check): Point[] => {
     }
   }
 
+  const nodes = path.map((p, i) => {
+    if (i === 0) return new PathNode(p, false);
+    const prev = path[i - 1];
+    const jump = Math.abs(prev.x - p.x) > 1 || Math.abs(prev.z - p.z) > 1;
+    return new PathNode(p, jump);
+  });
+
   // NOTE: We could use dynamic programming here for further simplification.
-  assert(path.length > 0);
-  const result: Point[] = [path[0]];
-  for (let i = 2; i < path.length; i++) {
-    const last = result[result.length - 1];
-    if (hasDirectPath(last, path[i], check)) continue;
-    result.push(path[i - 1]);
+  assert(nodes.length > 0);
+  const result: PathNode[] = [nodes[0]];
+  for (let i = int(2); i < nodes.length; i++) {
+    const prev = result[result.length - 1], next = nodes[i];
+    if (!prev.jump && !next.jump && hasDirectPath(prev, next, check)) continue;
+    result.push(nodes[i - 1]);
   }
-  if (path.length > 1) result.push(path[path.length - 1]);
+  if (nodes.length > 1) result.push(nodes[nodes.length - 1]);
 
   //console.log(`Found ${result.length}-node path:`);
   //for (const step of result) {
@@ -505,4 +531,4 @@ const AStar = (source: Point, target: Point, check: Check): Point[] => {
 
 //////////////////////////////////////////////////////////////////////////////
 
-export {AStar, Check, Direction, Point};
+export {AStar, Check, Direction, PathNode, Point};

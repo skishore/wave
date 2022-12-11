@@ -3,7 +3,7 @@ import {BlockId, Column, Env} from './engine.js';
 import {kChunkWidth, kEmptyBlock, kNoMaterial, kWorldHeight} from './engine.js';
 import {Component, ComponentState, ComponentStore} from './ecs.js';
 import {EntityId, kNoEntity} from './ecs.js';
-import {AStar, Check, Point as AStarPoint} from './pathing.js';
+import {AStar, Check, PathNode, Point as AStarPoint} from './pathing.js';
 import {SpriteMesh, ShadowMesh, Texture} from './renderer.js';
 import {sweep} from './sweep.js';
 import {Blocks, getHeight, loadChunk, loadFrontier} from './worldgen.js';
@@ -629,7 +629,7 @@ interface PathingState {
   id: EntityId,
   index: int,
   // Current path:
-  path: Point[] | null,
+  path: PathNode[] | null,
   path_index: int,
   path_soft_target: Position | null,
   path_needs_precision: boolean[] | null,
@@ -661,15 +661,14 @@ const findPath = (env: TypedEnv, state: PathingState,
   const path = AStar(source, target, check);
   if (path.length === 0) return;
 
-  const result = path.map((p: AStarPoint): Point => [p.x, p.y, p.z]);
-  const last = result[result.length - 1];
-  const use_soft = last[0] === tx && last[2] === tz;
+  const last = path[path.length - 1];
+  const use_soft = last.x === tx && last.z === tz;
 
-  state.path = result;
+  state.path = path;
   state.path_index = 0;
   state.path_soft_target = use_soft ? state.soft_target : null;
-  state.path_needs_precision = result.map(_ => false);
-  state.path_needs_precision[result.length - 1] = true;
+  state.path_needs_precision = path.map(_ => false);
+  state.path_needs_precision[path.length - 1] = true;
   state.target = state.soft_target = null;
 
   //console.log(JSON.stringify(state.path));
@@ -689,20 +688,22 @@ const nextPathStep = (env: TypedEnv, state: PathingState,
   const path = nonnull(state.path);
   const path_index = state.path_index;
   const path_needs_precision = nonnull(state.path_needs_precision);
-  const soft = state.path_soft_target;
-
-  const node = path[path_index];
-  const last = path_index === path.length - 1;
-  const use_soft = grounded && last && soft;
   const needs_precision = path_needs_precision[path_index];
 
-  const x = use_soft ? soft[0] - 0.5 : node[0];
-  const z = use_soft ? soft[2] - 0.5 : node[2];
-  const y = node[1];
+  const last = path_index === path.length - 1;
+  const node = path[path_index];
+  const soft = state.path_soft_target;
+  const use_soft = last && soft && (grounded || !node.jump);
+
+  const x = use_soft ? soft[0] - 0.5 : node.x;
+  const z = use_soft ? soft[2] - 0.5 : node.z;
+  const y = node.y;
 
   const E = (() => {
     const width = max[0] - min[0];
-    if (needs_precision) return 0.4 * (1 - width);
+    const final_path_step = path_index === path.length - 1;
+    if (final_path_step) return 0.4 * (1 - width);
+    if (needs_precision) return 0.1 * (1 - width);
     return (path_index === 0 ? -0.6 : -0.4) * width;
   })();
 
@@ -728,9 +729,9 @@ const nextPathStep = (env: TypedEnv, state: PathingState,
 
       const prev = path[path_index];
       const next = path[path_index + 1];
-      const dx = next[0] + 0.5 - 0.5 * (body.min[0] + body.max[0]);
-      const dz = next[2] + 0.5 - 0.5 * (body.min[2] + body.max[2]);
-      const dy = next[1] - body.min[1];
+      const dx = next.x + 0.5 - 0.5 * (body.min[0] + body.max[0]);
+      const dz = next.z + 0.5 - 0.5 * (body.min[2] + body.max[2]);
+      const dy = next.y - body.min[1];
 
       // TODO(shaunak): When applied to path_index 0, this check can result in
       // a kind of infinite loop that prevents path following. It occurs if
@@ -773,15 +774,15 @@ const followPath = (env: TypedEnv, state: PathingState,
   if (state.path_index === path.length) { state.path = null; return; }
 
   const path_index = state.path_index;
-  const soft = state.path_soft_target;
   const last = path_index === path.length - 1;
-  const use_soft = grounded && last && soft;
+  const node = path[path_index];
+  const soft = state.path_soft_target;
+  const use_soft = last && soft && (grounded || !node.jump);
 
-  const cur = path[path_index];
   const cx = (body.min[0] + body.max[0]) / 2;
   const cz = (body.min[2] + body.max[2]) / 2;
-  const dx = (use_soft ? soft[0] : cur[0] + 0.5) - cx;
-  const dz = (use_soft ? soft[2] : cur[2] + 0.5) - cz;
+  const dx = (use_soft ? soft[0] : node.x + 0.5) - cx;
+  const dz = (use_soft ? soft[2] : node.z + 0.5) - cz;
 
   const penalty = body.inFluid ? movement.swimPenalty : 1;
   const speed = penalty * movement.maxSpeed;
@@ -796,27 +797,26 @@ const followPath = (env: TypedEnv, state: PathingState,
 
   if (grounded) movement._jumped = false;
   movement.jumping = (() => {
-    if (cur[1] > body.min[1]) return true;
+    if (node.y > body.min[1]) return true;
     if (!grounded) return false;
+    if (!node.jump) return false;
 
-    const x = int(Math.floor(cx));
-    const y = int(body.min[1] - 1);
-    const z = int(Math.floor(cz));
-    const fx = cx - Math.floor(cx);
-    const fz = cz - Math.floor(cz);
+    if (path_index === 0) return false;
+    const prev = path[path_index - 1];
+    if (Math.floor(cx) !== prev.x) return false;
+    if (Math.floor(cz) !== prev.z) return false;
 
-    const J = 0.5, K = 1 - J;
-    return (dx > 1  && fx > K && !solid(env, int(x + 1), y, z)) ||
-           (dx < -1 && fx < J && !solid(env, int(x - 1), y, z)) ||
-           (dz > 1  && fz > K && !solid(env, x, y, int(z + 1))) ||
-           (dz < -1 && fz < J && !solid(env, x, y, int(z - 1)));
+    const fx = cx - prev.x;
+    const fz = cz - prev.z;
+    return (dx > 1 && fx > 0.5) || (dx < -1 && fx < 0.5) ||
+           (dz > 1 && fz > 0.5) || (dz < -1 && fz < 0.5);
   })();
 
   const mesh = env.meshes.get(state.id);
   if (!mesh) return;
-  const use_dx = use_soft || path_index === 0;
-  const vx = use_dx ? dx : cur[0] - path[path_index - 1][0];
-  const vz = use_dx ? dz : cur[2] - path[path_index - 1][2];
+  const use_dx = (grounded && use_soft) || path_index === 0;
+  const vx = use_dx ? dx : node.x - path[path_index - 1].x;
+  const vz = use_dx ? dz : node.z - path[path_index - 1].z;
   mesh.heading = Math.atan2(vx, vz);
 };
 

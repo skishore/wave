@@ -4,8 +4,6 @@ Pikachu-class (walk + jump):
 - Penalize paths that go through water
 - Optimization: cache tile-type checks (required for multi-tile entities)
 - Fix bugs in hasDirectPath computation
-- Fix bug: we may need to jump in the x direction even if abs(dx) === 1, etc.
-  - We should save the "needs jump" bit when we compute the path, and use it when following the path
 - Leave a buffer around the player when following
   - We must intelligently select a point near the player to path to, instead
   - (Going from non-zero acceleration to zero and back results in jerky follower movement)
