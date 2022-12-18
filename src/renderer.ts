@@ -1803,8 +1803,9 @@ class Renderer {
   constructor(canvas: HTMLCanvasElement) {
     const params = new URLSearchParams(window.location.search);
     const size   = params.get('size') || 'small';
-    const base   = size === 'small' ? '1' : '2';
-    const scale  = parseFloat(params.get('scale') || base);
+    const scale  = parseFloat(params.get('scale') || '1');
+    const antialias_base = size === 'small' ? '1' : '0';
+    const antialias = parseInt(params.get('antialias') || antialias_base);
 
     const container = nonnull(nonnull(canvas.parentElement).parentElement);
     container.classList.add(size);
@@ -1813,7 +1814,8 @@ class Renderer {
     canvas.height = canvas.clientHeight / scale;
     this.camera = new Camera(int(canvas.width), int(canvas.height));
 
-    const gl = nonnull(canvas.getContext('webgl2', {alpha: false}));
+    const gl = nonnull(canvas.getContext(
+        'webgl2', {alpha: false, antialias: antialias === 1}));
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LEQUAL);
