@@ -1,4 +1,4 @@
-import {assert, int, nonnull, Tensor3, Vec3} from './base.js';
+import {assert, int, nonnull, Vec3} from './base.js';
 import {BlockId, Column, Env} from './engine.js';
 import {kChunkWidth, kEmptyBlock, kNoMaterial, kWorldHeight} from './engine.js';
 import {Component, ComponentState, ComponentStore} from './ecs.js';

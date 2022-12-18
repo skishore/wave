@@ -1,5 +1,5 @@
 import {assert, drop, int, nonnull} from './base.js';
-import {Color, Mat4, Tensor3, Vec3} from './base.js';
+import {Color, Mat4, Vec3} from './base.js';
 
 //////////////////////////////////////////////////////////////////////////////
 

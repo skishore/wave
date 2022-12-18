@@ -329,7 +329,7 @@ class TerrainMesher {
             for (let i = 0; i < area; i++) {
               if ((kMaskData[i] & 0x200)) kMaskData[i] = 0;
             }
-          } else if (id === shape[d] - 2) {
+          } else if (id === ld - 1) {
             for (let i = 0; i < area; i++) {
               if (!(kMaskData[i] & 0x200)) kMaskData[i] = 0;
             }
