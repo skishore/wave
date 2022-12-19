@@ -1,4 +1,4 @@
-import {assert, int, nonnull, Vec3} from './base.js';
+import {assert, int, nonnull, Color, Vec3} from './base.js';
 import {BlockId, Column, Env} from './engine.js';
 import {kChunkWidth, kEmptyBlock, kNoMaterial, kWorldHeight} from './engine.js';
 import {Component, ComponentState, ComponentStore} from './ecs.js';
@@ -1034,43 +1034,45 @@ const main = () => {
   env.meshes.getX(follower).heading = 0;
   env.pathing.add(follower);
 
+  const white: Color = [1, 1, 1, 1];
   const texture = (x: int, y: int, alphaTest: boolean = false,
-                   sparkle: boolean = false): Texture => {
-    const url = 'images/frlg.png';
-    return {alphaTest, sparkle, url, x, y, w: 16, h: 16};
+                   color: Color = white, sparkle: boolean = false): Texture => {
+    const url = 'images/frlg-only.png';
+    return {alphaTest, color, sparkle, url, x, y, w: 16, h: 16};
   };
 
   const block = (x: int, y: int) => {
-    const url = 'images/frlg.png';
+    const url = 'images/frlg-only.png';
     const frame = int(x + 16 * y);
     return env.renderer.addInstancedMesh(frame, {url, x: 16, y: 16});
   };
 
   const registry = env.registry;
-  registry.addMaterialOfColor('blue', [0.1, 0.1, 0.4, 0.6], true);
-  registry.addMaterialOfTexture(
-    'water', texture(13, 12, false, true), [1, 1, 1, 0.8], true);
+  registry.addMaterial(
+      'blue', texture(12, 0, false, [0.1, 0.1, 0.4, 0.6]), true);
+  registry.addMaterial(
+      'water', texture(11, 0, false, [1, 1, 1, 0.8], true), true);
   const textures: [string, int, int][] = [
-    ['bedrock', 1, 1],
+    ['bedrock', 6, 0],
     ['dirt', 2, 0],
     ['grass', 0, 0],
     ['grass-side', 3, 0],
     ['stone', 1, 0],
-    ['sand', 0, 11],
-    ['snow', 2, 4],
-    ['trunk', 5, 1],
-    ['trunk-side', 4, 1],
+    ['sand', 4, 0],
+    ['snow', 5, 0],
+    ['trunk', 8, 0],
+    ['trunk-side', 7, 0],
   ];
   for (const [name, x, y] of textures) {
-    registry.addMaterialOfTexture(name, texture(x, y));
+    registry.addMaterial(name, texture(x, y));
   }
 
   const blocks = {
     bedrock: registry.addBlock(['bedrock'], true),
-    bush:    registry.addBlockMesh(block(4, 3), true),
+    bush:    registry.addBlockMesh(block(10, 0), true),
     dirt:    registry.addBlock(['dirt'], true),
     grass:   registry.addBlock(['grass', 'dirt', 'grass-side'], true),
-    rock:    registry.addBlockMesh(block(1, 3), true),
+    rock:    registry.addBlockMesh(block(9, 0), true),
     sand:    registry.addBlock(['sand'], true),
     snow:    registry.addBlock(['snow'], true),
     stone:   registry.addBlock(['stone'], true),

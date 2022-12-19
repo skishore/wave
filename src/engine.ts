@@ -133,9 +133,8 @@ type MaterialId = int & {__type__: 'MaterialId'};
 type MaybeMaterialId = MaterialId | 0;
 
 interface Material {
-  color: Color,
   liquid: boolean,
-  texture: Texture | null,
+  texture: Texture,
   textureIndex: int,
 };
 
@@ -199,9 +198,9 @@ class Registry {
       const material = id + 1 as MaterialId;
       this.faces.push(material);
 
-      const data = this.getMaterialData(material);
-      const alphaBlend = data.color[3] < 1;
-      const alphaTest = data.texture && data.texture.alphaTest;
+      const texture = this.getMaterialData(material).texture;
+      const alphaBlend = texture.color[3] < 1;
+      const alphaTest  = texture.alphaTest;
       if (alphaBlend || alphaTest) opaque = false;
     });
 
@@ -221,13 +220,11 @@ class Registry {
     return result;
   }
 
-  addMaterialOfColor(name: string, color: Color, liquid: boolean = false) {
-    this.addMaterialHelper(name, color, liquid, null);
-  }
-
-  addMaterialOfTexture(name: string, texture: Texture,
-                       color: Color = kWhite, liquid: boolean = false) {
-    this.addMaterialHelper(name, color, liquid, texture);
+  addMaterial(name: string, texture: Texture, liquid: boolean = false) {
+    assert(name.length > 0, () => 'Empty material name!');
+    assert(!this.ids.has(name), () => `Duplicate material: ${name}`);
+    this.ids.set(name, this.materials.length as MaterialId);
+    this.materials.push({liquid, texture, textureIndex: -1});
   }
 
   // faces has 6 elements for each block type: [+x, -x, +y, -y, +z, -z]
@@ -242,14 +239,6 @@ class Registry {
   getMaterialData(id: MaterialId): Material {
     assert(0 < id && id <= this.materials.length);
     return this.materials[id - 1];
-  }
-
-  private addMaterialHelper(
-      name: string, color: Color, liquid: boolean, texture: Texture | null) {
-    assert(name.length > 0, () => 'Empty material name!');
-    assert(!this.ids.has(name), () => `Duplicate material: ${name}`);
-    this.ids.set(name, this.materials.length as MaterialId);
-    this.materials.push({color, liquid, texture, textureIndex: 0});
   }
 };
 
@@ -1480,7 +1469,7 @@ class Env {
   private cameraAlpha = 0;
   private cameraBlock = kEmptyBlock;
   private cameraColor = kWhite;
-  private highlight: VoxelMesh;
+  //private highlight: VoxelMesh;
   private highlightMask: Int32Array;
   private highlightSide: int = -1;
   private highlightPosition: Vec3;
@@ -1493,7 +1482,7 @@ class Env {
     this.registry = new Registry();
     this.renderer = new Renderer(this.container.canvas);
     this.world = new World(this.registry, this.renderer);
-    this.highlight = this.world.mesher.meshHighlight();
+    //this.highlight = this.world.mesher.meshHighlight();
     this.highlightMask = new Int32Array(2);
     this.highlightPosition = Vec3.create();
 
@@ -1671,9 +1660,9 @@ class Env {
 
     if (move) {
       const pos = this.highlightPosition;
-      this.highlight.setPosition(pos[0], pos[1], pos[2]);
+      //this.highlight.setPosition(pos[0], pos[1], pos[2]);
     }
-    this.highlight.show(this.highlightMask, this.highlightSide >= 0);
+    //this.highlight.show(this.highlightMask, this.highlightSide >= 0);
   }
 
   private updateOverlayColor(wave: number): void {
@@ -1711,7 +1700,7 @@ class Env {
     if (new_block !== old_block) {
       const material = this.registry.getBlockFaceMaterial(new_block, 3);
       const color = material !== kNoMaterial
-        ? this.registry.getMaterialData(material).color
+        ? this.registry.getMaterialData(material).texture.color
         : kWhite;
       this.cameraColor = color.slice() as Color;
       this.cameraAlpha = color[3];

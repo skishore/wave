@@ -1,5 +1,5 @@
 import {assert, int, nonnull, Color, Tensor2, Tensor3, Vec3} from './base.js';
-import {kShadowAlpha, Geometry, Renderer, Texture, VoxelMesh} from './renderer.js';
+import {Geometry, Renderer, Texture, VoxelMesh} from './renderer.js';
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -16,9 +16,8 @@ const kEmptyBlock = 0 as BlockId;
 const kSentinel   = 1 << 30;
 
 interface Material {
-  color: Color,
   liquid: boolean,
-  texture: Texture | null,
+  texture: Texture,
   textureIndex: int,
 };
 
@@ -68,13 +67,6 @@ const kHeightmapSides: [int, int, int, int, int, int][] = [
   [2, 0, 1,  0,  1, int(0x06)],
   [2, 0, 1,  0, -1, int(0x06)],
 ];
-
-const kHighlightMaterial: Material = {
-  color: [1, 1, 1, 0.4],
-  liquid: false,
-  texture: null,
-  textureIndex: 0,
-};
 
 class TerrainMesher {
   private solid: boolean[];
@@ -139,9 +131,9 @@ class TerrainMesher {
     for (let d = int(0); d < 3; d++) {
       const u = (d + 1) % 3, v = (d + 2) % 3;
       kTmpPos[d] = pos + w;
-      this.addQuad(geo, kHighlightMaterial, +1, 0, 1, 0, d, w, w, kTmpPos);
+      //this.addQuad(geo, kHighlightMaterial, +1, 0, 1, 0, d, w, w, kTmpPos);
       kTmpPos[d] = pos;
-      this.addQuad(geo, kHighlightMaterial, -1, 0, 1, 0, d, w, w, kTmpPos);
+      //this.addQuad(geo, kHighlightMaterial, -1, 0, 1, 0, d, w, w, kTmpPos);
     }
 
     assert(geo.num_quads === 6);
@@ -372,7 +364,7 @@ class TerrainMesher {
             const lit = (mask & 0x100 ? 1 : 0) as int;
             const dir = (mask & 0x200 ? 1 : -1) as int;
             const material = this.getMaterialData((mask >> 10) as MaterialId);
-            const geo = material.color[3] < 1 ? water_geo : solid_geo;
+            const geo = material.texture.color[3] < 1 ? water_geo : solid_geo;
             const w_fixed = d > 0 ? w : h;
             const h_fixed = d > 0 ? h : w;
 
@@ -640,19 +632,11 @@ class TerrainMesher {
     quads[offset_size + 0] = w;
     quads[offset_size + 1] = h;
 
-    const color = material.color;
-    const light = lit ? 1 : 1 - kShadowAlpha;
-    const offset_color = base + Geometry.OffsetColor;
-    quads[offset_color + 0] = color[0] * light;
-    quads[offset_color + 1] = color[1] * light;
-    quads[offset_color + 2] = color[2] * light;
-    quads[offset_color + 3] = color[3];
-
     let textureIndex = material.textureIndex;
-    if (textureIndex === 0 && material.texture) {
+    if (textureIndex < 0) {
       textureIndex = this.renderer.addTexture(material.texture);
       material.textureIndex = textureIndex;
-      assert(textureIndex !== 0);
+      assert(textureIndex >= 0);
     }
 
     const triangleHint = this.getTriangleHint(ao);
@@ -660,11 +644,11 @@ class TerrainMesher {
       ? (triangleHint ? kIndexOffsets.C : kIndexOffsets.D)
       : (triangleHint ? kIndexOffsets.A : kIndexOffsets.B);
 
-    quads[base + Geometry.OffsetAOs]     = ao;
     quads[base + Geometry.OffsetDim]     = d;
     quads[base + Geometry.OffsetDir]     = dir;
     quads[base + Geometry.OffsetMask]    = 0;
     quads[base + Geometry.OffsetWave]    = wave;
+    quads[base + Geometry.OffsetLight]   = ao | ((1 - lit) << 8);
     quads[base + Geometry.OffsetTexture] = material.textureIndex;
     quads[base + Geometry.OffsetIndices] = indices;
   }

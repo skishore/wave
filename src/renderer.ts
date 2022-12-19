@@ -246,6 +246,7 @@ class Shader {
 
 interface Texture {
   alphaTest: boolean,
+  color: Color,
   sparkle: boolean,
   url: string,
   x: int,
@@ -283,7 +284,7 @@ class TextureAtlas {
   }
 
   addTexture(texture: Texture): int {
-    const index = int(++this.nextResult);
+    const index = int(this.nextResult++);
     const image = this.image(texture.url);
     if (image.complete) {
       this.loaded(texture, index, image);
@@ -383,14 +384,18 @@ class TextureAtlas {
     const pixels = canvas.getImageData(0, 0, size, size).data;
     assert(pixels.length === length);
 
+    const color = texture.color;
+    for (let i = 0; i < length; i++) {
+      pixels[i] = (pixels[i] * color[i & 3]) & 0xff;
+    }
+
     const capacity = this.data ? this.data.length : 0;
     const required = length + offset;
     const allocate = capacity < required;
 
     if (allocate) {
       const data = new Uint8Array(Math.max(2 * capacity, required));
-      for (let i = 0; i < length; i++) data[i] = 255;
-      for (let i = length; i < this.data.length; i++) data[i] = this.data[i];
+      for (let i = 0; i < this.data.length; i++) data[i] = this.data[i];
       this.data = data;
     }
 
@@ -530,24 +535,22 @@ class Geometry {
   static OffsetPos: int = 0;
   // size: vec2
   static OffsetSize: int = 3;
-  // color: vec4
-  static OffsetColor: int = 5;
-  // ao: float -> int32; 4 packed 2-bit values
-  static OffsetAOs: int = 9;
+  // light: float -> int32; 4 packed 2-bit AO values, plus a 1-bit lit flag
+  static OffsetLight: int = 5;
   // dim: float -> int32; {0, 1, 2}
-  static OffsetDim: int = 10;
+  static OffsetDim: int = 6;
   // dir: float -> int32; {-1, 1}
-  static OffsetDir: int = 11;
+  static OffsetDir: int = 7;
   // mask: float -> int32; small int
-  static OffsetMask: int = 12;
+  static OffsetMask: int = 8;
   // wave: float -> int32; 4 packed 1-bit values
-  static OffsetWave: int = 13;
+  static OffsetWave: int = 9;
   // texture: float -> int32; medium int
-  static OffsetTexture: int = 14;
+  static OffsetTexture: int = 10;
   // indices: float -> int32; 6 packed 2-bit values
-  static OffsetIndices: int = 15;
+  static OffsetIndices: int = 11;
   // Overall stride (in floats)
-  static Stride: int = 16;
+  static Stride: int = 12;
 
   quads: Float32Array;
   num_quads: int;
@@ -595,7 +598,7 @@ class Geometry {
     const stride = Geometry.Stride;
     assert(Geometry.OffsetPos === 0);
     assert(Geometry.OffsetSize === 3);
-    assert(Geometry.OffsetDim === 10);
+    assert(Geometry.OffsetDim === 6);
     assert(quads.length % stride === 0);
 
     for (let i = 0; i < quads.length; i += stride) {
@@ -606,7 +609,7 @@ class Geometry {
       const w = quads[i + 3];
       const h = quads[i + 4];
 
-      const dim = quads[i + 10];
+      const dim = quads[i + 6];
 
       const mx = lx + (dim === 2 ? w : dim === 1 ? h : 0);
       const my = ly + (dim === 0 ? w : dim === 2 ? h : 0);
@@ -799,6 +802,8 @@ class Mesh<S> {
 
 //////////////////////////////////////////////////////////////////////////////
 
+const kShadowAlpha = 0.36;
+
 const kVoxelShader = `
   uniform ivec2 u_mask;
   uniform float u_move;
@@ -807,8 +812,7 @@ const kVoxelShader = `
 
   in vec3 a_pos;
   in vec2 a_size;
-  in vec4 a_color;
-  in float a_aos;
+  in float a_light;
   in float a_dim;
   in float a_dir;
   in float a_mask;
@@ -816,9 +820,9 @@ const kVoxelShader = `
   in float a_texture;
   in float a_indices;
 
-  out vec4 v_color;
   out vec3 v_uvw;
   out float v_move;
+  out float v_light;
 
   int unpackI2(float packed, int index) {
     return (int(packed) >> (2 * index)) & 3;
@@ -828,8 +832,9 @@ const kVoxelShader = `
     int instance = gl_VertexID + 3 * (gl_InstanceID & 1);
     int index = unpackI2(a_indices, instance);
 
-    float ao = 1.0 - 0.3 * float(unpackI2(a_aos, index));
-    v_color = vec4(ao * vec3(a_color), a_color[3]);
+    float shadow = float(int(a_light) >> 8);
+    float ao = 1.0 - 0.3 * float(unpackI2(a_light, index));
+    v_light = ao * (1.0 - ${kShadowAlpha} * shadow);
 
     int dim = int(a_dim);
     float w = float(((index + 1) & 3) >> 1);
@@ -865,16 +870,16 @@ const kVoxelShader = `
   uniform vec3 u_fogColor;
   uniform float u_fogDepth;
   uniform sampler2DArray u_texture;
-  in vec4 v_color;
   in vec3 v_uvw;
   in float v_move;
+  in float v_light;
   out vec4 o_color;
 
   void main() {
     float depth = u_fogDepth * gl_FragCoord.w;
     float fog = clamp(exp2(-depth * depth), 0.0, 1.0);
     vec3 index = v_uvw + vec3(v_move, v_move, 0.0);
-    vec4 color = v_color * texture(u_texture, index);
+    vec4 color = vec4(vec3(v_light), 1.0) * texture(u_texture, index);
     o_color = mix(color, vec4(u_fogColor, color[3]), fog);
     if (o_color[3] < 0.5 * u_alphaTest) discard;
   }
@@ -891,8 +896,7 @@ class VoxelShader extends Shader {
 
   a_pos:     number | null;
   a_size:    number | null;
-  a_color:   number | null;
-  a_aos:     number | null;
+  a_light:   number | null;
   a_dim:     number | null;
   a_dir:     number | null;
   a_mask:    number | null;
@@ -912,8 +916,7 @@ class VoxelShader extends Shader {
 
     this.a_pos     = this.getAttribLocation('a_pos');
     this.a_size    = this.getAttribLocation('a_size');
-    this.a_color   = this.getAttribLocation('a_color');
-    this.a_aos     = this.getAttribLocation('a_aos');
+    this.a_light   = this.getAttribLocation('a_light');
     this.a_dim     = this.getAttribLocation('a_dim');
     this.a_dir     = this.getAttribLocation('a_dir');
     this.a_mask    = this.getAttribLocation('a_mask');
@@ -997,8 +1000,7 @@ class VoxelMesh extends Mesh<VoxelShader> {
     this.prepareQuads(this.geo.quads);
     this.prepareAttribute(shader.a_pos,     3, Geometry.OffsetPos);
     this.prepareAttribute(shader.a_size,    2, Geometry.OffsetSize);
-    this.prepareAttribute(shader.a_color,   4, Geometry.OffsetColor);
-    this.prepareAttribute(shader.a_aos,     1, Geometry.OffsetAOs);
+    this.prepareAttribute(shader.a_light,   1, Geometry.OffsetLight);
     this.prepareAttribute(shader.a_dim,     1, Geometry.OffsetDim);
     this.prepareAttribute(shader.a_dir,     1, Geometry.OffsetDir);
     this.prepareAttribute(shader.a_mask,    1, Geometry.OffsetMask);
@@ -1543,8 +1545,6 @@ class SpriteManager implements MeshManager<SpriteShader> {
 };
 
 //////////////////////////////////////////////////////////////////////////////
-
-const kShadowAlpha = 0.36;
 
 const kShadowShader = `
   uniform float u_size;
