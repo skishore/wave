@@ -1066,8 +1066,7 @@ class VoxelManager implements MeshManager<VoxelShader> {
 
     // Rendering phases:
     //   0) Opaque and alpha-tested voxel meshes.
-    //   1) The highlight mesh, drawn before shadows and other effects.
-    //   2) All other alpha-blended voxel meshes. (Should we sort them?)
+    //   1) All other alpha-blended voxel meshes. (Should we sort them?)
     if (phase === 0) {
       for (const mesh of meshes) {
         if (mesh.draw(camera, planes)) drawn++;
@@ -1075,12 +1074,10 @@ class VoxelManager implements MeshManager<VoxelShader> {
     } else {
       gl.enable(gl.BLEND);
       gl.disable(gl.CULL_FACE);
-      if (phase === 1) gl.depthMask(false);
       gl.uniform1f(shader.u_alphaTest, 0);
       for (const mesh of meshes) {
         if (mesh.draw(camera, planes)) drawn++;
       }
-      if (phase === 1) gl.depthMask(true);
       gl.enable(gl.CULL_FACE);
       gl.disable(gl.BLEND);
     }
@@ -1636,7 +1633,6 @@ class ShadowManager implements MeshManager<ShadowShader> {
 
   getBounds(size: number): Float64Array {
     const result = this.bounds;
-    const half_size = 0.5 * size;
     for (let i = 0; i < 8; i++) {
       const offset = 3 * i;
       result[offset + 0] = (i & 1) ? size : -size;
@@ -1657,6 +1653,123 @@ class ShadowManager implements MeshManager<ShadowShader> {
     for (const mesh of meshes) {
       if (mesh.draw(camera, planes)) drawn++;
     }
+    gl.disable(gl.BLEND);
+    gl.depthMask(true);
+
+    stats.drawn += drawn;
+    stats.total += meshes.length;
+  }
+};
+
+//////////////////////////////////////////////////////////////////////////////
+
+const kHighlightShader = `
+  uniform int u_mask;
+  uniform mat4 u_transform;
+  in vec2 a_pos;
+
+  void main() {
+    int dim = gl_InstanceID >> 1;
+
+    const float epsilon = 1.0 / 256.0;
+    const float width = 1.0 + 2.0 * epsilon;
+
+    vec4 pos = vec4(0.0, 0.0, 0.0, 1.0);
+    float face_dir = 1.0 - float(gl_InstanceID & 1);
+    pos[(dim + 0) % 3] = width * face_dir - epsilon;
+    pos[(dim + 1) % 3] = width * a_pos[0] - epsilon;
+    pos[(dim + 2) % 3] = width * a_pos[1] - epsilon;
+
+    gl_Position = u_transform * pos;
+
+    bool hide = (u_mask & (1 << gl_InstanceID)) != 0;
+    if (hide) gl_Position[3] = 0.0;
+  }
+#split
+  out vec4 o_color;
+
+  void main() {
+    o_color = vec4(1.0, 1.0, 1.0, 0.4);
+  }
+`;
+
+class HighlightShader extends Shader {
+  u_mask:      WebGLUniformLocation | null;
+  u_transform: WebGLUniformLocation | null;
+
+  constructor(gl: WebGL2RenderingContext) {
+    super(gl, kHighlightShader);
+    this.u_mask      = this.getUniformLocation('u_mask');
+    this.u_transform = this.getUniformLocation('u_transform');
+  }
+};
+
+class HighlightMesh extends Mesh<HighlightShader> {
+  mask: int = 0;
+  private manager: HighlightManager;
+  private size: number = 0;
+
+  constructor(manager: HighlightManager, meshes: HighlightMesh[]) {
+    super(manager, meshes);
+    this.manager = manager;
+  }
+
+  draw(camera: Camera, planes: CullingPlane[]): boolean {
+    if (!this.shown()) return false;
+    const transform = camera.getTransformFor(this.position);
+
+    const {gl, shader} = this;
+    gl.uniform1i(shader.u_mask, this.mask);
+    gl.uniformMatrix4fv(shader.u_transform, false, transform);
+    gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, 6);
+    return true;
+  }
+
+  setPosition(x: number, y: number, z: number): void {
+    Vec3.set(this.position, x, y, z);
+  }
+
+  shown(): boolean {
+    return this.mask !== (1 << 6) - 1;
+  }
+};
+
+class HighlightManager implements MeshManager<HighlightShader> {
+  gl: WebGL2RenderingContext;
+  shader: HighlightShader;
+  private meshes: HighlightMesh[];
+  private unit_square_vao: WebGLVertexArrayObject;
+
+  constructor(gl: WebGL2RenderingContext,
+              unit_square_vao: WebGLVertexArrayObject) {
+    this.gl = gl;
+    this.unit_square_vao = unit_square_vao;
+    this.shader = new HighlightShader(gl);
+    this.meshes = [];
+  }
+
+  addMesh(): HighlightMesh {
+    return new HighlightMesh(this, this.meshes);
+  }
+
+  render(camera: Camera, planes: CullingPlane[], stats: Stats): void {
+    const {gl, meshes, shader, unit_square_vao} = this;
+    if (!meshes.some(x => x.shown())) {
+      stats.total += meshes.length;
+      return;
+    }
+    let drawn = 0;
+
+    // All highlight meshes are alpha-blended. None write to the depth map.
+    shader.bind();
+    gl.bindVertexArray(unit_square_vao);
+    gl.depthMask(false);
+    gl.enable(gl.BLEND);
+    gl.disable(gl.CULL_FACE);
+    for (const mesh of meshes) {
+      if (mesh.draw(camera, planes)) drawn++;
+    }
+    gl.enable(gl.CULL_FACE);
     gl.disable(gl.BLEND);
     gl.depthMask(true);
 
@@ -1766,6 +1879,10 @@ interface IMesh {
   setPosition: (x: number, y: number, z: number) => void,
 };
 
+interface IHighlightMesh extends IMesh {
+  mask: int;
+};
+
 interface IInstancedMesh {
   addInstance: () => IMesh,
   readonly frame: int;
@@ -1795,6 +1912,7 @@ class Renderer {
   private gl: WebGL2RenderingContext;
   private overlay: ScreenOverlay;
   private allocator: BufferAllocator;
+  private highlight_manager: HighlightManager;
   private instanced_manager: InstancedManager;
   private shadow_manager: ShadowManager;
   private sprite_manager: SpriteManager;
@@ -1836,6 +1954,7 @@ class Renderer {
 
     this.gl = gl;
     this.overlay = new ScreenOverlay(gl, unit_square_vao);
+    this.highlight_manager = new HighlightManager(gl, unit_square_vao);
     this.instanced_manager = new InstancedManager(gl, allocator, atlas);
     this.shadow_manager = new ShadowManager(gl, unit_square_vao);
     this.sprite_manager = new SpriteManager(gl, atlas, unit_square_vao);
@@ -1844,6 +1963,10 @@ class Renderer {
 
   addTexture(texture: Texture): int {
     return this.voxels_manager.atlas.addTexture(texture);
+  }
+
+  addHighlightMesh(): IHighlightMesh {
+    return this.highlight_manager.addMesh();
   }
 
   addInstancedMesh(frame: int, sprite: Sprite): IInstancedMesh {
@@ -1877,9 +2000,9 @@ class Renderer {
     this.sprite_manager.render(camera, planes, stats);
     this.instanced_manager.render(camera, planes, stats);
     this.voxels_manager.render(camera, planes, stats, overlay, move, wave, 0);
-    this.voxels_manager.render(camera, planes, stats, overlay, move, wave, 1);
+    this.highlight_manager.render(camera, planes, stats);
     this.shadow_manager.render(camera, planes, stats);
-    this.voxels_manager.render(camera, planes, stats, overlay, move, wave, 2);
+    this.voxels_manager.render(camera, planes, stats, overlay, move, wave, 1);
     overlay.draw();
 
     return `${this.allocator.stats()}\r\n` +
@@ -1896,4 +2019,5 @@ class Renderer {
 
 export {kShadowAlpha, Geometry, Renderer, Sprite, Texture};
 export {IMesh as Mesh, ISpriteMesh as SpriteMesh, IShadowMesh as ShadowMesh,
-        IInstancedMesh as InstancedMesh, IVoxelMesh as VoxelMesh};
+        IHighlightMesh as HighlightMesh, IInstancedMesh as InstancedMesh,
+        IVoxelMesh as VoxelMesh};

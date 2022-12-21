@@ -1,7 +1,8 @@
 import {assert, drop, int, nonnull} from './base.js';
 import {Color, Tensor2, Tensor3, Vec3} from './base.js';
 import {EntityComponentSystem} from './ecs.js';
-import {InstancedMesh, Mesh, Renderer, Texture, VoxelMesh} from './renderer.js';
+import {HighlightMesh, InstancedMesh, Mesh} from './renderer.js';
+import {Renderer, Texture, VoxelMesh} from './renderer.js';
 import {TerrainMesher} from './mesher.js';
 import {kSweepResolution, sweep} from './sweep.js';
 
@@ -1469,8 +1470,7 @@ class Env {
   private cameraAlpha = 0;
   private cameraBlock = kEmptyBlock;
   private cameraColor = kWhite;
-  //private highlight: VoxelMesh;
-  private highlightMask: Int32Array;
+  private highlight: HighlightMesh;
   private highlightSide: int = -1;
   private highlightPosition: Vec3;
   private timing: Timing;
@@ -1482,8 +1482,7 @@ class Env {
     this.registry = new Registry();
     this.renderer = new Renderer(this.container.canvas);
     this.world = new World(this.registry, this.renderer);
-    //this.highlight = this.world.mesher.meshHighlight();
-    this.highlightMask = new Int32Array(2);
+    this.highlight = this.renderer.addHighlightMesh();
     this.highlightPosition = Vec3.create();
 
     const remesh = this.world.remesh.bind(this.world);
@@ -1614,7 +1613,7 @@ class Env {
     const {direction, target, zoom} = camera;
 
     let move = false;
-    this.highlightMask[0] = (1 << 6) - 1;
+    this.highlight.mask = int((1 << 6) - 1);
     this.highlightSide = -1;
 
     const check = (x: int, y: int, z: int) => {
@@ -1636,7 +1635,7 @@ class Env {
       move = pos[0] !== this.highlightPosition[0] ||
              pos[1] !== this.highlightPosition[1] ||
              pos[2] !== this.highlightPosition[2];
-      this.highlightMask[0] = mask;
+      this.highlight.mask = int(mask);
       Vec3.copy(this.highlightPosition, pos);
       return false;
     };
@@ -1660,9 +1659,8 @@ class Env {
 
     if (move) {
       const pos = this.highlightPosition;
-      //this.highlight.setPosition(pos[0], pos[1], pos[2]);
+      this.highlight.setPosition(pos[0], pos[1], pos[2]);
     }
-    //this.highlight.show(this.highlightMask, this.highlightSide >= 0);
   }
 
   private updateOverlayColor(wave: number): void {

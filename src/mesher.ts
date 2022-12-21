@@ -95,7 +95,7 @@ class TerrainMesher {
 
     return [
       this.buildMesh(solid_geo, solid, 0),
-      this.buildMesh(water_geo, water, 2),
+      this.buildMesh(water_geo, water, 1),
     ];
   }
 
@@ -115,33 +115,7 @@ class TerrainMesher {
       geo.quads[offset + OffsetPos + 2] += pz;
       geo.quads[offset + OffsetMask] = mask;
     }
-    return this.buildMesh(geo, old, solid ? 0 : 2);
-  }
-
-  meshHighlight(): VoxelMesh {
-    const geo = kCachedGeometryA;
-    geo.clear();
-
-    const epsilon = 1 / 256;
-    const w = 1 + 2 * epsilon;
-    const pos = -epsilon;
-
-    Vec3.set(kTmpPos, pos, pos, pos);
-
-    for (let d = int(0); d < 3; d++) {
-      const u = (d + 1) % 3, v = (d + 2) % 3;
-      kTmpPos[d] = pos + w;
-      //this.addQuad(geo, kHighlightMaterial, +1, 0, 1, 0, d, w, w, kTmpPos);
-      kTmpPos[d] = pos;
-      //this.addQuad(geo, kHighlightMaterial, -1, 0, 1, 0, d, w, w, kTmpPos);
-    }
-
-    assert(geo.num_quads === 6);
-    const {OffsetMask, Stride} = Geometry;
-    for (let i = 0; i < 6; i++) {
-      geo.quads[i * Stride + OffsetMask] = i;
-    }
-    return nonnull(this.buildMesh(geo, null, 1));
+    return this.buildMesh(geo, old, solid ? 0 : 1);
   }
 
   private buildMesh(geo: Geometry, old: Mesh, phase: int): Mesh {
