@@ -531,35 +531,39 @@ class SpriteAtlas {
 //////////////////////////////////////////////////////////////////////////////
 
 class Geometry {
-  // position: vec3
-  static OffsetPos: int = 0;
-  // size: vec2
-  static OffsetSize: int = 3;
-  // light: float -> int32; 4 packed 2-bit AO values, plus a 1-bit lit flag
-  static OffsetLight: int = 5;
-  // dim: float -> int32; {0, 1, 2}
-  static OffsetDim: int = 6;
-  // dir: float -> int32; {-1, 1}
-  static OffsetDir: int = 7;
-  // mask: float -> int32; small int
-  static OffsetMask: int = 8;
-  // wave: float -> int32; 4 packed 1-bit values
-  static OffsetWave: int = 9;
-  // texture: float -> int32; medium int
-  static OffsetTexture: int = 10;
-  // indices: float -> int32; 6 packed 2-bit values
-  static OffsetIndices: int = 11;
-  // Overall stride (in floats)
-  static Stride: int = 12;
+  // struct Quad {
+  //   // int 0
+  //   int16_t x;
+  //   int16_t y;
+  //
+  //   // int 1
+  //   int16_t z;
+  //   int16_t indices; // 6 x 2-bit ints
+  //
+  //   // int 2
+  //   int16_t w;
+  //   int16_t h;
+  //
+  //   // int 3
+  //   uint8_t mask:    8; // only need 6 bits
+  //   uint8_t texture: 8; // could use more bits
+  //   uint8_t ao:      8; // 4 x 2-bit AO values
+  //   uint8_t wave:    4; // 4 x 1-bit wave flags
+  //   uint8_t dim:     2;
+  //   uint8_t dir:     1;
+  //   uint8_t lit:     1;
+  // };
+  static StrideInInt32: int = 4;
+  static StrideInBytes: int = 16;
 
-  quads: Float32Array;
+  quads: Int32Array;
   num_quads: int;
   dirty: boolean;
   private lower_bound: Vec3;
   private upper_bound: Vec3;
   private bounds: Float64Array;
 
-  constructor(quads: Float32Array, num_quads: int) {
+  constructor(quads: Int32Array, num_quads: int) {
     this.quads = quads;
     this.num_quads = num_quads;
     this.lower_bound = Vec3.create();
@@ -576,9 +580,9 @@ class Geometry {
   allocateQuads(n: int) {
     this.num_quads = n;
     const length = this.quads.length;
-    const needed = Geometry.Stride * n;
+    const needed = Geometry.StrideInInt32 * n;
     if (length >= needed) return;
-    const expanded = new Float32Array(Math.max(length * 2, needed));
+    const expanded = new Int32Array(Math.max(length * 2, needed));
     expanded.set(this.quads);
     this.quads = expanded;
   }
@@ -595,21 +599,22 @@ class Geometry {
     Vec3.set(upper_bound, -Infinity, -Infinity, -Infinity);
 
     const quads = this.quads;
-    const stride = Geometry.Stride;
-    assert(Geometry.OffsetPos === 0);
-    assert(Geometry.OffsetSize === 3);
-    assert(Geometry.OffsetDim === 6);
+    const stride = Geometry.StrideInInt32;
     assert(quads.length % stride === 0);
 
     for (let i = 0; i < quads.length; i += stride) {
-      const lx = quads[i + 0];
-      const ly = quads[i + 1];
-      const lz = quads[i + 2];
+      const xy = quads[i + 0];
+      const zi = quads[i + 1];
+      const lx = (xy << 16) >> 16;
+      const ly = xy >> 16;
+      const lz = (zi << 16) >> 16;
 
-      const w = quads[i + 3];
-      const h = quads[i + 4];
+      const wh = quads[i + 2];
+      const w  = (wh << 16) >> 16;
+      const h  = wh >> 16;
 
-      const dim = quads[i + 6];
+      const extra = quads[i + 3];
+      const dim   = (extra >> 28) & 0x3;
 
       const mx = lx + (dim === 2 ? w : dim === 1 ? h : 0);
       const my = ly + (dim === 0 ? w : dim === 2 ? h : 0);
@@ -635,12 +640,12 @@ class Geometry {
 
   static clone(geo: Geometry): Geometry {
     const num_quads = geo.num_quads;
-    const quads = geo.quads.slice(0, num_quads * Geometry.Stride);
+    const quads = geo.quads.slice(0, num_quads * Geometry.StrideInInt32);
     return new Geometry(quads, num_quads);
   }
 
   static empty(): Geometry {
-    return new Geometry(new Float32Array(), 0);
+    return new Geometry(new Int32Array(), 0);
   }
 };
 
@@ -679,7 +684,7 @@ class BufferAllocator {
     this.freeListsDynamic = new Array(32).fill(null).map(() => []);
   }
 
-  alloc(data: Float32Array, dynamic: boolean): Buffer {
+  alloc(data: Int32Array | Float32Array, dynamic: boolean): Buffer {
     const gl = this.gl;
     const bytes = int(4 * data.length);
     const sizeClass = this.sizeClass(bytes);
@@ -810,58 +815,57 @@ const kVoxelShader = `
   uniform float u_wave;
   uniform mat4 u_transform;
 
-  in vec3 a_pos;
-  in vec2 a_size;
-  in float a_light;
-  in float a_dim;
-  in float a_dir;
-  in float a_mask;
-  in float a_wave;
-  in float a_texture;
-  in float a_indices;
+  in ivec3 a_pos;
+  in ivec2 a_size;
+  in int   a_indices;
+  in int   a_ao;
+  in int   a_mask;
+  in int   a_texture;
+  // 4-bit wave; 2-bit dim; 1-bit dir; 1-bit lit
+  in int   a_wddl;
 
   out vec3 v_uvw;
   out float v_move;
   out float v_light;
 
-  int unpackI2(float packed, int index) {
-    return (int(packed) >> (2 * index)) & 3;
+  int unpackI2(int packed, int index) {
+    return (packed >> (2 * index)) & 3;
   }
 
   void main() {
     int instance = gl_VertexID + 3 * (gl_InstanceID & 1);
     int index = unpackI2(a_indices, instance);
 
-    float shadow = float(int(a_light) >> 8);
-    float ao = 1.0 - 0.3 * float(unpackI2(a_light, index));
+    float shadow = a_wddl < 0 ? 0.0 : 1.0;
+    float ao = 1.0 - 0.3 * float(unpackI2(a_ao, index));
     v_light = ao * (1.0 - ${kShadowAlpha} * shadow);
 
-    int dim = int(a_dim);
+    int dim = (a_wddl >> 4) & 0x3;
+    float dir = ((a_wddl & 64) != 0) ? 1.0 : -1.0;
     float w = float(((index + 1) & 3) >> 1);
     float h = float(((index + 0) & 3) >> 1);
 
-    v_uvw = vec3(0.0, 0.0, a_texture);
+    v_uvw = vec3(0.0, 0.0, float(a_texture));
     const float kTextureBuffer = 0.01;
     if (dim == 2) {
-      v_uvw[0] = (a_size[0] - kTextureBuffer) * w * -a_dir;
-      v_uvw[1] = (a_size[1] - kTextureBuffer) * (1.0 - h);
+      v_uvw[0] = (float(a_size[0]) - kTextureBuffer) * w * -dir;
+      v_uvw[1] = (float(a_size[1]) - kTextureBuffer) * (1.0 - h);
     } else {
-      v_uvw[0] = (a_size[1] - kTextureBuffer) * h * a_dir;
-      v_uvw[1] = (a_size[0] - kTextureBuffer) * (1.0 - w);
+      v_uvw[0] = (float(a_size[1]) - kTextureBuffer) * h * dir;
+      v_uvw[1] = (float(a_size[0]) - kTextureBuffer) * (1.0 - w);
     }
 
-    float wave = float((int(a_wave) >> index) & 0x1);
+    float wave = float((a_wddl >> index) & 0x1);
     v_move = wave * u_move;
 
-    vec3 pos = a_pos;
-    pos[(dim + 1) % 3] += w * a_size[0];
-    pos[(dim + 2) % 3] += h * a_size[1];
+    vec3 pos = vec3(float(a_pos[0]), float(a_pos[1]), float(a_pos[2]));
+    pos[(dim + 1) % 3] += w * float(a_size[0]);
+    pos[(dim + 2) % 3] += h * float(a_size[1]);
     pos[1] -= wave * u_wave;
     gl_Position = u_transform * vec4(pos, 1.0);
 
-    int mask = int(a_mask);
-    int mask_index = mask >> 5;
-    int mask_value = 1 << (mask & 31);
+    int mask_index = a_mask >> 5;
+    int mask_value = 1 << (a_mask & 31);
     bool hide = (u_mask[mask_index] & mask_value) != 0;
     if (hide) gl_Position[3] = 0.0;
   }
@@ -896,13 +900,11 @@ class VoxelShader extends Shader {
 
   a_pos:     number | null;
   a_size:    number | null;
-  a_light:   number | null;
-  a_dim:     number | null;
-  a_dir:     number | null;
-  a_mask:    number | null;
-  a_wave:    number | null;
-  a_texture: number | null;
+  a_ao:      number | null;
   a_indices: number | null;
+  a_mask:    number | null;
+  a_texture: number | null;
+  a_wddl:    number | null;
 
   constructor(gl: WebGL2RenderingContext) {
     super(gl, kVoxelShader);
@@ -916,13 +918,11 @@ class VoxelShader extends Shader {
 
     this.a_pos     = this.getAttribLocation('a_pos');
     this.a_size    = this.getAttribLocation('a_size');
-    this.a_light   = this.getAttribLocation('a_light');
-    this.a_dim     = this.getAttribLocation('a_dim');
-    this.a_dir     = this.getAttribLocation('a_dir');
-    this.a_mask    = this.getAttribLocation('a_mask');
-    this.a_wave    = this.getAttribLocation('a_wave');
-    this.a_texture = this.getAttribLocation('a_texture');
+    this.a_ao      = this.getAttribLocation('a_ao');
     this.a_indices = this.getAttribLocation('a_indices');
+    this.a_mask    = this.getAttribLocation('a_mask');
+    this.a_texture = this.getAttribLocation('a_texture');
+    this.a_wddl    = this.getAttribLocation('a_wddl');
   }
 };
 
@@ -985,7 +985,6 @@ class VoxelMesh extends Mesh<VoxelShader> {
 
   private destroyBuffers() {
     const {gl, quads} = this;
-    const n = this.geo.num_quads * Geometry.Stride;
     gl.deleteVertexArray(this.vao);
     if (quads) this.allocator.free(quads);
     this.vao = null;
@@ -998,30 +997,27 @@ class VoxelMesh extends Mesh<VoxelShader> {
     this.vao = nonnull(gl.createVertexArray());
     gl.bindVertexArray(this.vao);
     this.prepareQuads(this.geo.quads);
-    this.prepareAttribute(shader.a_pos,     3, Geometry.OffsetPos);
-    this.prepareAttribute(shader.a_size,    2, Geometry.OffsetSize);
-    this.prepareAttribute(shader.a_light,   1, Geometry.OffsetLight);
-    this.prepareAttribute(shader.a_dim,     1, Geometry.OffsetDim);
-    this.prepareAttribute(shader.a_dir,     1, Geometry.OffsetDir);
-    this.prepareAttribute(shader.a_mask,    1, Geometry.OffsetMask);
-    this.prepareAttribute(shader.a_wave,    1, Geometry.OffsetWave);
-    this.prepareAttribute(shader.a_texture, 1, Geometry.OffsetTexture);
-    this.prepareAttribute(shader.a_indices, 1, Geometry.OffsetIndices);
+    this.prepareAttribute(shader.a_pos,     gl.SHORT, 3, 0);
+    this.prepareAttribute(shader.a_indices, gl.SHORT, 1, 6);
+    this.prepareAttribute(shader.a_size,    gl.SHORT, 2, 8);
+    this.prepareAttribute(shader.a_mask,    gl.BYTE,  1, 12);
+    this.prepareAttribute(shader.a_texture, gl.BYTE,  1, 13);
+    this.prepareAttribute(shader.a_ao,      gl.BYTE,  1, 14);
+    this.prepareAttribute(shader.a_wddl,    gl.BYTE,  1, 15);
   }
 
   private prepareAttribute(
-      location: number | null, size: int, offset_in_floats: int) {
+      location: number | null, type: number, size: int, offset: int) {
     if (location === null) return;
     const gl = this.gl;
-    const offset = 4 * offset_in_floats;
-    const stride = 4 * Geometry.Stride;
+    const stride = Geometry.StrideInBytes;
     gl.enableVertexAttribArray(location);
-    gl.vertexAttribPointer(location, size, gl.FLOAT, false, stride, offset);
+    gl.vertexAttribIPointer(location, size, type, stride, offset);
     gl.vertexAttribDivisor(location, 2);
   }
 
-  private prepareQuads(data: Float32Array) {
-    const n = this.geo.num_quads * Geometry.Stride;
+  private prepareQuads(data: Int32Array) {
+    const n = this.geo.num_quads * Geometry.StrideInInt32;
     const subarray = data.length > n ? data.subarray(0, n) : data;
     this.quads = this.allocator.alloc(subarray, false);
   }

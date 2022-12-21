@@ -105,16 +105,16 @@ class TerrainMesher {
     if (old) geo.dirty = true;
     if (!old) geo.clear();
 
-    const {OffsetPos, OffsetMask, Stride} = Geometry;
-    const source = Stride * geo.num_quads;
-    this.computeFrontierGeometry(geo, heightmap, sx, sz, scale, solid);
+    //const {OffsetPos, OffsetMask, Stride} = Geometry;
+    //const source = Stride * geo.num_quads;
+    //this.computeFrontierGeometry(geo, heightmap, sx, sz, scale, solid);
 
-    const target = Stride * geo.num_quads;
-    for (let offset = source; offset < target; offset += Stride) {
-      geo.quads[offset + OffsetPos + 0] += px;
-      geo.quads[offset + OffsetPos + 2] += pz;
-      geo.quads[offset + OffsetMask] = mask;
-    }
+    //const target = Stride * geo.num_quads;
+    //for (let offset = source; offset < target; offset += Stride) {
+    //  geo.quads[offset + OffsetPos + 0] += px;
+    //  geo.quads[offset + OffsetPos + 2] += pz;
+    //  geo.quads[offset + OffsetMask] = mask;
+    //}
     return this.buildMesh(geo, old, solid ? 0 : 1);
   }
 
@@ -594,17 +594,13 @@ class TerrainMesher {
     geo.allocateQuads(int(num_quads + 1));
 
     const {quads} = geo;
-    const Stride = Geometry.Stride;
+    const Stride = Geometry.StrideInInt32;
     const base = Stride * num_quads;
 
-    const offset_pos = base + Geometry.OffsetPos;
-    quads[offset_pos + 0] = pos[0];
-    quads[offset_pos + 1] = pos[1];
-    quads[offset_pos + 2] = pos[2];
-
-    const offset_size = base + Geometry.OffsetSize;
-    quads[offset_size + 0] = w;
-    quads[offset_size + 1] = h;
+    const triangleHint = this.getTriangleHint(ao);
+    const indices = dir > 0
+      ? (triangleHint ? kIndexOffsets.C : kIndexOffsets.D)
+      : (triangleHint ? kIndexOffsets.A : kIndexOffsets.B);
 
     let textureIndex = material.textureIndex;
     if (textureIndex < 0) {
@@ -613,18 +609,25 @@ class TerrainMesher {
       assert(textureIndex >= 0);
     }
 
-    const triangleHint = this.getTriangleHint(ao);
-    const indices = dir > 0
-      ? (triangleHint ? kIndexOffsets.C : kIndexOffsets.D)
-      : (triangleHint ? kIndexOffsets.A : kIndexOffsets.B);
+    const x = pos[0];
+    const y = pos[1];
+    const z = pos[2];
 
-    quads[base + Geometry.OffsetDim]     = d;
-    quads[base + Geometry.OffsetDir]     = dir;
-    quads[base + Geometry.OffsetMask]    = 0;
-    quads[base + Geometry.OffsetWave]    = wave;
-    quads[base + Geometry.OffsetLight]   = ao | ((1 - lit) << 8);
-    quads[base + Geometry.OffsetTexture] = material.textureIndex;
-    quads[base + Geometry.OffsetIndices] = indices;
+    assert(x === ((x << 16) >> 16));
+    assert(y === ((y << 16) >> 16));
+    assert(z === ((z << 16) >> 16));
+    assert(w === ((w << 16) >> 16));
+    assert(h === ((h << 16) >> 16));
+
+    quads[base + 0] = (x & 0xffff) | (y << 16);
+    quads[base + 1] = (z & 0xffff) | (indices << 16);
+    quads[base + 2] = (w & 0xffff) | ((h & 0xffff) << 16);
+    quads[base + 3] = ((textureIndex & 0xff) << 8)  |
+                      ((ao & 0xff)           << 16) |
+                      ((wave & 0xf)          << 24) |
+                      ((d & 0x3)             << 28) |
+                      ((dir > 0 ? 1 : 0)     << 30) |
+                      ((lit > 0 ? 1 : 0)     << 31);
   }
 
   private getFaceDir(block0: BlockId, block1: BlockId, dir: int) {
