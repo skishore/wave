@@ -105,16 +105,32 @@ class TerrainMesher {
     if (old) geo.dirty = true;
     if (!old) geo.clear();
 
-    //const {OffsetPos, OffsetMask, Stride} = Geometry;
-    //const source = Stride * geo.num_quads;
-    //this.computeFrontierGeometry(geo, heightmap, sx, sz, scale, solid);
+    const Stride = Geometry.StrideInInt32;
+    const source = Stride * geo.num_quads;
+    this.computeFrontierGeometry(geo, heightmap, sx, sz, scale, solid);
 
-    //const target = Stride * geo.num_quads;
-    //for (let offset = source; offset < target; offset += Stride) {
-    //  geo.quads[offset + OffsetPos + 0] += px;
-    //  geo.quads[offset + OffsetPos + 2] += pz;
-    //  geo.quads[offset + OffsetMask] = mask;
-    //}
+    const quads = geo.quads;
+    const target = Stride * geo.num_quads;
+    for (let offset = source; offset < target; offset += Stride) {
+      // TODO(skishore): Use 20 bits for x and z and 12 for y and indices,
+      // because the LOD meshes are bounded to 256 in the y dimension but
+      // grow exponentially larger in the x and z dimensions.
+      const xy = quads[offset + 0];
+      const zi = quads[offset + 1];
+
+      const x = (xy << 16) >> 16;
+      const z = (zi << 16) >> 16;
+
+      const nx = x + px;
+      const nz = z + pz;
+
+      assert(nx === (nx << 16) >> 16);
+      assert(nz === (nz << 16) >> 16);
+
+      quads[offset + 0] = (nx & 0xffff) | ((xy >> 16) << 16);
+      quads[offset + 1] = (nz & 0xffff) | ((zi >> 16) << 16);
+      quads[offset + 3] |= mask;
+    }
     return this.buildMesh(geo, old, solid ? 0 : 1);
   }
 

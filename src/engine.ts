@@ -635,7 +635,7 @@ const kNumLODChunksToMeshPerFrame = 1;
 
 const kFrontierLOD = 2;
 const kFrontierRadius = 8;
-const kFrontierLevels = 0;
+const kFrontierLevels = 6;
 
 // Enable debug assertions for the equi-levels optimization.
 const kCheckEquilevels = false;
