@@ -670,7 +670,7 @@ class TerrainMesher {
     return (a10 === a01) ? false : (a00 + a11 > a10 + a01);
   }
 
-  private packAOMask(data: Int16Array, ipos: int, ineg: int,
+  private packAOMask(data: Uint8Array, ipos: int, ineg: int,
                      dj: int, dk: int): int {
     const {opaque, solid} = this;
     if (solid[data[ipos]]) return int(0b01010101);

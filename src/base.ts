@@ -237,12 +237,12 @@ class Tensor2 {
 };
 
 class Tensor3 {
-  data: Int16Array;
+  data: Uint8Array;
   shape: [int, int, int];
   stride: [int, int, int];
 
   constructor(x: int, y: int, z: int) {
-    this.data = new Int16Array(x * y * z);
+    this.data = new Uint8Array(x * y * z);
     this.shape = [x, y, z];
     this.stride = [y, 1, int(x * y)];
   }
