@@ -817,10 +817,10 @@ const kVoxelShader = `
 
   in ivec3 a_pos;
   in ivec2 a_size;
-  in int   a_indices;
-  in int   a_ao;
-  in int   a_mask;
-  in int   a_texture;
+  in uint  a_indices;
+  in uint  a_ao;
+  in uint  a_mask;
+  in uint  a_texture;
   // 4-bit wave; 2-bit dim; 1-bit dir; 1-bit lit
   in int   a_wddl;
 
@@ -828,8 +828,8 @@ const kVoxelShader = `
   out float v_move;
   out float v_light;
 
-  int unpackI2(int packed, int index) {
-    return (packed >> (2 * index)) & 3;
+  int unpackI2(uint packed, int index) {
+    return (int(packed) >> (2 * index)) & 3;
   }
 
   void main() {
@@ -864,8 +864,9 @@ const kVoxelShader = `
     pos[1] -= wave * u_wave;
     gl_Position = u_transform * vec4(pos, 1.0);
 
-    int mask_index = a_mask >> 5;
-    int mask_value = 1 << (a_mask & 31);
+    int mask = int(a_mask);
+    int mask_index = mask >> 5;
+    int mask_value = 1 << (mask & 31);
     bool hide = (u_mask[mask_index] & mask_value) != 0;
     if (hide) gl_Position[3] = 0.0;
   }
@@ -997,13 +998,14 @@ class VoxelMesh extends Mesh<VoxelShader> {
     this.vao = nonnull(gl.createVertexArray());
     gl.bindVertexArray(this.vao);
     this.prepareQuads(this.geo.quads);
-    this.prepareAttribute(shader.a_pos,     gl.SHORT, 3, 0);
-    this.prepareAttribute(shader.a_indices, gl.SHORT, 1, 6);
-    this.prepareAttribute(shader.a_size,    gl.SHORT, 2, 8);
-    this.prepareAttribute(shader.a_mask,    gl.BYTE,  1, 12);
-    this.prepareAttribute(shader.a_texture, gl.BYTE,  1, 13);
-    this.prepareAttribute(shader.a_ao,      gl.BYTE,  1, 14);
-    this.prepareAttribute(shader.a_wddl,    gl.BYTE,  1, 15);
+    const {BYTE, SHORT, UNSIGNED_BYTE: UBYTE, UNSIGNED_SHORT: USHORT} = gl;
+    this.prepareAttribute(shader.a_pos,     SHORT,  3, 0);
+    this.prepareAttribute(shader.a_indices, USHORT, 1, 6);
+    this.prepareAttribute(shader.a_size,    SHORT,  2, 8);
+    this.prepareAttribute(shader.a_mask,    UBYTE,  1, 12);
+    this.prepareAttribute(shader.a_texture, UBYTE,  1, 13);
+    this.prepareAttribute(shader.a_ao,      UBYTE,  1, 14);
+    this.prepareAttribute(shader.a_wddl,    BYTE,   1, 15);
   }
 
   private prepareAttribute(
