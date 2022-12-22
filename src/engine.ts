@@ -653,8 +653,13 @@ const kNeighborOffsets = ((): [Point, Point, Point, Point][] => {
     [[ 1,  0,  0], [N, 1, 1], [0, 0, 0], [1, H, W]],
     [[ 0,  0, -1], [1, 1, 0], [0, 0, L], [W, H, 1]],
     [[ 0,  0,  1], [1, 1, N], [0, 0, 0], [W, H, 1]],
+    [[-1,  0,  1], [0, 1, N], [L, 0, 0], [1, H, 1]],
+    [[ 1,  0,  1], [N, 1, N], [0, 0, 0], [1, H, 1]],
+    [[-1,  0, -1], [0, 1, 0], [L, 0, L], [1, H, 1]],
+    [[ 1,  0, -1], [N, 1, 0], [0, 0, L], [1, H, 1]],
   ];
 })();
+const kNeighbors = kNeighborOffsets.slice(1).map(x => [x[0][0], x[0][2]]);
 
 class Chunk {
   cx: int;
@@ -693,12 +698,10 @@ class Chunk {
     this.dropMeshes();
 
     const {cx, cz} = this;
-    const neighbor = (x: int, z: int) => {
+    for (const [x, z] of kNeighbors) {
       const chunk = this.world.chunks.get(int(x + cx), int(z + cz));
       if (chunk) chunk.notifyNeighborDisposed();
-    };
-    neighbor(1, 0); neighbor(-1, 0);
-    neighbor(0, 1); neighbor(0, -1);
+    }
   }
 
   getBlock(x: int, y: int, z: int): BlockId {
@@ -731,9 +734,13 @@ class Chunk {
       if (chunk) chunk.dirty = true;
     };
     if (xm === 0) neighbor(-1, 0, 0);
-    if (xm === kChunkMask) neighbor(1, 0, 0);
     if (zm === 0) neighbor(0, 0, -1);
+    if (xm === kChunkMask) neighbor(1, 0, 0);
     if (zm === kChunkMask) neighbor(0, 0, 1);
+    if (xm === 0 && zm === 0) neighbor(-1, 0, -1);
+    if (xm === 0 && zm === kChunkMask) neighbor(-1, 0, 1);
+    if (xm === kChunkMask && zm === 0) neighbor(1, 0, -1);
+    if (xm === kChunkMask && zm === kChunkMask) neighbor(1, 0, 1);
   }
 
   setColumn(x: int, z: int, start: int, count: int, block: BlockId): void {
@@ -790,21 +797,19 @@ class Chunk {
       }
     }
 
-    const neighbor = (x: int, z: int) => {
+    for (const [x, z] of kNeighbors) {
       const chunk = this.world.chunks.get(int(x + cx), int(z + cz));
-      if (!chunk) return;
+      if (!chunk) continue;
       chunk.notifyNeighborLoaded();
       this.neighbors++;
-    };
-    neighbor(1, 0); neighbor(-1, 0);
-    neighbor(0, 1); neighbor(0, -1);
+    }
 
     this.dirty = true;
     this.ready = this.checkReady();
   }
 
   private checkReady(): boolean {
-    return this.neighbors === 4;
+    return this.neighbors === kNeighbors.length;
   }
 
   private dropMeshes(): void {
@@ -834,7 +839,7 @@ class Chunk {
   }
 
   private notifyNeighborLoaded(): void {
-    assert(this.neighbors < 4);
+    assert(this.neighbors < kNeighbors.length);
     this.neighbors++;
     this.ready = this.checkReady();
   }
