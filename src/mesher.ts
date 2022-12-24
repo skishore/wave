@@ -304,16 +304,25 @@ class TerrainMesher {
         // all directions. In the y direction, this border is synthetic, but
         // in the x and z direction, the border cells come from other chunks.
         //
-        // To avoid meshing a block face twice, we mesh a face iff its block
-        // is in our chunk. This check applies in the x and z directions.
+        // To avoid meshing a block face twice, we mesh a face the face faces
+        // into our chunk. This check applies in the x and z directions.
+        //
+        // We should actually mesh the face that faces out of the chunk. An
+        // LOD mesh, by necessity, has solid walls facing out on all sides,
+        // because it must work next to an arbitrary LOD or chunk mesh. By
+        // meshing faces facing into chunk meshes, we cause z-fighting at the
+        // boundary between chunk meshes and LOD meshes.
+        //
+        // But we don't yet have a 1-cell border in our lighting textures,
+        // so we'll stick with this approach until we do smooth lighting.
         if (d !== 1) {
           if (id === 0) {
             for (let i = 0; i < area; i++) {
-              if ((kMaskData[i] & 0x200)) kMaskData[i] = 0;
+              if (!(kMaskData[i] & 0x200)) kMaskData[i] = 0;
             }
           } else if (id === ld - 1) {
             for (let i = 0; i < area; i++) {
-              if (!(kMaskData[i] & 0x200)) kMaskData[i] = 0;
+              if ((kMaskData[i] & 0x200)) kMaskData[i] = 0;
             }
           }
         }
