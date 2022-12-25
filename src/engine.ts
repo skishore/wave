@@ -671,6 +671,7 @@ class Chunk {
   private solid: VoxelMesh | null = null;
   private water: VoxelMesh | null = null;
   private world: World;
+  private lights: Tensor3;
   private voxels: Tensor3;
   private heightmap: Tensor2;
   private light_map: Tensor2;
@@ -681,6 +682,7 @@ class Chunk {
     this.cz = cz;
     this.world = world;
     this.instances = new Map();
+    this.lights = new Tensor3(kChunkWidth, kWorldHeight, kChunkWidth);
     this.voxels = new Tensor3(kChunkWidth, kWorldHeight, kChunkWidth);
     this.heightmap = new Tensor2(kChunkWidth, kChunkWidth);
     this.light_map = new Tensor2(kChunkWidth, kChunkWidth);
@@ -701,6 +703,79 @@ class Chunk {
     for (const [x, z] of kNeighbors) {
       const chunk = this.world.chunks.get(int(x + cx), int(z + cz));
       if (chunk) chunk.notifyNeighborDisposed();
+    }
+  }
+
+  computeLights() {
+    const {heightmap, lights, voxels} = this;
+    const opaque = this.world.registry.opaque;
+    assert(lights.stride[1] === 1);
+
+    const kSunlightLevel = 0xf;
+    lights.data.fill(kSunlightLevel);
+
+    type Point = {x: int, y: int, z: int};
+    const make_point = (x: int, y: int, z: int): Point => ({x, y, z});
+
+    const spread = [
+      [1, 0, 0], [-1, 0, 0],
+      [0, 1, 0], [0, -1, 0],
+      [0, 0, 1], [0, 0, -1],
+    ];
+    let prev: Point[] = [];
+    let next: Point[] = [];
+
+    for (let x = int(0); x < kChunkWidth; x++) {
+      for (let z = int(0); z < kChunkWidth; z++) {
+        const height = heightmap.get(x, z);
+
+        for (let i = 0; i < 4; i++) {
+          const diff = spread[i];
+          const dx = int(x + diff[0]);
+          if (!(0 <= dx && dx < kChunkWidth)) continue;
+          const dz = int(z + diff[1]);
+          if (!(0 <= dz && dz < kChunkWidth)) continue;
+
+          const neighbor = heightmap.get(dx, dz);
+          for (let y = height; y < neighbor; y++) {
+            prev.push(make_point(dx, y, dz));
+          }
+        }
+
+        if (height > 0) {
+          const index = lights.index(x, 0, z);
+          lights.data.fill(0, index, index + height);
+          if (!opaque[voxels.data[index + height - 1]]) {
+            prev.push(make_point(x, int(height - 1), z));
+          }
+        }
+      }
+    }
+
+    for (let light = kSunlightLevel - 1; light > 0; light--) {
+      for (const cell of prev) {
+        const {x, y, z} = cell;
+        const index = voxels.index(x, y, z);
+        if (opaque[voxels.data[index]]) continue;
+        if (lights.data[index] >= light) continue;
+        let max_neighbor = 0;
+
+        for (const diff of spread) {
+          const dx = int(x + diff[0]);
+          if (!(0 <= dx && dx < kChunkWidth)) continue;
+          const dz = int(z + diff[1]);
+          if (!(0 <= dz && dz < kChunkWidth)) continue;
+          const dy = int(y + diff[2]);
+          if (!(0 <= dy && dy < kWorldHeight)) continue;
+
+          const neighbor = lights.get(dx, dy, dz);
+          if (neighbor > max_neighbor) max_neighbor = neighbor;
+          if (neighbor < light && light > 1) next.push(make_point(dx, dy, dz));
+        }
+        if (max_neighbor > 1) lights.set(x, y, z, int(max_neighbor - 1));
+      }
+      [prev, next] = [next, prev];
+      next.length = 0;
     }
   }
 
@@ -764,6 +839,7 @@ class Chunk {
 
   remeshChunk(): void {
     assert(this.dirty);
+    this.computeLights();
     this.remeshSprites();
     this.remeshTerrain();
     this.dirty = false;
@@ -913,6 +989,8 @@ class Chunk {
     const meshed = world.mesher.meshChunk(
         buffer, heightmap, light_map, equilevels, this.solid, this.water);
     const [solid, water] = meshed;
+    solid?.setLight(this.lights.data);
+    water?.setLight(this.lights.data);
     solid?.setPosition(x, 0, z);
     water?.setPosition(x, 0, z);
     this.solid = solid;

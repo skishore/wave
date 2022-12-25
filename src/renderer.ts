@@ -154,6 +154,7 @@ class Camera {
 
 const ARRAY_BUFFER     = WebGL2RenderingContext.ARRAY_BUFFER;
 const TEXTURE_2D_ARRAY = WebGL2RenderingContext.TEXTURE_2D_ARRAY;
+const TEXTURE_3D       = WebGL2RenderingContext.TEXTURE_3D;
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -217,6 +218,7 @@ class Shader {
     gl.shaderSource(result, `#version 300 es
                              precision highp float;
                              precision highp sampler2DArray;
+                             precision highp sampler3D;
                              ${source}`);
     gl.compileShader(result);
     if (!gl.getShaderParameter(result, gl.COMPILE_STATUS)) {
@@ -295,7 +297,9 @@ class TextureAtlas {
   }
 
   bind(): void {
-    this.gl.bindTexture(TEXTURE_2D_ARRAY, this.texture);
+    const {gl, texture} = this;
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(TEXTURE_2D_ARRAY, this.texture);
   }
 
   sparkle(): void {
@@ -515,6 +519,7 @@ class SpriteAtlas {
     assert(pixels.length === length);
 
     const gl = this.gl;
+    gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(TEXTURE_2D_ARRAY, texture);
     gl.texImage3D(TEXTURE_2D_ARRAY, 0, gl.RGBA, x, y, frames, 0,
                   gl.RGBA, gl.UNSIGNED_BYTE, pixels);
@@ -732,6 +737,47 @@ class BufferAllocator {
   }
 };
 
+class TextureAllocator {
+  private gl: WebGL2RenderingContext;
+  private freeList: WebGLTexture[];
+
+  constructor(gl: WebGL2RenderingContext) {
+    this.gl = gl;
+    this.freeList = [];
+  }
+
+  alloc(data: Uint8Array): WebGLTexture {
+    assert(data.length === 256 * 16 * 16);
+
+    const gl = this.gl;
+    const id = gl.TEXTURE_3D;
+    const format = gl.LUMINANCE;
+    const type = gl.UNSIGNED_BYTE;
+    gl.activeTexture(gl.TEXTURE1);
+
+    if (this.freeList.length > 0) {
+      const texture = this.freeList.pop()!;
+      gl.bindTexture(id, texture);
+      gl.texSubImage3D(id, 0, 0, 0, 0, 256, 16, 16, format, type, data, 0);
+      return texture;
+    } else {
+      const texture = nonnull(gl.createTexture());
+      gl.bindTexture(id, texture);
+      gl.texImage3D(id, 0, format, 256, 16, 16, 0, format, type, data);
+      gl.texParameteri(id, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(id, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(id, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(id, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(id, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      return texture;
+    }
+  }
+
+  free(texture: WebGLTexture): void {
+    this.freeList.push(texture);
+  }
+};
+
 //////////////////////////////////////////////////////////////////////////////
 
 interface MeshManager<S> {
@@ -824,6 +870,7 @@ const kVoxelShader = `
   // 4-bit wave; 2-bit dim; 1-bit dir; 1-bit lit
   in int   a_wddl;
 
+  out vec3 v_pos;
   out vec3 v_uvw;
   out float v_move;
   out float v_light;
@@ -836,7 +883,7 @@ const kVoxelShader = `
     int instance = gl_VertexID + 3 * (gl_InstanceID & 1);
     int index = unpackI2(a_indices, instance);
 
-    float shadow = a_wddl < 0 ? 0.0 : 1.0;
+    float shadow = a_wddl < 0 ? 0.0 : 0.0;
     float ao = 1.0 - 0.3 * float(unpackI2(a_ao, index));
     v_light = ao * (1.0 - ${kShadowAlpha} * shadow);
 
@@ -864,6 +911,9 @@ const kVoxelShader = `
     pos[1] -= wave * u_wave;
     gl_Position = u_transform * vec4(pos, 1.0);
 
+    v_pos = pos;
+    v_pos[dim] += 0.5 * dir;
+
     int mask = int(a_mask);
     int mask_index = mask >> 5;
     int mask_value = 1 << (mask & 31);
@@ -874,17 +924,25 @@ const kVoxelShader = `
   uniform float u_alphaTest;
   uniform vec3 u_fogColor;
   uniform float u_fogDepth;
+  uniform int u_hasLight;
   uniform sampler2DArray u_texture;
+  uniform sampler3D u_light;
+  in vec3 v_pos;
   in vec3 v_uvw;
   in float v_move;
   in float v_light;
   out vec4 o_color;
 
   void main() {
+    bool hasLight = u_hasLight == 1;
+    ivec3 texel = ivec3(int(v_pos[1]), int(v_pos[0]), int(v_pos[2]));
+    float level = hasLight ? 256.0 * texelFetch(u_light, texel, 0)[0] : 15.0;
+    float light = pow(0.8, 15.0 - level);
+
     float depth = u_fogDepth * gl_FragCoord.w;
     float fog = clamp(exp2(-depth * depth), 0.0, 1.0);
     vec3 index = v_uvw + vec3(v_move, v_move, 0.0);
-    vec4 color = vec4(vec3(v_light), 1.0) * texture(u_texture, index);
+    vec4 color = vec4(vec3(light * v_light), 1.0) * texture(u_texture, index);
     o_color = mix(color, vec4(u_fogColor, color[3]), fog);
     if (o_color[3] < 0.5 * u_alphaTest) discard;
   }
@@ -898,6 +956,8 @@ class VoxelShader extends Shader {
   u_alphaTest: WebGLUniformLocation | null;
   u_fogColor:  WebGLUniformLocation | null;
   u_fogDepth:  WebGLUniformLocation | null;
+  u_hasLight:  WebGLUniformLocation | null;
+  u_light:     WebGLUniformLocation | null;
 
   a_pos:     number | null;
   a_size:    number | null;
@@ -916,6 +976,8 @@ class VoxelShader extends Shader {
     this.u_alphaTest = this.getUniformLocation('u_alphaTest');
     this.u_fogColor  = this.getUniformLocation('u_fogColor');
     this.u_fogDepth  = this.getUniformLocation('u_fogDepth');
+    this.u_hasLight  = this.getUniformLocation('u_hasLight');
+    this.u_light     = this.getUniformLocation('u_light');
 
     this.a_pos     = this.getAttribLocation('a_pos');
     this.a_size    = this.getAttribLocation('a_size');
@@ -930,15 +992,16 @@ class VoxelShader extends Shader {
 const kDefaultMask = new Int32Array(2);
 
 class VoxelMesh extends Mesh<VoxelShader> {
-  private allocator: BufferAllocator;
+  private manager: VoxelManager;
   private geo: Geometry;
   private vao: WebGLVertexArrayObject | null = null;
   private quads: Buffer | null = null;
   private mask: Int32Array = kDefaultMask;
+  private light: WebGLTexture | null = null;
 
   constructor(manager: VoxelManager, meshes: VoxelMesh[], geo: Geometry) {
     super(manager, meshes);
-    this.allocator = manager.allocator;
+    this.manager = manager;
     this.geo = geo;
   }
 
@@ -958,6 +1021,12 @@ class VoxelMesh extends Mesh<VoxelShader> {
     const gl = this.gl;
     const n = this.geo.num_quads;
     gl.bindVertexArray(this.vao);
+    if (this.light) {
+      gl.uniform1i(this.manager.shader.u_hasLight, 1);
+      gl.bindTexture(TEXTURE_3D, this.light);
+    } else {
+      gl.uniform1i(this.manager.shader.u_hasLight, 0);
+    }
     gl.uniform2iv(this.shader.u_mask, this.mask);
     gl.uniformMatrix4fv(this.shader.u_transform, false, transform);
     gl.drawArraysInstanced(gl.TRIANGLES, 0, 3, n * 2);
@@ -973,6 +1042,11 @@ class VoxelMesh extends Mesh<VoxelShader> {
     this.geo = geo;
   }
 
+  setLight(light: Uint8Array): void {
+    if (this.light) this.manager.talloc.free(this.light);
+    this.light = this.manager.talloc.alloc(light);
+  }
+
   setPosition(x: number, y: number, z: number): void {
     Vec3.set(this.position, x, y, z);
   }
@@ -985,11 +1059,13 @@ class VoxelMesh extends Mesh<VoxelShader> {
   }
 
   private destroyBuffers() {
-    const {gl, quads} = this;
+    const {gl, light, quads} = this;
     gl.deleteVertexArray(this.vao);
-    if (quads) this.allocator.free(quads);
+    if (quads) this.manager.balloc.free(quads);
+    if (light) this.manager.talloc.free(light);
     this.vao = null;
     this.quads = null;
+    this.light = null;
   }
 
   private prepareBuffers() {
@@ -1021,20 +1097,22 @@ class VoxelMesh extends Mesh<VoxelShader> {
   private prepareQuads(data: Int32Array) {
     const n = this.geo.num_quads * Geometry.StrideInInt32;
     const subarray = data.length > n ? data.subarray(0, n) : data;
-    this.quads = this.allocator.alloc(subarray, false);
+    this.quads = this.manager.balloc.alloc(subarray, false);
   }
 };
 
 class VoxelManager implements MeshManager<VoxelShader> {
   gl: WebGL2RenderingContext;
-  allocator: BufferAllocator;
+  balloc: BufferAllocator;
+  talloc: TextureAllocator;
   shader: VoxelShader;
   atlas: TextureAtlas;
   private phases: VoxelMesh[][];
 
   constructor(gl: WebGL2RenderingContext, allocator: BufferAllocator) {
     this.gl = gl;
-    this.allocator = allocator;
+    this.balloc = allocator;
+    this.talloc = new TextureAllocator(gl);
     this.shader = new VoxelShader(gl);
     this.atlas = new TextureAtlas(gl);
     this.phases = [[], [], []];
@@ -1061,6 +1139,8 @@ class VoxelManager implements MeshManager<VoxelShader> {
     gl.uniform1f(shader.u_alphaTest, 1);
     gl.uniform3fv(shader.u_fogColor, fog_color);
     gl.uniform1f(shader.u_fogDepth, fog_depth);
+    gl.uniform1i(shader.u_light, 1);
+    gl.activeTexture(gl.TEXTURE1);
 
     // Rendering phases:
     //   0) Opaque and alpha-tested voxel meshes.
@@ -1357,6 +1437,7 @@ class InstancedManager implements MeshManager<InstancedShader> {
     gl.uniform3fv(shader.u_fogColor, fog_color);
     gl.uniform1f(shader.u_fogDepth, fog_depth);
     gl.uniformMatrix4fv(shader.u_transform, false, transform);
+    gl.activeTexture(gl.TEXTURE0);
 
     for (const mesh of meshes) {
       if (mesh.draw(transform, stats)) drawn++;
@@ -1545,6 +1626,7 @@ class SpriteManager implements MeshManager<SpriteShader> {
     billboard[2] = Math.cos(pitch);
     billboard[3] = -Math.sin(pitch);
     gl.uniform4fv(shader.u_billboard, billboard);
+    gl.activeTexture(gl.TEXTURE0);
 
     for (const mesh of meshes) {
       if (mesh.draw(camera, planes)) drawn++;
@@ -1919,6 +2001,7 @@ interface ISpriteMesh extends IMesh {
 interface IVoxelMesh extends IMesh {
   getGeometry: () => Geometry,
   setGeometry: (geo: Geometry) => void,
+  setLight: (light: Uint8Array) => void,
   show: (mask: Int32Array, shown: boolean) => void,
 };
 
