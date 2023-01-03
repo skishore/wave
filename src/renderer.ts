@@ -1122,18 +1122,25 @@ const kInstancedShader = `
     gl_Position = u_transform * vec4(v2 + (a_pos - u_origin), 1.0);
   }
 #split
+  uniform vec3 u_fogColor;
+  uniform float u_fogDepth;
   uniform float u_frame;
   uniform sampler2DArray u_texture;
   in vec2 v_uv;
   out vec4 o_color;
 
   void main() {
-    o_color = texture(u_texture, vec3(v_uv, u_frame));
+    float depth = u_fogDepth * gl_FragCoord.w;
+    float fog = clamp(exp2(-depth * depth), 0.0, 1.0);
+    vec4 color = texture(u_texture, vec3(v_uv, u_frame));
+    o_color = mix(color, vec4(u_fogColor, color[3]), fog);
     if (o_color[3] < 0.5) discard;
   }
 `;
 
 class InstancedShader extends Shader {
+  u_fogColor:  WebGLUniformLocation | null;
+  u_fogDepth:  WebGLUniformLocation | null;
   u_frame:     WebGLUniformLocation | null;
   u_origin:    WebGLUniformLocation | null;
   u_billboard: WebGLUniformLocation | null;
@@ -1143,6 +1150,9 @@ class InstancedShader extends Shader {
 
   constructor(gl: WebGL2RenderingContext) {
     super(gl, kInstancedShader);
+    this.u_fogColor  = this.getUniformLocation('u_fogColor');
+    this.u_fogDepth  = this.getUniformLocation('u_fogDepth');
+    this.u_frame     = this.getUniformLocation('u_frame');
     this.u_frame     = this.getUniformLocation('u_frame');
     this.u_origin    = this.getUniformLocation('u_origin');
     this.u_billboard = this.getUniformLocation('u_billboard');
@@ -1323,7 +1333,8 @@ class InstancedManager implements MeshManager<InstancedShader> {
     return new InstancedMesh(this, this.meshes, frame, sprite);
   }
 
-  render(camera: Camera, planes: CullingPlane[], stats: Stats): void {
+  render(camera: Camera, planes: CullingPlane[],
+         stats: Stats, overlay: ScreenOverlay): void {
     const {billboard, gl, meshes, origin, origin_32, shader} = this;
     let drawn = 0;
 
@@ -1332,14 +1343,19 @@ class InstancedManager implements MeshManager<InstancedShader> {
     origin_32[2] = origin[2] = Math.floor(camera.position[2]);
     const transform = camera.getTransformFor(origin);
 
-    shader.bind();
     const pitch  = -0.33 * camera.pitch;
     billboard[0] = Math.cos(camera.heading);
     billboard[1] = -Math.sin(camera.heading);
     billboard[2] = Math.cos(pitch);
     billboard[3] = -Math.sin(pitch);
+    const fog_color = overlay.getFogColor();
+    const fog_depth = overlay.getFogDepth();
+
+    shader.bind();
     gl.uniform3fv(shader.u_origin, origin_32);
     gl.uniform4fv(shader.u_billboard, billboard);
+    gl.uniform3fv(shader.u_fogColor, fog_color);
+    gl.uniform1f(shader.u_fogDepth, fog_depth);
     gl.uniformMatrix4fv(shader.u_transform, false, transform);
 
     for (const mesh of meshes) {
@@ -1996,7 +2012,7 @@ class Renderer {
     const stats: Stats =
         {drawn: 0, total: 0, drawnInstances: 0, totalInstances: 0};
     this.sprite_manager.render(camera, planes, stats);
-    this.instanced_manager.render(camera, planes, stats);
+    this.instanced_manager.render(camera, planes, stats, overlay);
     this.voxels_manager.render(camera, planes, stats, overlay, move, wave, 0);
     this.highlight_manager.render(camera, planes, stats);
     this.shadow_manager.render(camera, planes, stats);
