@@ -709,70 +709,65 @@ class Chunk {
   computeLights() {
     const {heightmap, lights, voxels} = this;
     const opaque = this.world.registry.opaque;
-    assert(lights.stride[1] === 1);
+
+    // Use for fast bitwise index propagation below.
+    assert(lights.stride[0] === 1 << 8);
+    assert(lights.stride[1] === 1 << 0);
+    assert(lights.stride[2] === 1 << 12);
+    assert(heightmap.stride[0] === 1 << 0);
+    assert(heightmap.stride[1] === 1 << 4);
+    const spread = [
+      [-1 << 8,  0x0f00, 0x0000], [1 << 8,  0x0f00, 0x0f00],
+      [-1 << 12, 0xf000, 0x0000], [1 << 12, 0xf000, 0xf000],
+      [-1 << 0,  0x00ff, 0x0000], [1 << 0,  0x00ff, 0x00ff],
+    ];
 
     const kSunlightLevel = 0xf;
-    lights.data.fill(kSunlightLevel);
+    const light_data = lights.data;
+    light_data.fill(kSunlightLevel);
 
-    type Point = {x: int, y: int, z: int};
-    const make_point = (x: int, y: int, z: int): Point => ({x, y, z});
-
-    const spread = [
-      [1, 0, 0], [-1, 0, 0],
-      [0, 1, 0], [0, -1, 0],
-      [0, 0, 1], [0, 0, -1],
-    ];
-    let prev: Point[] = [];
-    let next: Point[] = [];
+    let prev: int[] = [];
+    let next: int[] = [];
 
     for (let x = int(0); x < kChunkWidth; x++) {
       for (let z = int(0); z < kChunkWidth; z++) {
         const height = heightmap.get(x, z);
+        const index = (x << 8) | (z << 12);
 
         for (let i = 0; i < 4; i++) {
           const diff = spread[i];
-          const dx = int(x + diff[0]);
-          if (!(0 <= dx && dx < kChunkWidth)) continue;
-          const dz = int(z + diff[1]);
-          if (!(0 <= dz && dz < kChunkWidth)) continue;
+          if ((index & diff[1]) === diff[2]) continue;
 
-          const neighbor = heightmap.get(dx, dz);
+          const neighbor_index = int(index + diff[0]);
+          const neighbor = heightmap.data[neighbor_index >> 8];
           for (let y = height; y < neighbor; y++) {
-            prev.push(make_point(dx, y, dz));
+            prev.push(int(neighbor_index + y));
           }
         }
 
         if (height > 0) {
-          const index = lights.index(x, 0, z);
-          lights.data.fill(0, index, index + height);
-          if (!opaque[voxels.data[index + height - 1]]) {
-            prev.push(make_point(x, int(height - 1), z));
-          }
+          const below = int(index + height - 1);
+          if (!opaque[voxels.data[below]]) prev.push(below);
+          light_data.fill(0, index, index + height);
         }
       }
     }
 
     for (let light = kSunlightLevel - 1; light > 0; light--) {
-      for (const cell of prev) {
-        const {x, y, z} = cell;
-        const index = voxels.index(x, y, z);
+      for (const index of prev) {
         if (opaque[voxels.data[index]]) continue;
-        if (lights.data[index] >= light) continue;
+        if (light_data[index] >= light) continue;
         let max_neighbor = 0;
 
         for (const diff of spread) {
-          const dx = int(x + diff[0]);
-          if (!(0 <= dx && dx < kChunkWidth)) continue;
-          const dz = int(z + diff[1]);
-          if (!(0 <= dz && dz < kChunkWidth)) continue;
-          const dy = int(y + diff[2]);
-          if (!(0 <= dy && dy < kWorldHeight)) continue;
+          if ((index & diff[1]) === diff[2]) continue;
 
-          const neighbor = lights.get(dx, dy, dz);
+          const neighbor_index = int(index + diff[0]);
+          const neighbor = light_data[neighbor_index];
           if (neighbor > max_neighbor) max_neighbor = neighbor;
-          if (neighbor < light && light > 1) next.push(make_point(dx, dy, dz));
+          if (neighbor < light && light > 1) next.push(neighbor_index);
         }
-        if (max_neighbor > 1) lights.set(x, y, z, int(max_neighbor - 1));
+        if (max_neighbor > 1) light_data[index] = int(max_neighbor - 1);
       }
       [prev, next] = [next, prev];
       next.length = 0;
