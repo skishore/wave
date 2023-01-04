@@ -627,7 +627,7 @@ const kWorldHeight = int(1 << kHeightBits);
 const kChunkShiftX = kHeightBits;
 const kChunkShiftZ = kHeightBits + kChunkBits;
 
-const kChunkRadius = 12;
+const kChunkRadius = 1;
 
 const kNumChunksToLoadPerFrame = 1;
 const kNumChunksToMeshPerFrame = 1;
@@ -635,7 +635,7 @@ const kNumLODChunksToMeshPerFrame = 1;
 
 const kFrontierLOD = 2;
 const kFrontierRadius = 8;
-const kFrontierLevels = 6;
+const kFrontierLevels = 0;
 
 // Enable debug assertions for the equi-levels optimization.
 const kCheckEquilevels = false;
@@ -661,9 +661,23 @@ const kNeighborOffsets = ((): [Point, Point, Point, Point][] => {
 })();
 const kNeighbors = kNeighborOffsets.slice(1).map(x => [x[0][0], x[0][2]]);
 
+class LightSpread {
+  constructor(public diff: int, public mask: int, public test: int) {}
+}
+const kSpread : LightSpread[] = [
+  new LightSpread(int(-1 << 8),  int(0x0f00), int(0x0000)),
+  new LightSpread(int(+1 << 8),  int(0x0f00), int(0x0f00)),
+  new LightSpread(int(-1 << 12), int(0xf000), int(0x0000)),
+  new LightSpread(int(+1 << 12), int(0xf000), int(0xf000)),
+  new LightSpread(int(-1 << 0),  int(0x00ff), int(0x0000)),
+  new LightSpread(int(+1 << 0),  int(0x00ff), int(0x00ff)),
+];
+const kSunlightLevel = 0xf;
+
 class Chunk {
   cx: int;
   cz: int;
+  private dirty_lights: int[];
   private dirty: boolean = false;
   private ready: boolean = false;
   private neighbors: int = 0;
@@ -681,6 +695,7 @@ class Chunk {
     this.cx = cx;
     this.cz = cz;
     this.world = world;
+    this.dirty_lights = [];
     this.instances = new Map();
     this.lights = new Tensor3(kChunkWidth, kWorldHeight, kChunkWidth);
     this.voxels = new Tensor3(kChunkWidth, kWorldHeight, kChunkWidth);
@@ -706,74 +721,6 @@ class Chunk {
     }
   }
 
-  computeLights() {
-    const {heightmap, lights, voxels} = this;
-    const opaque = this.world.registry.opaque;
-
-    // Use for fast bitwise index propagation below.
-    assert(lights.stride[0] === 1 << 8);
-    assert(lights.stride[1] === 1 << 0);
-    assert(lights.stride[2] === 1 << 12);
-    assert(heightmap.stride[0] === 1 << 0);
-    assert(heightmap.stride[1] === 1 << 4);
-    const spread = [
-      [-1 << 8,  0x0f00, 0x0000], [1 << 8,  0x0f00, 0x0f00],
-      [-1 << 12, 0xf000, 0x0000], [1 << 12, 0xf000, 0xf000],
-      [-1 << 0,  0x00ff, 0x0000], [1 << 0,  0x00ff, 0x00ff],
-    ];
-
-    const kSunlightLevel = 0xf;
-    const light_data = lights.data;
-    light_data.fill(kSunlightLevel);
-
-    let prev: int[] = [];
-    let next: int[] = [];
-
-    for (let x = int(0); x < kChunkWidth; x++) {
-      for (let z = int(0); z < kChunkWidth; z++) {
-        const height = heightmap.get(x, z);
-        const index = (x << 8) | (z << 12);
-
-        for (let i = 0; i < 4; i++) {
-          const diff = spread[i];
-          if ((index & diff[1]) === diff[2]) continue;
-
-          const neighbor_index = int(index + diff[0]);
-          const neighbor = heightmap.data[neighbor_index >> 8];
-          for (let y = height; y < neighbor; y++) {
-            prev.push(int(neighbor_index + y));
-          }
-        }
-
-        if (height > 0) {
-          const below = int(index + height - 1);
-          if (!opaque[voxels.data[below]]) prev.push(below);
-          light_data.fill(0, index, index + height);
-        }
-      }
-    }
-
-    for (let light = kSunlightLevel - 1; light > 0; light--) {
-      for (const index of prev) {
-        if (opaque[voxels.data[index]]) continue;
-        if (light_data[index] >= light) continue;
-        let max_neighbor = 0;
-
-        for (const diff of spread) {
-          if ((index & diff[1]) === diff[2]) continue;
-
-          const neighbor_index = int(index + diff[0]);
-          const neighbor = light_data[neighbor_index];
-          if (neighbor > max_neighbor) max_neighbor = neighbor;
-          if (neighbor < light && light > 1) next.push(neighbor_index);
-        }
-        if (max_neighbor > 1) light_data[index] = int(max_neighbor - 1);
-      }
-      [prev, next] = [next, prev];
-      next.length = 0;
-    }
-  }
-
   getBlock(x: int, y: int, z: int): BlockId {
     const xm = int(x & kChunkMask), zm = int(z & kChunkMask);
     const index = (xm << kChunkShiftX) | y | (zm << kChunkShiftZ);
@@ -794,6 +741,7 @@ class Chunk {
     const index = voxels.index(xm, y, zm);
     voxels.data[index] = block;
     this.dirty = true;
+    this.dirty_lights.push(index);
 
     this.updateHeightmap(xm, zm, index, y, 1, block);
     this.equilevels[y] = 0;
@@ -834,7 +782,7 @@ class Chunk {
 
   remeshChunk(): void {
     assert(this.dirty);
-    this.computeLights();
+    this.lightingUpdate();
     this.remeshSprites();
     this.remeshTerrain();
     this.dirty = false;
@@ -855,6 +803,7 @@ class Chunk {
       }
     }
     column.fillEquilevels(this.equilevels);
+    this.lightingInit();
 
     if (kCheckEquilevels) {
       for (let y = int(0); y < kWorldHeight; y++) {
@@ -899,6 +848,124 @@ class Chunk {
     const instances = this.instances;
     for (const mesh of instances.values()) mesh.dispose();
     instances.clear();
+  }
+
+  private lightingInit(): void {
+    const {heightmap, lights, voxels} = this;
+    const opaque = this.world.registry.opaque;
+
+    // Use for fast bitwise index propagation below.
+    assert(lights.stride[0] === kSpread[1].diff);
+    assert(lights.stride[1] === kSpread[5].diff);
+    assert(lights.stride[2] === kSpread[3].diff);
+    assert(heightmap.stride[0] === (kSpread[1].diff >> 8));
+    assert(heightmap.stride[1] === (kSpread[3].diff >> 8));
+
+    const light_data = lights.data;
+    const dirty = this.dirty_lights;
+    light_data.fill(kSunlightLevel);
+
+    for (let x = int(0); x < kChunkWidth; x++) {
+      for (let z = int(0); z < kChunkWidth; z++) {
+        const height = heightmap.get(x, z);
+        const index = (x << 8) | (z << 12);
+
+        for (let i = 0; i < 4; i++) {
+          const spread = kSpread[i];
+          if ((index & spread.mask) === spread.test) continue;
+
+          const neighbor_index = int(index + spread.diff);
+          const neighbor = heightmap.data[neighbor_index >> 8];
+          for (let y = height; y < neighbor; y++) {
+            dirty.push(int(neighbor_index + y));
+          }
+        }
+
+        if (height > 0) {
+          const below = int(index + height - 1);
+          if (!opaque[voxels.data[below]]) dirty.push(below);
+          light_data.fill(0, index, index + height);
+        }
+      }
+    }
+  }
+
+  private lightingUpdate(): void {
+    if (this.dirty_lights.length === 0) return;
+
+    const {heightmap, voxels} = this;
+    const opaque = this.world.registry.opaque;
+    const light_data = this.lights.data;
+
+    let prev = this.dirty_lights;
+    let next: int[] = [];
+
+    // Returns the updated lighting value at the given index.
+    const query = (index: int): int => {
+      if (opaque[voxels.data[index]]) return 0;
+
+      const height = heightmap.data[index >> 8];
+      if ((index & 0xff) >= height) return kSunlightLevel;
+
+      let max_neighbor = 1;
+      for (const spread of kSpread) {
+        if ((index & spread.mask) === spread.test) continue;
+        const neighbor_index = int(index + spread.diff);
+        const neighbor = light_data[neighbor_index];
+        if (neighbor > max_neighbor) max_neighbor = neighbor;
+      }
+      return int(max_neighbor - 1);
+    };
+
+    // Enqueues new indices that may be affected by the given change.
+    const enqueue = (index: int, hi: int, lo: int): void => {
+      for (const spread of kSpread) {
+        if ((index & spread.mask) === spread.test) continue;
+        const neighbor_index = int(index + spread.diff);
+        const neighbor = light_data[neighbor_index];
+        if (lo <= neighbor && neighbor <= hi) next.push(neighbor_index);
+      }
+    };
+
+    while (prev.length > 0) {
+      for (const index of prev) {
+        const prev_value = light_data[index];
+        const next_value = query(index);
+        if (next_value === prev_value) continue;
+
+        light_data[index] = next_value;
+
+        const increase = prev_value < next_value;
+        const max = int(Math.max(prev_value, next_value));
+        const min = int(Math.min(prev_value, next_value));
+
+        // These equations are tricky. We do some casework to derive them:
+        //
+        //   - If the light value in a cell drops 8 -> 4, then adjacent cells
+        //     with lights in {4, 5, 6, 7} may also drop. 8 is too big, since
+        //     an adjacent cell with the same light has a different source.
+        //     But 3 is too small: we can cast a light of value 3.
+        //
+        //   - If the light value increases from 4 -> 8, then adjacent cells
+        //     with lights in {3, 4, 5, 6} may increase. 7 is too big, since
+        //     we can't raise the adjacent light to 8.
+        //
+        //   - As a special case, a cell in full sunlight can raise a neighbor
+        //     (the one right below) to full sunlight, so we include it here.
+        //     `max - (max < kSunlightLevel ? 1 : 0)` is the max we can cast.
+        //
+        // If we allow for blocks that filter more than one light level at a
+        // time, then the lower bounds fail, but the upper bounds still hold.
+        //
+        const hi = max - (max < kSunlightLevel ? 1 : 0) - (increase ? 1 : 0);
+        const lo = min - (increase ? 1 : 0);
+        enqueue(index, int(hi), int(lo));
+      }
+      [prev, next] = [next, prev];
+      next.length = 0;
+    }
+
+    assert(this.dirty_lights.length === 0);
   }
 
   private notifyNeighborDisposed(): void {
