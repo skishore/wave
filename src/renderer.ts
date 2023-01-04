@@ -1055,7 +1055,7 @@ class VoxelManager implements MeshManager<VoxelShader> {
     shader.bind();
     const meshes = this.phases[phase];
     const fog_color = overlay.getFogColor();
-    const fog_depth = overlay.getFogDepth();
+    const fog_depth = overlay.getFogDepth(camera);
     gl.uniform1f(shader.u_move, move);
     gl.uniform1f(shader.u_wave, wave);
     gl.uniform1f(shader.u_alphaTest, 1);
@@ -1349,7 +1349,7 @@ class InstancedManager implements MeshManager<InstancedShader> {
     billboard[2] = Math.cos(pitch);
     billboard[3] = -Math.sin(pitch);
     const fog_color = overlay.getFogColor();
-    const fog_depth = overlay.getFogDepth();
+    const fog_depth = overlay.getFogDepth(camera);
 
     shader.bind();
     gl.uniform3fv(shader.u_origin, origin_32);
@@ -1865,8 +1865,9 @@ class ScreenOverlay {
     return this.fog_color;
   }
 
-  getFogDepth(): number {
-    return this.color[3] === 1 ? 1024 : 64;
+  getFogDepth(camera: Camera): number {
+    if (this.color[3] !== 1) return 64;
+    return Math.max(256, Math.min(2 * camera.position[1], 1024));
   }
 
   setColor(color: Color) {
