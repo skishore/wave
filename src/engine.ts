@@ -690,6 +690,7 @@ class Chunk {
   private heightmap: Tensor2;
   private light_map: Tensor2;
   private equilevels: Int8Array;
+  private edge_lights: Set<int>;
 
   constructor(cx: int, cz: int, world: World, loader: Loader) {
     this.cx = cx;
@@ -702,6 +703,7 @@ class Chunk {
     this.heightmap = new Tensor2(kChunkWidth, kChunkWidth);
     this.light_map = new Tensor2(kChunkWidth, kChunkWidth);
     this.equilevels = new Int8Array(kWorldHeight);
+    this.edge_lights = new Set();
     this.load(loader);
 
     // Check the invariants we use to optimize getBlock.
@@ -893,12 +895,25 @@ class Chunk {
   private lightingUpdate(): void {
     if (this.dirty_lights.length === 0) return;
 
-    const {heightmap, voxels} = this;
+    const {edge_lights, heightmap, lights, voxels} = this;
     const opaque = this.world.registry.opaque;
-    const light_data = this.lights.data;
+    const light_data = lights.data;
 
+    assert(lights.shape[0] === (1 << 4));
+    assert(lights.shape[2] === (1 << 4));
+    assert(lights.stride[0] === (1 << 8));
+    assert(lights.stride[2] === (1 << 12));
+
+    let edge_lights_dirty = false;
     let prev = this.dirty_lights;
     let next: int[] = [];
+
+    // Returns true if the given index is on an x-z edge of the chunk.
+    const edge = (index: int): boolean => {
+      const x_edge = (((index >> 8)  + 1) & 0xf) < 2;
+      const z_edge = (((index >> 12) + 1) & 0xf) < 2;
+      return x_edge || z_edge;
+    };
 
     // Returns the updated lighting value at the given index.
     const query = (index: int): int => {
@@ -929,15 +944,30 @@ class Chunk {
 
     while (prev.length > 0) {
       for (const index of prev) {
-        const prev_value = light_data[index];
-        const next_value = query(index);
-        if (next_value === prev_value) continue;
+        const prev = light_data[index];
+        const next = query(index);
+        if (next === prev) continue;
 
-        light_data[index] = next_value;
+        light_data[index] = next;
 
-        const increase = prev_value < next_value;
-        const max = int(Math.max(prev_value, next_value));
-        const min = int(Math.min(prev_value, next_value));
+        if (edge(index)) {
+          // Whenever the light value of any cell on the edge changes, set the
+          // edge_lights_dirty flag to re-trigger neighbors' stage-2 lighting.
+          edge_lights_dirty ||= (Math.max(next, 1) !== Math.max(prev, 1));
+
+          // The edge_lights map only contains cells on the edge that are not
+          // at full sunlight, since the heightmap takes care of the rest.
+          const next_in_map = 1 < next && next < kSunlightLevel;
+          const prev_in_map = 1 < prev && prev < kSunlightLevel;
+          if (next_in_map !== prev_in_map) {
+            if (next_in_map) edge_lights.add(index);
+            else edge_lights.delete(index);
+          }
+        }
+
+        const increase = next > prev;
+        const max = int(Math.max(next, prev));
+        const min = int(Math.min(next, prev));
 
         // These equations are tricky. We do some casework to derive them:
         //
@@ -966,6 +996,13 @@ class Chunk {
     }
 
     assert(this.dirty_lights.length === 0);
+
+    if (edge_lights_dirty) {
+      console.log(`Edge lights:`);
+      for (const edge of Array.from(edge_lights.values()).sort()) {
+        console.log(`  ${edge.toString(16)}`);
+      }
+    }
   }
 
   private notifyNeighborDisposed(): void {
