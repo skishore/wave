@@ -677,7 +677,6 @@ const kSunlightLevel = 0xf;
 class Chunk {
   cx: int;
   cz: int;
-  private dirty_lights: int[];
   private dirty: boolean = false;
   private ready: boolean = false;
   private neighbors: int = 0;
@@ -685,25 +684,57 @@ class Chunk {
   private solid: VoxelMesh | null = null;
   private water: VoxelMesh | null = null;
   private world: World;
-  private lights: Tensor3;
   private voxels: Tensor3;
   private heightmap: Tensor2;
   private light_map: Tensor2;
   private equilevels: Int8Array;
-  private edge_lights: Set<int>;
+
+  // Cellular automaton lighting. The main trick here is to get lighting to
+  // work across multiple chunks. We rely on the fact that the maximum light
+  // level is smaller than a chunk's width.
+  //
+  // When we traverse the voxel graph to propagate lighting values, we always
+  // track voxels by their index in a chunk. The index is just a 16-bit int,
+  // and we can extract (x, y, z) coordinates from it or compute neighboring
+  // indices with simple arithmetic.
+  //
+  // Stage 1 lighting is chunk-local. It assumes that all neighboring chunks
+  // are completely dark and propagates sunlight within this chunk. When we
+  // edit blocks in a chunk, we only need to recompute its stage 1 lighting -
+  // never any neighbors'. We use an incremental algorithm to compute these
+  // values, tracking a list of dirty sources when we edit the chunk. We store
+  // stage 1 lights in a dense array.
+  //
+  // When we update stage 1 lighting, we also keep track of "edges": blocks on
+  // the x-z boundary of the chunk that could shine light into neighbors in
+  // other chunks. The edge map is sparse: it only includes edge voxels with
+  // light values x where 1 < x < kSunlightMax. The vast majority of the edge
+  // voxels have light values equal to kSunlightMax, and these are implicit in
+  // the heightmap, so we save memory by skipping those.
+  //
+  // Stage 2 lighting includes neighboring voxels. To compute it for a given
+  // chunk, we load the chunk and its neighbors and propagate the neighbors'
+  // edge lighting (including the implicit lights implied by the heightmap).
+  // We store stage 2 lights sparsely, as a delta on stage 1 lights.
+  //
+  private stage1_dirty: int[];
+  private stage1_edges: Set<int>;
+  private stage1_lights: Tensor3;
 
   constructor(cx: int, cz: int, world: World, loader: Loader) {
     this.cx = cx;
     this.cz = cz;
     this.world = world;
-    this.dirty_lights = [];
     this.instances = new Map();
-    this.lights = new Tensor3(kChunkWidth, kWorldHeight, kChunkWidth);
     this.voxels = new Tensor3(kChunkWidth, kWorldHeight, kChunkWidth);
     this.heightmap = new Tensor2(kChunkWidth, kChunkWidth);
     this.light_map = new Tensor2(kChunkWidth, kChunkWidth);
     this.equilevels = new Int8Array(kWorldHeight);
-    this.edge_lights = new Set();
+
+    this.stage1_dirty = [];
+    this.stage1_edges = new Set();
+    this.stage1_lights = new Tensor3(kChunkWidth, kWorldHeight, kChunkWidth);
+
     this.load(loader);
 
     // Check the invariants we use to optimize getBlock.
@@ -743,7 +774,7 @@ class Chunk {
     const index = voxels.index(xm, y, zm);
     voxels.data[index] = block;
     this.dirty = true;
-    this.dirty_lights.push(index);
+    this.stage1_dirty.push(index);
 
     this.updateHeightmap(xm, zm, index, y, 1, block);
     this.equilevels[y] = 0;
@@ -784,7 +815,7 @@ class Chunk {
 
   remeshChunk(): void {
     assert(this.dirty);
-    this.lightingUpdate();
+    this.stage1Update();
     this.remeshSprites();
     this.remeshTerrain();
     this.dirty = false;
@@ -853,8 +884,10 @@ class Chunk {
   }
 
   private lightingInit(): void {
-    const {heightmap, lights, voxels} = this;
+    const {heightmap, voxels} = this;
     const opaque = this.world.registry.opaque;
+    const lights = this.stage1_lights;
+    const dirty = this.stage1_dirty;
 
     // Use for fast bitwise index propagation below.
     assert(lights.stride[0] === kSpread[1].diff);
@@ -863,9 +896,8 @@ class Chunk {
     assert(heightmap.stride[0] === (kSpread[1].diff >> 8));
     assert(heightmap.stride[1] === (kSpread[3].diff >> 8));
 
-    const light_data = lights.data;
-    const dirty = this.dirty_lights;
-    light_data.fill(kSunlightLevel);
+    const data = lights.data;
+    data.fill(kSunlightLevel);
 
     for (let x = int(0); x < kChunkWidth; x++) {
       for (let z = int(0); z < kChunkWidth; z++) {
@@ -886,18 +918,20 @@ class Chunk {
         if (height > 0) {
           const below = int(index + height - 1);
           if (!opaque[voxels.data[below]]) dirty.push(below);
-          light_data.fill(0, index, index + height);
+          data.fill(0, index, index + height);
         }
       }
     }
   }
 
-  private lightingUpdate(): void {
-    if (this.dirty_lights.length === 0) return;
+  private stage1Update(): void {
+    if (this.stage1_dirty.length === 0) return;
 
-    const {edge_lights, heightmap, lights, voxels} = this;
+    const {heightmap, voxels} = this;
     const opaque = this.world.registry.opaque;
-    const light_data = lights.data;
+    const lights = this.stage1_lights;
+    const edges = this.stage1_edges;
+    const data = lights.data;
 
     assert(lights.shape[0] === (1 << 4));
     assert(lights.shape[2] === (1 << 4));
@@ -905,7 +939,7 @@ class Chunk {
     assert(lights.stride[2] === (1 << 12));
 
     let edge_lights_dirty = false;
-    let prev = this.dirty_lights;
+    let prev = this.stage1_dirty;
     let next: int[] = [];
 
     // Returns true if the given index is on an x-z edge of the chunk.
@@ -926,7 +960,7 @@ class Chunk {
       for (const spread of kSpread) {
         if ((index & spread.mask) === spread.test) continue;
         const neighbor_index = int(index + spread.diff);
-        const neighbor = light_data[neighbor_index];
+        const neighbor = data[neighbor_index];
         if (neighbor > max_neighbor) max_neighbor = neighbor;
       }
       return int(max_neighbor - 1);
@@ -937,18 +971,18 @@ class Chunk {
       for (const spread of kSpread) {
         if ((index & spread.mask) === spread.test) continue;
         const neighbor_index = int(index + spread.diff);
-        const neighbor = light_data[neighbor_index];
+        const neighbor = data[neighbor_index];
         if (lo <= neighbor && neighbor <= hi) next.push(neighbor_index);
       }
     };
 
     while (prev.length > 0) {
       for (const index of prev) {
-        const prev = light_data[index];
+        const prev = data[index];
         const next = query(index);
         if (next === prev) continue;
 
-        light_data[index] = next;
+        data[index] = next;
 
         if (edge(index)) {
           // Whenever the light value of any cell on the edge changes, set the
@@ -960,8 +994,8 @@ class Chunk {
           const next_in_map = 1 < next && next < kSunlightLevel;
           const prev_in_map = 1 < prev && prev < kSunlightLevel;
           if (next_in_map !== prev_in_map) {
-            if (next_in_map) edge_lights.add(index);
-            else edge_lights.delete(index);
+            if (next_in_map) edges.add(index);
+            else edges.delete(index);
           }
         }
 
@@ -995,11 +1029,11 @@ class Chunk {
       next.length = 0;
     }
 
-    assert(this.dirty_lights.length === 0);
+    assert(this.stage1_dirty.length === 0);
 
     if (edge_lights_dirty) {
       console.log(`Edge lights:`);
-      for (const edge of Array.from(edge_lights.values()).sort()) {
+      for (const edge of Array.from(edges.values()).sort()) {
         console.log(`  ${edge.toString(16)}`);
       }
     }
@@ -1088,8 +1122,8 @@ class Chunk {
     const meshed = world.mesher.meshChunk(
         buffer, heightmap, light_map, equilevels, this.solid, this.water);
     const [solid, water] = meshed;
-    solid?.setLight(this.lights.data);
-    water?.setLight(this.lights.data);
+    solid?.setLight(this.stage1_lights.data);
+    water?.setLight(this.stage1_lights.data);
     solid?.setPosition(x, 0, z);
     water?.setPosition(x, 0, z);
     this.solid = solid;
