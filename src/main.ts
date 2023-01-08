@@ -37,7 +37,7 @@ class TypedEnv extends Env {
   physics: ComponentStore<PhysicsState>;
   meshes: ComponentStore<MeshState>;
   shadow: ComponentStore<ShadowState>;
-  inputs: ComponentStore;
+  inputs: ComponentStore<InputState>;
   target: ComponentStore;
 
   constructor(id: string) {
@@ -555,16 +555,22 @@ const Movement = (env: TypedEnv): Component<MovementState> => ({
 
 // An entity with an input component processes inputs.
 
-const runInputs = (env: TypedEnv, id: EntityId) => {
-  const state = env.movement.get(id);
-  if (!state) return;
+interface InputState {
+  id: EntityId,
+  index: int,
+  lastHeading: number;
+};
+
+const runInputs = (env: TypedEnv, state: InputState) => {
+  const movement = env.movement.get(state.id);
+  if (!movement) return;
 
   // Process the inputs to get a heading, running, and jumping state.
   const inputs = env.container.inputs;
   const fb = (inputs.up ? 1 : 0) - (inputs.down ? 1 : 0);
   const lr = (inputs.right ? 1 : 0) - (inputs.left ? 1 : 0);
-  state.jumping = inputs.space;
-  state.hovering = inputs.hover;
+  movement.jumping = inputs.space;
+  movement.hovering = inputs.hover;
 
   if (fb || lr) {
     let heading = env.renderer.camera.heading;
@@ -574,10 +580,11 @@ const runInputs = (env: TypedEnv, id: EntityId) => {
     } else {
       heading += lr * Math.PI / 2;
     }
-    state.inputX = Math.sin(heading);
-    state.inputZ = Math.cos(heading);
+    movement.inputX = Math.sin(heading);
+    movement.inputZ = Math.cos(heading);
+    state.lastHeading = heading;
 
-    const mesh = env.meshes.get(id);
+    const mesh = env.meshes.get(state.id);
     if (mesh) {
       const row = mesh.row;
       const option_a = fb > 0 ? 0 : fb < 0 ? 2 : -1;
@@ -592,9 +599,12 @@ const runInputs = (env: TypedEnv, id: EntityId) => {
   const body = env.physics.get(state.id);
   if (body && (inputs.call || true)) {
     const {min, max} = body;
-    const x = (min[0] + max[0]) / 2;
+    const heading = state.lastHeading;
+    const multiplier = (fb || lr) ? 1.5 : 2.0;
+    const kFollowDistance = multiplier * (max[0] - min[0]);
+    const x = (min[0] + max[0]) / 2 - kFollowDistance * Math.sin(heading);
+    const z = (min[2] + max[2]) / 2 - kFollowDistance * Math.cos(heading);
     const y = (min[1] + body.autoStepMax);
-    const z = (min[2] + max[2]) / 2;
 
     const ix = int(Math.floor(x));
     const iy = int(Math.floor(y));
@@ -609,17 +619,17 @@ const runInputs = (env: TypedEnv, id: EntityId) => {
 
   // Turn mouse inputs into actions.
   if (inputs.mouse0 || inputs.mouse1) {
-    const body = env.physics.get(id);
+    const body = env.physics.get(state.id);
     if (body) tryToModifyBlock(env, body, !inputs.mouse0);
     inputs.mouse0 = false;
     inputs.mouse1 = false;
   }
 };
 
-const Inputs = (env: TypedEnv): Component => ({
-  init: () => ({id: kNoEntity, index: 0}),
-  onUpdate: (dt: number, states: ComponentState[]) => {
-    for (const state of states) runInputs(env, state.id);
+const Inputs = (env: TypedEnv): Component<InputState> => ({
+  init: () => ({id: kNoEntity, index: 0, lastHeading: 0}),
+  onUpdate: (dt: number, states: InputState[]) => {
+    for (const state of states) runInputs(env, state);
   }
 });
 
