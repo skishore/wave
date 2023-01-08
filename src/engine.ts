@@ -1067,16 +1067,24 @@ class Chunk {
     const {cx, cz} = this;
     const chunks = this.world.chunks;
     const zone: (Chunk | null)[] = new Array(16).fill(null);
+    const data: (Uint8Array | null)[] = new Array(16).fill(null);
     for (const {x, z} of kZone) {
       const index = getIndex(x, z);
       const chunk = nonnull(chunks.get(int(x + cx), int(z + cz)));
+      data[index] = chunk.stage1_lights.data;
       zone[index] = chunk;
     }
 
+    // To keep the cellular automaton as fast as possible, we update stage 1
+    // lighting in place, in place. We must undo this operation at the end of
+    // this method, so we track a list of (location, previous value) pairs in
+    // `deltas` as we make the updates.
+    //
+    // To avoid needing Theta(n) heap allocations, we flatten `deltas`.
+    const deltas: int[] = [];
+    const opaque = this.world.registry.opaque;
     let prev: int[] = [];
     let next: int[] = [];
-    const deltas: Map<int, int> = new Map();
-    const opaque = this.world.registry.opaque;
 
     for (const {x, z} of kZone) {
       const chunk = nonnull(zone[getIndex(x, z)]);
@@ -1117,10 +1125,7 @@ class Chunk {
 
     // Returns the current light value at a given location.
     const current = (location: int): int => {
-      const delta = deltas.get(location);
-      if (delta !== undefined) return delta;
-      const chunk = nonnull(zone[location >> 16]);
-      return int(chunk.stage1_lights.data[location & 0xffff]);
+      return int(data[location >> 16]![location & 0xffff]);
     };
 
     // Returns the given location, shifted by the delta. If the shift is out
@@ -1149,7 +1154,7 @@ class Chunk {
 
     // Returns the updated lighting value at the given index.
     const query = (location: int): int => {
-      const chunk = nonnull(zone[location >> 16]);
+      const chunk = zone[location >> 16]!;
       const index = location & 0xffff;
       if (opaque[chunk.voxels.data[index]]) return 0;
 
@@ -1186,7 +1191,9 @@ class Chunk {
         const next = query(location);
         if (next === prev) continue;
 
-        deltas.set(location, next);
+        data[location >> 16]![location & 0xffff] = next;
+        deltas.push(location);
+        deltas.push(prev);
 
         const hi = maxUpdatedNeighborLight(next, prev);
         const lo = minUpdatedNeighborLight(next, prev);
@@ -1197,10 +1204,19 @@ class Chunk {
     }
 
     assert(getIndex(0, 0) === 5);
+    const input = this.stage1_lights.data;
     const output = this.stage2_lights;
     output.clear();
-    for (const [location, value] of deltas.entries()) {
-      if ((location >> 16) === 5) output.set(int(location & 0xffff), value);
+
+    for (let i = 0; i < deltas.length; i += 2) {
+      const location = deltas[i + 0];
+      if ((location >> 16) !== 5) continue;
+      const index = int(location & 0xffff);
+      output.set(index, int(input[index]));
+    }
+    for (let i = deltas.length - 2; i >= 0; i -= 2) {
+      const location = deltas[i + 0];
+      data[location >> 16]![location & 0xffff] = deltas[i + 1];
     }
     this.stage2_dirty = false;
   }
