@@ -681,9 +681,7 @@ class TerrainMesher {
 
   private packAOMask(data: Uint8Array, ipos: int, ineg: int,
                      dj: int, dk: int): int {
-    const {opaque, solid} = this;
-    if (solid[data[ipos]]) return int(0b01010101);
-
+    const opaque = this.opaque;
     let a00 = 0; let a01 = 0; let a10 = 0; let a11 = 0;
 
     const b0 = data[ipos + dj];
@@ -699,27 +697,22 @@ class TerrainMesher {
       const d3 = data[ipos + dj + dk];
       if (d0 + d1 + d2 + d3 === kEmptyBlock) return 0;
 
-      if (solid[d0]) a00++;
-      if (solid[d1]) a01++;
-      if (solid[d2]) a10++;
-      if (solid[d3]) a11++;
+      if (opaque[d0]) a00++;
+      if (opaque[d1]) a01++;
+      if (opaque[d2]) a10++;
+      if (opaque[d3]) a11++;
       return ((a01 << 6) | (a11 << 4) | (a10 << 2) | a00) as int;
     }
 
-    if (solid[b0]) { a10++; a11++; }
-    if (solid[b1]) { a00++; a01++; }
-    if (solid[b2]) { a01++; a11++; }
-    if (solid[b3]) { a00++; a10++; }
+    if (opaque[b0]) { a10++; a11++; }
+    if (opaque[b1]) { a00++; a01++; }
+    if (opaque[b2]) { a01++; a11++; }
+    if (opaque[b3]) { a00++; a10++; }
 
-    if (solid[b0] && !opaque[b0]) { a10 = a11 = 1; }
-    if (solid[b1] && !opaque[b1]) { a00 = a01 = 1; }
-    if (solid[b2] && !opaque[b2]) { a01 = a11 = 1; }
-    if (solid[b3] && !opaque[b3]) { a00 = a10 = 1; }
-
-    if (a00 === 0 && solid[data[ipos - dj - dk]]) a00++;
-    if (a01 === 0 && solid[data[ipos - dj + dk]]) a01++;
-    if (a10 === 0 && solid[data[ipos + dj - dk]]) a10++;
-    if (a11 === 0 && solid[data[ipos + dj + dk]]) a11++;
+    if (a00 === 0 && opaque[data[ipos - dj - dk]]) a00++;
+    if (a01 === 0 && opaque[data[ipos - dj + dk]]) a01++;
+    if (a10 === 0 && opaque[data[ipos + dj - dk]]) a10++;
+    if (a11 === 0 && opaque[data[ipos + dj + dk]]) a11++;
 
     // Order here matches the order in which we push vertices in addQuad.
     return ((a01 << 6) | (a11 << 4) | (a10 << 2) | a00) as int;

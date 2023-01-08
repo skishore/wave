@@ -137,6 +137,7 @@ interface PhysicsState {
   impulses: Vec3,
   resting: Vec3,
   inFluid: boolean,
+  inGrass: boolean,
   friction: number,
   restitution: number,
   mass: number,
@@ -254,7 +255,8 @@ const runPhysics = (env: TypedEnv, dt: number, state: PhysicsState) => {
   const y = int(Math.floor(min[1]));
   const z = int(Math.floor((min[2] + max[2]) / 2));
   const block = env.world.getBlock(x, y, z);
-  state.inFluid = block !== kEmptyBlock;
+  state.inGrass = env.registry.getBlockMesh(block) !== null;
+  state.inFluid = block !== kEmptyBlock && !state.inGrass;
 
   const drag = state.inFluid ? 2 : 0;
   const left = Math.max(1 - drag * dt, 0);
@@ -305,6 +307,7 @@ const Physics = (env: TypedEnv): Component<PhysicsState> => ({
     impulses: Vec3.create(),
     resting: Vec3.create(),
     inFluid: false,
+    inGrass: false,
     friction: 0,
     restitution: 0,
     mass: 1,
@@ -339,7 +342,8 @@ interface MovementState {
   hovering: boolean,
   maxSpeed: number,
   moveForce: number,
-  swimPenalty: number,
+  grassPenalty: number,
+  waterPenalty: number,
   responsiveness: number,
   runningFriction: number,
   standingFriction: number,
@@ -354,6 +358,11 @@ interface MovementState {
   hoverFallForce: number,
   hoverRiseForce: number,
 };
+
+const movementPenalty = (state: MovementState, body: PhysicsState): number => {
+  return body.inFluid ? state.waterPenalty :
+         body.inGrass ? state.grassPenalty : 1;
+}
 
 const handleJumping = (dt: number, state: MovementState,
                        body: PhysicsState, grounded: boolean) => {
@@ -373,7 +382,7 @@ const handleJumping = (dt: number, state: MovementState,
   const height = body.min[1];
   const factor = height / kWorldHeight;
   const density = factor > 1 ? Math.exp(1 - factor) : 1;
-  const penalty = body.inFluid ? state.swimPenalty : density;
+  const penalty = movementPenalty(state, body) * density;
 
   state._jumped = true;
   state._jumpTimeLeft = state.jumpTime;
@@ -386,7 +395,7 @@ const handleJumping = (dt: number, state: MovementState,
 
 const handleRunning = (dt: number, state: MovementState,
                        body: PhysicsState, grounded: boolean) => {
-  const penalty = body.inFluid ? state.swimPenalty : 1;
+  const penalty = movementPenalty(state, body);
   const speed = penalty * state.maxSpeed;
   Vec3.set(kTmpDelta, state.inputX * speed, 0, state.inputZ * speed);
   Vec3.sub(kTmpPush, kTmpDelta, body.vel);
@@ -457,6 +466,22 @@ const generateParticles =
   }
 };
 
+const modifyBlock = (env: TypedEnv, x: int, y: int, z: int,
+                     block: BlockId, side: int): void => {
+  const old_block = env.world.getBlock(x, y, z);
+  env.world.setBlock(x, y, z, block);
+  const new_block = env.world.getBlock(x, y, z);
+
+  if (env.blocks) {
+    const water = env.blocks.water;
+    setTimeout(() => flowWater(env, water, [[x, y, z]]), kWaterDelay);
+  }
+
+  if (old_block !== kEmptyBlock && old_block !== new_block) {
+    generateParticles(env, old_block, x, y, z, side);
+  }
+};
+
 const tryToModifyBlock =
     (env: TypedEnv, body: PhysicsState, add: boolean) => {
   const target = env.getTargetedBlock();
@@ -482,18 +507,15 @@ const tryToModifyBlock =
   }
 
   const x = int(kTmpPos[0]), y = int(kTmpPos[1]), z = int(kTmpPos[2]);
-  const old_block = add ? kEmptyBlock : env.world.getBlock(x, y, z);
   const block = add && env.blocks ? env.blocks.dirt : kEmptyBlock;
-  env.world.setBlock(x, y, z, block);
-  const new_block = add ? kEmptyBlock : env.world.getBlock(x, y, z);
+  modifyBlock(env, x, y, z, block, side);
 
-  if (env.blocks) {
-    const water = env.blocks.water;
-    setTimeout(() => flowWater(env, water, [[x, y, z]]), kWaterDelay);
-  }
-
-  if (old_block !== kEmptyBlock && old_block !== new_block) {
-    generateParticles(env, old_block, x, y, z, side);
+  if (block === kEmptyBlock) {
+    for (let dy = 1; dy < 8; dy++) {
+      const above = env.world.getBlock(x, int(y + dy), z);
+      if (env.registry.getBlockMesh(above) === null) break;
+      modifyBlock(env, x, int(y + dy), z, block, side);
+    }
   }
 };
 
@@ -533,7 +555,8 @@ const Movement = (env: TypedEnv): Component<MovementState> => ({
     hovering: false,
     maxSpeed: 7.5,
     moveForce: 30,
-    swimPenalty: 0.5,
+    grassPenalty: 0.5,
+    waterPenalty: 0.5,
     responsiveness: 15,
     runningFriction: 0,
     standingFriction: 2,
@@ -794,7 +817,7 @@ const followPath = (env: TypedEnv, state: PathingState,
   const dx = (use_soft ? soft[0] : node.x + 0.5) - cx;
   const dz = (use_soft ? soft[2] : node.z + 0.5) - cz;
 
-  const penalty = body.inFluid ? movement.swimPenalty : 1;
+  const penalty = movementPenalty(movement, body);
   const speed = penalty * movement.maxSpeed;
   const inverse_speed = speed ? 1 / speed : 1;
 
@@ -1079,7 +1102,7 @@ const main = () => {
 
   const blocks = {
     bedrock: registry.addBlock(['bedrock'], true),
-    bush:    registry.addBlockMesh(block(10, 0), true),
+    bush:    registry.addBlockMesh(block(10, 0), false),
     dirt:    registry.addBlock(['dirt'], true),
     grass:   registry.addBlock(['grass', 'dirt', 'grass-side'], true),
     rock:    registry.addBlockMesh(block(9, 0), true),
