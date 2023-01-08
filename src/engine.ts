@@ -989,7 +989,6 @@ class Chunk {
     assert(lights.stride[0] === (1 << 8));
     assert(lights.stride[2] === (1 << 12));
 
-    let edge_dirty = false;
     let prev = this.stage1_dirty;
     let next: int[] = [];
 
@@ -1036,10 +1035,6 @@ class Chunk {
         data[index] = next;
 
         if (edge(index)) {
-          // Whenever the light value of any cell on the edge changes, set a
-          // flag that will trigger neighbors' stage-2 lighting again.
-          edge_dirty ||= (Math.max(next, 1) !== Math.max(prev, 1));
-
           // The edge lights map only contains cells on the edge that are not
           // at full sunlight, since the heightmap takes care of the rest.
           const next_in_map = 1 < next && next < kSunlightLevel;
@@ -1059,7 +1054,7 @@ class Chunk {
     }
 
     assert(this.stage1_dirty.length === 0);
-    if (edge_dirty) this.eachNeighbor(x => x.stage2_dirty = true);
+    this.eachNeighbor(x => x.stage2_dirty = true);
   }
 
   private lightingStage2(): void {
