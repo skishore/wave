@@ -222,13 +222,6 @@ const getHeight = (x: int, z: int): int => {
 };
 
 const loadChunk = (blocks: Blocks) => (x: int, z: int, column: Column) => {
-  const l = 4, h = 12;
-  if (l <= x && x < h && l <= z && z < h) {
-    column.push(kEmptyBlock, 2);
-    column.push(blocks.dirt, 3);
-  }
-  return;
-
   const cx = int(Math.floor(x / kChunkWidth));
   const cz = int(Math.floor(z / kChunkWidth));
   const dx = cx * kChunkWidth - kBuffer;

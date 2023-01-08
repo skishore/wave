@@ -627,7 +627,7 @@ const kWorldHeight = int(1 << kHeightBits);
 const kChunkShiftX = kHeightBits;
 const kChunkShiftZ = kHeightBits + kChunkBits;
 
-const kChunkRadius = 1;
+const kChunkRadius = 12;
 
 const kNumChunksToLoadPerFrame = 1;
 const kNumChunksToMeshPerFrame = 1;
@@ -635,7 +635,7 @@ const kNumLODChunksToMeshPerFrame = 1;
 
 const kFrontierLOD = 2;
 const kFrontierRadius = 8;
-const kFrontierLevels = 0;
+const kFrontierLevels = 6;
 
 // Enable debug assertions for the equi-levels optimization.
 const kCheckEquilevels = false;
@@ -659,7 +659,8 @@ const kNeighborOffsets = ((): [Point, Point, Point, Point][] => {
     [[ 1,  0, -1], [N, 1, 0], [0, 0, L], [1, H, 1]],
   ];
 })();
-const kNeighbors = kNeighborOffsets.slice(1).map(x => [x[0][0], x[0][2]]);
+const kZone = kNeighborOffsets.map(x => ({x: x[0][0], z: x[0][2]}));
+const kNeighbors = kZone.slice(1);
 
 class LightSpread {
   constructor(public diff: int, public mask: int, public test: int) {}
@@ -673,6 +674,37 @@ const kSpread : LightSpread[] = [
   new LightSpread(int(+1 << 0),  int(0x00ff), int(0x00ff)),
 ];
 const kSunlightLevel = 0xf;
+
+// If the light at a cell changes from `prev` to `next`, what range
+// of lights in neighboring cells may need updating? The bounds are
+// inclusive on both sides.
+//
+// These equations are tricky. We do some casework to derive them:
+//
+//   - If the light value in a cell drops 8 -> 4, then adjacent cells
+//     with lights in {4, 5, 6, 7} may also drop. 8 is too big, since
+//     an adjacent cell with the same light has a different source.
+//     But 3 is too small: we can cast a light of value 3.
+//
+//   - If the light value increases from 4 -> 8, then adjacent cells
+//     with lights in {3, 4, 5, 6} may increase. 7 is too big, since
+//     we can't raise the adjacent light to 8.
+//
+//   - As a special case, a cell in full sunlight can raise a neighbor
+//     (the one right below) to full sunlight, so we include it here.
+//     `max - (max < kSunlightLevel ? 1 : 0)` is the max we can cast.
+//
+// If we allow for blocks that filter more than one light level at a
+// time, then the lower bounds fail, but the upper bounds still hold.
+//
+const maxUpdatedNeighborLight = (next: int, prev: int): int => {
+  const max = int(Math.max(next, prev));
+  return int(max - (max < kSunlightLevel ? 1 : 0) - (next > prev ? 1 : 0));
+};
+const minUpdatedNeighborLight = (next: int, prev: int): int => {
+  const min = int(Math.min(next, prev));
+  return int(min - (next > prev ? 1 : 0));
+};
 
 class Chunk {
   cx: int;
@@ -720,6 +752,8 @@ class Chunk {
   private stage1_dirty: int[];
   private stage1_edges: Set<int>;
   private stage1_lights: Tensor3;
+  private stage2_dirty: boolean = false;
+  private stage2_lights: Map<int, int>;
 
   constructor(cx: int, cz: int, world: World, loader: Loader) {
     this.cx = cx;
@@ -734,6 +768,8 @@ class Chunk {
     this.stage1_dirty = [];
     this.stage1_edges = new Set();
     this.stage1_lights = new Tensor3(kChunkWidth, kWorldHeight, kChunkWidth);
+    this.stage2_dirty = true;
+    this.stage2_lights = new Map();
 
     this.load(loader);
 
@@ -746,12 +782,7 @@ class Chunk {
 
   dispose(): void {
     this.dropMeshes();
-
-    const {cx, cz} = this;
-    for (const [x, z] of kNeighbors) {
-      const chunk = this.world.chunks.get(int(x + cx), int(z + cz));
-      if (chunk) chunk.notifyNeighborDisposed();
-    }
+    this.eachNeighbor(x => x.notifyNeighborDisposed());
   }
 
   getBlock(x: int, y: int, z: int): BlockId {
@@ -814,8 +845,12 @@ class Chunk {
   }
 
   remeshChunk(): void {
-    assert(this.dirty);
-    this.stage1Update();
+    assert(this.needsRemesh());
+
+    this.eachNeighbor(x => x.lightingStage1());
+    this.lightingStage1();
+    this.lightingStage2();
+
     this.remeshSprites();
     this.remeshTerrain();
     this.dirty = false;
@@ -850,13 +885,10 @@ class Chunk {
       }
     }
 
-    for (const [x, z] of kNeighbors) {
-      const chunk = this.world.chunks.get(int(x + cx), int(z + cz));
-      if (!chunk) continue;
+    this.eachNeighbor(chunk => {
       chunk.notifyNeighborLoaded();
       this.neighbors++;
-    }
-
+    });
     this.dirty = true;
     this.ready = this.checkReady();
   }
@@ -883,11 +915,21 @@ class Chunk {
     instances.clear();
   }
 
+  private eachNeighbor(fn: (chunk: Chunk) => void) {
+    const {cx, cz} = this;
+    const chunks = this.world.chunks;
+    for (const {x, z} of kNeighbors) {
+      const chunk = chunks.get(int(x + cx), int(z + cz));
+      if (chunk) fn(chunk);
+    }
+  }
+
   private lightingInit(): void {
     const {heightmap, voxels} = this;
     const opaque = this.world.registry.opaque;
     const lights = this.stage1_lights;
     const dirty = this.stage1_dirty;
+    this.stage2_dirty = true;
 
     // Use for fast bitwise index propagation below.
     assert(lights.stride[0] === kSpread[1].diff);
@@ -924,7 +966,7 @@ class Chunk {
     }
   }
 
-  private stage1Update(): void {
+  private lightingStage1(): void {
     if (this.stage1_dirty.length === 0) return;
 
     const {heightmap, voxels} = this;
@@ -938,7 +980,7 @@ class Chunk {
     assert(lights.stride[0] === (1 << 8));
     assert(lights.stride[2] === (1 << 12));
 
-    let edge_lights_dirty = false;
+    let edge_dirty = false;
     let prev = this.stage1_dirty;
     let next: int[] = [];
 
@@ -978,18 +1020,18 @@ class Chunk {
 
     while (prev.length > 0) {
       for (const index of prev) {
-        const prev = data[index];
+        const prev = int(data[index]);
         const next = query(index);
         if (next === prev) continue;
 
         data[index] = next;
 
         if (edge(index)) {
-          // Whenever the light value of any cell on the edge changes, set the
-          // edge_lights_dirty flag to re-trigger neighbors' stage-2 lighting.
-          edge_lights_dirty ||= (Math.max(next, 1) !== Math.max(prev, 1));
+          // Whenever the light value of any cell on the edge changes, set a
+          // flag that will trigger neighbors' stage-2 lighting again.
+          edge_dirty ||= (Math.max(next, 1) !== Math.max(prev, 1));
 
-          // The edge_lights map only contains cells on the edge that are not
+          // The edge lights map only contains cells on the edge that are not
           // at full sunlight, since the heightmap takes care of the rest.
           const next_in_map = 1 < next && next < kSunlightLevel;
           const prev_in_map = 1 < prev && prev < kSunlightLevel;
@@ -999,44 +1041,165 @@ class Chunk {
           }
         }
 
-        const increase = next > prev;
-        const max = int(Math.max(next, prev));
-        const min = int(Math.min(next, prev));
-
-        // These equations are tricky. We do some casework to derive them:
-        //
-        //   - If the light value in a cell drops 8 -> 4, then adjacent cells
-        //     with lights in {4, 5, 6, 7} may also drop. 8 is too big, since
-        //     an adjacent cell with the same light has a different source.
-        //     But 3 is too small: we can cast a light of value 3.
-        //
-        //   - If the light value increases from 4 -> 8, then adjacent cells
-        //     with lights in {3, 4, 5, 6} may increase. 7 is too big, since
-        //     we can't raise the adjacent light to 8.
-        //
-        //   - As a special case, a cell in full sunlight can raise a neighbor
-        //     (the one right below) to full sunlight, so we include it here.
-        //     `max - (max < kSunlightLevel ? 1 : 0)` is the max we can cast.
-        //
-        // If we allow for blocks that filter more than one light level at a
-        // time, then the lower bounds fail, but the upper bounds still hold.
-        //
-        const hi = max - (max < kSunlightLevel ? 1 : 0) - (increase ? 1 : 0);
-        const lo = min - (increase ? 1 : 0);
-        enqueue(index, int(hi), int(lo));
+        const hi = maxUpdatedNeighborLight(next, prev);
+        const lo = minUpdatedNeighborLight(next, prev);
+        enqueue(index, hi, lo);
       }
       [prev, next] = [next, prev];
       next.length = 0;
     }
 
     assert(this.stage1_dirty.length === 0);
+    if (edge_dirty) this.eachNeighbor(x => x.stage2_dirty = true);
+    this.stage2_dirty = true;
+  }
 
-    if (edge_lights_dirty) {
-      console.log(`Edge lights:`);
-      for (const edge of Array.from(edges.values()).sort()) {
-        console.log(`  ${edge.toString(16)}`);
+  private lightingStage2(): void {
+    if (!this.ready || !this.stage2_dirty) return;
+
+    const getIndex = (x: int, z: int): int => {
+      return ((x + 1) | ((z + 1) << 2)) as int;
+    };
+
+    const {cx, cz} = this;
+    const chunks = this.world.chunks;
+    const zone: (Chunk | null)[] = new Array(16).fill(null);
+    for (const {x, z} of kZone) {
+      const index = getIndex(x, z);
+      const chunk = nonnull(chunks.get(int(x + cx), int(z + cz)));
+      zone[index] = chunk;
+    }
+
+    let prev: int[] = [];
+    let next: int[] = [];
+    const deltas: Map<int, int> = new Map();
+    const opaque = this.world.registry.opaque;
+
+    for (const {x, z} of kZone) {
+      const chunk = nonnull(zone[getIndex(x, z)]);
+      const edges = Array.from(chunk.stage1_edges);
+      const heightmap = chunk.heightmap.data;
+
+      for (let i = 0; i < 4; i++) {
+        const {diff, mask, test} = kSpread[i];
+        assert(mask === 0x0f00 || mask === 0xf000);
+        const dx = mask === 0x0f00 ? diff >> 8  : 0;
+        const dz = mask === 0xf000 ? diff >> 12 : 0;
+        const nx = int(x + dx), nz = int(z + dz);
+        if (!(-1 <= nx && nx <= 1 && -1 <= nz && nz <= 1)) continue;
+
+        const source = test;
+        const target = source ^ mask;
+        const stride = mask === 0x0f00 ? 0x1000 : 0x0100;
+        const neighbor_index = getIndex(nx, nz);
+        const neighbor_union = neighbor_index << 16;
+        const neighbor_chunk = nonnull(zone[neighbor_index]);
+        const neighbor_heightmap = neighbor_chunk.heightmap.data;
+
+        for (const index of edges) {
+          if ((index & mask) !== test) continue;
+          prev.push(((index ^ mask) | neighbor_union) as int);
+        }
+
+        let offset = 0;
+        for (let j = 0; j < kChunkWidth; j++, offset += stride) {
+          const height = heightmap[(source + offset) >> 8];
+          const neighbor_height = neighbor_heightmap[(target + offset) >> 8];
+          for (let y = height; y < neighbor_height; y++) {
+            prev.push(((target + offset + y) | neighbor_union) as int);
+          }
+        }
       }
     }
+
+    // Returns the current light value at a given location.
+    const current = (location: int): int => {
+      const delta = deltas.get(location);
+      if (delta !== undefined) return delta;
+      const chunk = nonnull(zone[location >> 16]);
+      return int(chunk.stage1_lights.data[location & 0xffff]);
+    };
+
+    // Returns the given location, shifted by the delta. If the shift is out
+    // of bounds any direction, it'll return -1.
+    const shift = (location: int, spread: LightSpread): int => {
+      const {diff, mask, test} = spread;
+      if ((location & mask) !== test) return int(location + diff);
+      switch (mask) {
+        case 0x00ff: return -1;
+        case 0x0f00: {
+          const x = int(((location >> 16) & 0x3) + (diff >> 8));
+          const z = int(((location >> 18) & 0x3));
+          if (!(0 <= x && x <= 2)) return -1;
+          return int(((location & 0xffff) ^ mask) | (x << 16) | (z << 18));
+        }
+        case 0xf000: {
+          const x = int(((location >> 16) & 0x3));
+          const z = int(((location >> 18) & 0x3) + (diff >> 12));
+          if (!(0 <= z && z <= 2)) return -1;
+          return int(((location & 0xffff) ^ mask) | (x << 16) | (z << 18));
+        }
+        default: assert(false);
+      }
+      return -1;
+    };
+
+    // Returns the updated lighting value at the given index.
+    const query = (location: int): int => {
+      const chunk = nonnull(zone[location >> 16]);
+      const index = location & 0xffff;
+      if (opaque[chunk.voxels.data[index]]) return 0;
+
+      const height = chunk.heightmap.data[index >> 8];
+      if ((index & 0xff) >= height) return kSunlightLevel;
+
+      let max_neighbor = 1;
+      for (const spread of kSpread) {
+        const neighbor_index = shift(location, spread);
+        if (neighbor_index >= 0) {
+          const neighbor = current(neighbor_index);
+          if (neighbor > max_neighbor) max_neighbor = neighbor;
+        }
+      }
+      return int(max_neighbor - 1);
+    };
+
+    // Enqueues new indices that may be affected by the given change.
+    const enqueue = (location: int, hi: int, lo: int): void => {
+      for (const spread of kSpread) {
+        const neighbor_index = shift(location, spread);
+        if (neighbor_index >= 0) {
+          const neighbor = current(neighbor_index);
+          if (lo <= neighbor && neighbor <= hi) next.push(neighbor_index);
+        }
+      }
+    };
+
+    while (prev.length > 0) {
+      for (const location of prev) {
+        // TODO(skishore): If the index is too far from the center given its
+        // current light value, drop the update here.
+        const prev = current(location);
+        const next = query(location);
+        if (next === prev) continue;
+
+        deltas.set(location, next);
+
+        const hi = maxUpdatedNeighborLight(next, prev);
+        const lo = minUpdatedNeighborLight(next, prev);
+        enqueue(location, hi, lo);
+      }
+      [prev, next] = [next, prev];
+      next.length = 0;
+    }
+
+    assert(getIndex(0, 0) === 5);
+    const output = this.stage2_lights;
+    output.clear();
+    for (const [location, value] of deltas.entries()) {
+      if ((location >> 16) === 5) output.set(int(location & 0xffff), value);
+    }
+    this.stage2_dirty = false;
   }
 
   private notifyNeighborDisposed(): void {
@@ -1118,16 +1281,28 @@ class Chunk {
       }
     }
 
+    const saved = new Map();
+    const {stage1_lights, stage2_lights} = this;
+    const lights = stage1_lights.data;
+    for (const [index, value] of stage2_lights.entries()) {
+      saved.set(index, lights[index]);
+      lights[index] = value;
+    }
+
     const x = cx << kChunkBits, z = cz << kChunkBits;
     const meshed = world.mesher.meshChunk(
         buffer, heightmap, light_map, equilevels, this.solid, this.water);
     const [solid, water] = meshed;
-    solid?.setLight(this.stage1_lights.data);
-    water?.setLight(this.stage1_lights.data);
+    solid?.setLight(lights);
+    water?.setLight(lights);
     solid?.setPosition(x, 0, z);
     water?.setPosition(x, 0, z);
     this.solid = solid;
     this.water = water;
+
+    for (const [index, value] of saved.entries()) {
+      lights[index] = value;
+    }
   }
 
   private updateHeightmap(xm: int, zm: int, index: int,
