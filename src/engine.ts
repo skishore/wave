@@ -631,6 +631,7 @@ const kChunkRadius = 12;
 
 const kNumChunksToLoadPerFrame = 1;
 const kNumChunksToMeshPerFrame = 1;
+const kNumChunksToLightPerFrame = 1;
 const kNumLODChunksToMeshPerFrame = 1;
 
 const kFrontierLOD = 2;
@@ -768,7 +769,6 @@ class Chunk {
     this.stage1_dirty = [];
     this.stage1_edges = new Set();
     this.stage1_lights = new Tensor3(kChunkWidth, kWorldHeight, kChunkWidth);
-    this.stage2_dirty = true;
     this.stage2_lights = new Map();
 
     this.load(loader);
@@ -804,8 +804,10 @@ class Chunk {
     if (old === block) return;
     const index = voxels.index(xm, y, zm);
     voxels.data[index] = block;
+
     this.dirty = true;
     this.stage1_dirty.push(index);
+    this.stage2_dirty = true;
 
     this.updateHeightmap(xm, zm, index, y, 1, block);
     this.equilevels[y] = 0;
@@ -840,19 +842,26 @@ class Chunk {
     return !!(this.solid || this.water);
   }
 
+  needsRelight(): boolean {
+    return this.stage2_dirty && this.ready && this.hasMesh();
+  }
+
   needsRemesh(): boolean {
     return this.dirty && this.ready;
   }
 
-  remeshChunk(): void {
-    assert(this.needsRemesh());
-
+  relightChunk(): void {
     this.eachNeighbor(x => x.lightingStage1());
     this.lightingStage1();
     this.lightingStage2();
+    this.setLightTexture();
+  }
 
+  remeshChunk(): void {
+    assert(this.needsRemesh());
     this.remeshSprites();
     this.remeshTerrain();
+    this.relightChunk();
     this.dirty = false;
   }
 
@@ -1051,7 +1060,6 @@ class Chunk {
 
     assert(this.stage1_dirty.length === 0);
     if (edge_dirty) this.eachNeighbor(x => x.stage2_dirty = true);
-    this.stage2_dirty = true;
   }
 
   private lightingStage2(): void {
@@ -1281,6 +1289,20 @@ class Chunk {
       }
     }
 
+    const x = cx << kChunkBits, z = cz << kChunkBits;
+    const meshed = world.mesher.meshChunk(
+        buffer, heightmap, light_map, equilevels, this.solid, this.water);
+    const [solid, water] = meshed;
+    solid?.setPosition(x, 0, z);
+    water?.setPosition(x, 0, z);
+    this.solid = solid;
+    this.water = water;
+  }
+
+  private setLightTexture(): void {
+    if (!this.hasMesh()) return;
+
+    // TODO(skishore): Share a texture between the two meshes.
     const saved = new Map();
     const {stage1_lights, stage2_lights} = this;
     const lights = stage1_lights.data;
@@ -1289,16 +1311,8 @@ class Chunk {
       lights[index] = value;
     }
 
-    const x = cx << kChunkBits, z = cz << kChunkBits;
-    const meshed = world.mesher.meshChunk(
-        buffer, heightmap, light_map, equilevels, this.solid, this.water);
-    const [solid, water] = meshed;
-    solid?.setLight(lights);
-    water?.setLight(lights);
-    solid?.setPosition(x, 0, z);
-    water?.setPosition(x, 0, z);
-    this.solid = solid;
-    this.water = water;
+    this.solid?.setLight(lights);
+    this.water?.setLight(lights);
 
     for (const [index, value] of saved.entries()) {
       lights[index] = value;
@@ -1819,15 +1833,24 @@ class World {
 
   remesh() {
     const {chunks, frontier} = this;
-    let meshed = 0, total = 0;
+    let lit = 0, meshed = 0, total = 0;
     chunks.each((cx: int, cz: int): boolean => {
       total++;
-      if (total > 9 && meshed >= kNumChunksToMeshPerFrame) return true;
+      const canRelight = lit < kNumChunksToLightPerFrame;
+      const canRemesh = total <= 9 || meshed < kNumChunksToMeshPerFrame;
+      if (!(canRelight || canRemesh)) return true;
+
       const chunk = chunks.get(cx, cz);
-      if (!chunk || !chunk.needsRemesh()) return false;
-      if (!chunk.hasMesh()) frontier.markDirty(0);
-      chunk.remeshChunk();
-      meshed++;
+      if (!chunk) return false;
+
+      if (canRemesh && chunk.needsRemesh()) {
+        if (!chunk.hasMesh()) frontier.markDirty(0);
+        chunk.remeshChunk();
+        meshed++;
+      } else if (canRelight && chunk.needsRelight()) {
+        chunk.relightChunk();
+        lit++;
+      }
       return false;
     });
     frontier.remeshFrontier();
