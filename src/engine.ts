@@ -2,7 +2,7 @@ import {assert, drop, int, nonnull} from './base.js';
 import {Color, Tensor2, Tensor3, Vec3} from './base.js';
 import {EntityComponentSystem} from './ecs.js';
 import {HighlightMesh, InstancedMesh, Mesh} from './renderer.js';
-import {Renderer, Texture, VoxelMesh} from './renderer.js';
+import {LightTexture, Renderer, Texture, VoxelMesh} from './renderer.js';
 import {TerrainMesher} from './mesher.js';
 import {kSweepResolution, sweep} from './sweep.js';
 
@@ -716,6 +716,7 @@ class Chunk {
   private instances: Map<int, Mesh>;
   private solid: VoxelMesh | null = null;
   private water: VoxelMesh | null = null;
+  private light: LightTexture | null = null;
   private world: World;
   private voxels: Tensor3;
   private heightmap: Tensor2;
@@ -911,8 +912,10 @@ class Chunk {
     if (this.hasMesh()) {
       this.world.frontier.markDirty(0);
     }
+    this.light?.dispose();
     this.solid?.dispose();
     this.water?.dispose();
+    this.light = null;
     this.solid = null;
     this.water = null;
     this.dirty = true;
@@ -1322,8 +1325,10 @@ class Chunk {
       lights[index] = value;
     }
 
-    this.solid?.setLight(lights);
-    this.water?.setLight(lights);
+    this.light?.dispose();
+    this.light = this.world.renderer.addLightTexture(lights);
+    this.solid?.setLight(this.light);
+    this.water?.setLight(this.light);
 
     for (const [index, value] of saved.entries()) {
       lights[index] = value;

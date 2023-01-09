@@ -723,7 +723,7 @@ class BufferAllocator {
     const usage = this.formatSize(bytes_usage);
     const alloc = this.formatSize(bytes_alloc);
     const total = this.formatSize(bytes_total);
-    return `VRAM: ${usage} / ${alloc} / ${total}Mb`;
+    return `Buffer: ${usage} / ${alloc} / ${total}Mb`;
   }
 
   private formatSize(bytes: int): string {
@@ -737,9 +737,24 @@ class BufferAllocator {
   }
 };
 
+class LightTexture {
+  texture: WebGLTexture;
+  private allocator: TextureAllocator;
+
+  constructor(data: Uint8Array, allocator: TextureAllocator) {
+    this.allocator = allocator;
+    this.texture = this.allocator.alloc(data);
+  }
+
+  dispose(): void {
+    this.allocator.free(this.texture);
+  }
+};
+
 class TextureAllocator {
   private gl: WebGL2RenderingContext;
   private freeList: WebGLTexture[];
+  private bytes_alloc: int = 0;
 
   constructor(gl: WebGL2RenderingContext) {
     this.gl = gl;
@@ -769,12 +784,17 @@ class TextureAllocator {
       gl.texParameteri(id, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE);
       gl.texParameteri(id, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(id, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      this.bytes_alloc += data.length;
       return texture;
     }
   }
 
   free(texture: WebGLTexture): void {
     this.freeList.push(texture);
+  }
+
+  stats(): string {
+    return `Lights: ${(this.bytes_alloc / (1024 * 1024)).toFixed(2)}Mb`;
   }
 };
 
@@ -997,7 +1017,7 @@ class VoxelMesh extends Mesh<VoxelShader> {
   private vao: WebGLVertexArrayObject | null = null;
   private quads: Buffer | null = null;
   private mask: Int32Array = kDefaultMask;
-  private light: WebGLTexture | null = null;
+  private light: LightTexture | null = null;
 
   constructor(manager: VoxelManager, meshes: VoxelMesh[], geo: Geometry) {
     super(manager, meshes);
@@ -1023,7 +1043,7 @@ class VoxelMesh extends Mesh<VoxelShader> {
     gl.bindVertexArray(this.vao);
     if (this.light) {
       gl.uniform1i(this.manager.shader.u_hasLight, 1);
-      gl.bindTexture(TEXTURE_3D, this.light);
+      gl.bindTexture(TEXTURE_3D, this.light.texture);
     } else {
       gl.uniform1i(this.manager.shader.u_hasLight, 0);
     }
@@ -1042,9 +1062,8 @@ class VoxelMesh extends Mesh<VoxelShader> {
     this.geo = geo;
   }
 
-  setLight(light: Uint8Array): void {
-    if (this.light) this.manager.talloc.free(this.light);
-    this.light = this.manager.talloc.alloc(light);
+  setLight(light: ILightTexture): void {
+    this.light = light as LightTexture;
   }
 
   setPosition(x: number, y: number, z: number): void {
@@ -1061,8 +1080,7 @@ class VoxelMesh extends Mesh<VoxelShader> {
   private destroyBuffers() {
     const {gl, light, quads} = this;
     gl.deleteVertexArray(this.vao);
-    if (quads) this.manager.balloc.free(quads);
-    if (light) this.manager.talloc.free(light);
+    if (quads) this.manager.allocator.free(quads);
     this.vao = null;
     this.quads = null;
     this.light = null;
@@ -1097,22 +1115,20 @@ class VoxelMesh extends Mesh<VoxelShader> {
   private prepareQuads(data: Int32Array) {
     const n = this.geo.num_quads * Geometry.StrideInInt32;
     const subarray = data.length > n ? data.subarray(0, n) : data;
-    this.quads = this.manager.balloc.alloc(subarray, false);
+    this.quads = this.manager.allocator.alloc(subarray, false);
   }
 };
 
 class VoxelManager implements MeshManager<VoxelShader> {
   gl: WebGL2RenderingContext;
-  balloc: BufferAllocator;
-  talloc: TextureAllocator;
+  allocator: BufferAllocator;
   shader: VoxelShader;
   atlas: TextureAtlas;
   private phases: VoxelMesh[][];
 
   constructor(gl: WebGL2RenderingContext, allocator: BufferAllocator) {
     this.gl = gl;
-    this.balloc = allocator;
-    this.talloc = new TextureAllocator(gl);
+    this.allocator = allocator;
     this.shader = new VoxelShader(gl);
     this.atlas = new TextureAtlas(gl);
     this.phases = [[], [], []];
@@ -1971,6 +1987,10 @@ interface Stats {
   totalInstances: int,
 };
 
+interface ILightTexture {
+  dispose: () => void;
+};
+
 interface IMesh {
   dispose: () => void,
   setPosition: (x: number, y: number, z: number) => void,
@@ -2001,7 +2021,7 @@ interface ISpriteMesh extends IMesh {
 interface IVoxelMesh extends IMesh {
   getGeometry: () => Geometry,
   setGeometry: (geo: Geometry) => void,
-  setLight: (light: Uint8Array) => void,
+  setLight: (light: ILightTexture) => void,
   show: (mask: Int32Array, shown: boolean) => void,
 };
 
@@ -2009,7 +2029,8 @@ class Renderer {
   camera: Camera;
   private gl: WebGL2RenderingContext;
   private overlay: ScreenOverlay;
-  private allocator: BufferAllocator;
+  private balloc: BufferAllocator;
+  private talloc: TextureAllocator;
   private highlight_manager: HighlightManager;
   private instanced_manager: InstancedManager;
   private shadow_manager: ShadowManager;
@@ -2040,12 +2061,13 @@ class Renderer {
     gl.disable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
-    const allocator = new BufferAllocator(gl);
+    this.balloc = new BufferAllocator(gl);
+    this.talloc = new TextureAllocator(gl);
     const atlas = new SpriteAtlas(gl);
-    this.allocator = allocator;
+    const allocator = this.balloc;
 
     const unit_square_vao = nonnull(gl.createVertexArray());
-    const unit_square_buffer = this.allocator.alloc(kUnitSquarePos, false);
+    const unit_square_buffer = allocator.alloc(kUnitSquarePos, false);
     gl.bindVertexArray(unit_square_vao);
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
@@ -2057,6 +2079,10 @@ class Renderer {
     this.shadow_manager = new ShadowManager(gl, unit_square_vao);
     this.sprite_manager = new SpriteManager(gl, atlas, unit_square_vao);
     this.voxels_manager = new VoxelManager(gl, allocator);
+  }
+
+  addLightTexture(data: Uint8Array): ILightTexture {
+    return new LightTexture(data, this.talloc);
   }
 
   addTexture(texture: Texture): int {
@@ -2103,7 +2129,8 @@ class Renderer {
     this.voxels_manager.render(camera, planes, stats, overlay, move, wave, 1);
     overlay.draw();
 
-    return `${this.allocator.stats()}\r\n` +
+    return `${this.balloc.stats()}\r\n` +
+           `${this.talloc.stats()}\r\n` +
            `Draw calls: ${stats.drawn} / ${stats.total}\r\n` +
            `Instances: ${stats.drawnInstances} / ${stats.totalInstances}`;
   }
@@ -2118,4 +2145,4 @@ class Renderer {
 export {kShadowAlpha, Geometry, Renderer, Sprite, Texture};
 export {IMesh as Mesh, ISpriteMesh as SpriteMesh, IShadowMesh as ShadowMesh,
         IHighlightMesh as HighlightMesh, IInstancedMesh as InstancedMesh,
-        IVoxelMesh as VoxelMesh};
+        IVoxelMesh as VoxelMesh, ILightTexture as LightTexture};
