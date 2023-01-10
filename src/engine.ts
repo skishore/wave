@@ -1894,9 +1894,8 @@ class Env {
   registry: Registry;
   renderer: Renderer;
   world: World;
-  private cameraAlpha = 0;
-  private cameraBlock = kEmptyBlock;
-  private cameraColor = kWhite;
+  private cameraColor: Color;
+  private cameraMaterial: MaybeMaterialId;
   private highlight: HighlightMesh;
   private highlightSide: int = -1;
   private highlightPosition: Vec3;
@@ -1911,6 +1910,9 @@ class Env {
     this.world = new World(this.registry, this.renderer);
     this.highlight = this.renderer.addHighlightMesh();
     this.highlightPosition = Vec3.create();
+
+    this.cameraColor = kWhite.slice() as Color;
+    this.cameraMaterial = kNoMaterial;
 
     const remesh = this.world.remesh.bind(this.world);
     const render = this.render.bind(this);
@@ -2108,40 +2110,33 @@ class Env {
       return delta > 0 ? kEmptyBlock : below;
     })();
 
-    const old_block = this.cameraBlock;
-    this.cameraBlock = new_block;
+    const new_material = ((): MaybeMaterialId => {
+      if (new_block === kEmptyBlock) return kNoMaterial;
+      return this.registry.getBlockFaceMaterial(new_block, 3);
+    })();
+
+    const old_material = this.cameraMaterial;
+    this.cameraMaterial = new_material;
 
     const max = kMinZUpperBound;
     const min = kMinZLowerBound;
     const minZ = Math.max(Math.min(boundary / 2, max), min);
     this.renderer.camera.setMinZ(minZ);
 
-    if (new_block === kEmptyBlock) {
-      const changed = new_block !== old_block;
+    if (new_material === kNoMaterial) {
+      const changed = new_material !== old_material;
       if (changed) this.renderer.setOverlayColor(kWhite);
       return;
     }
 
-    if (new_block !== old_block) {
-      const material = this.registry.getBlockFaceMaterial(new_block, 3);
-      const color = material !== kNoMaterial
-        ? this.registry.getMaterialData(material).texture.color
-        : kWhite;
-      this.cameraColor = color.slice() as Color;
-      this.cameraAlpha = color[3];
-    }
-
-    const falloff = (() => {
-      const max = 2, step = 32;
-      const limit = max * step;
-      for (let i = 1; i < limit; i++) {
-        const other = this.world.getBlock(xi, int(yi + i), zi);
-        if (other !== new_block) return Math.pow(2, i / step);
-      }
-      return Math.pow(2, max);
-    })();
-    this.cameraColor[3] = 1 - (1 - this.cameraAlpha) / falloff;
-    this.renderer.setOverlayColor(this.cameraColor);
+    const color = this.registry.getMaterialData(new_material).texture.color;
+    const light = this.world.getLight(xi, yi, zi);
+    const saved = this.cameraColor;
+    saved[0] = color[0] * light;
+    saved[1] = color[1] * light;
+    saved[2] = color[2] * light;
+    saved[3] = color[3];
+    this.renderer.setOverlayColor(saved);
   }
 };
 
