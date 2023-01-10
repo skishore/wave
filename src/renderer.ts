@@ -950,8 +950,10 @@ const kVoxelShader = `
   out vec4 o_color;
 
   void main() {
-    bool hasLight = u_hasLight == 1;
-    ivec3 texel = ivec3(int(v_pos[1]), int(v_pos[0]), int(v_pos[2]));
+    bool hasLight = u_hasLight == 1 && v_pos[1] <= 255.0;
+    ivec3 texel = ivec3(clamp(int(v_pos[1]), 0, 0xff),
+                        clamp(int(v_pos[0]), 0, 0xf),
+                        clamp(int(v_pos[2]), 0, 0xf));
     float level = hasLight ? 256.0 * texelFetch(u_light, texel, 0)[0] : 15.0;
     float light = pow(0.8, 15.0 - level);
 
