@@ -1184,6 +1184,9 @@ class Instance {
   dispose(): void {
     this.mesh.removeInstance(this.index);
   }
+  setLight(light: number): void {
+    this.mesh.setInstanceLight(this.index, light);
+  }
   setPosition(x: number, y: number, z: number): void {
     this.mesh.setInstancePosition(this.index, x, y, z);
   }
@@ -1194,7 +1197,9 @@ const kInstancedShader = `
   uniform vec4 u_billboard;
   uniform mat4 u_transform;
   in vec3 a_pos;
+  in float a_light;
   out vec2 v_uv;
+  out float v_light;
 
   void main() {
     int index = gl_VertexID + (gl_VertexID > 0 ? gl_InstanceID & 1 : 0);
@@ -1202,6 +1207,7 @@ const kInstancedShader = `
     float w = float(((index + 1) & 3) >> 1);
     float h = float(((index + 0) & 3) >> 1);
     v_uv = vec2(w, 1.0 - h);
+    v_light = a_light;
 
     float y = 0.5;
     vec3 v0 = vec3(w - 0.5, h, 0.0);
@@ -1219,13 +1225,15 @@ const kInstancedShader = `
   uniform float u_frame;
   uniform sampler2DArray u_texture;
   in vec2 v_uv;
+  in float v_light;
   out vec4 o_color;
 
   void main() {
     float depth = u_fogDepth * gl_FragCoord.w;
     float fog = clamp(exp2(-depth * depth), 0.0, 1.0);
+    vec4 light = vec4(vec3(v_light), 1.0);
     vec4 color = texture(u_texture, vec3(v_uv, u_frame));
-    o_color = mix(color, vec4(u_fogColor, color[3]), fog);
+    o_color = mix(light * color, vec4(u_fogColor, color[3]), fog);
     if (o_color[3] < 0.5) discard;
   }
 `;
@@ -1238,7 +1246,8 @@ class InstancedShader extends Shader {
   u_billboard: WebGLUniformLocation | null;
   u_transform: WebGLUniformLocation | null;
 
-  a_pos: number | null;
+  a_pos:   number | null;
+  a_light: number | null;
 
   constructor(gl: WebGL2RenderingContext) {
     super(gl, kInstancedShader);
@@ -1250,12 +1259,13 @@ class InstancedShader extends Shader {
     this.u_billboard = this.getUniformLocation('u_billboard');
     this.u_transform = this.getUniformLocation('u_transform');
 
-    this.a_pos = this.getAttribLocation('a_pos');
+    this.a_pos   = this.getAttribLocation('a_pos');
+    this.a_light = this.getAttribLocation('a_light');
   }
 };
 
 class InstancedMesh extends Mesh<InstancedShader> {
-  static Stride: int = 3;
+  static Stride: int = 4;
 
   private manager: InstancedManager;
   private texture: WebGLTexture;
@@ -1313,7 +1323,6 @@ class InstancedMesh extends Mesh<InstancedShader> {
 
     const index = int(instances.length);
     const instance = new Instance(this, index);
-    this.setInstancePosition(index, 0, 0, 0);
     instances.push(instance);
     return instance;
   }
@@ -1337,9 +1346,19 @@ class InstancedMesh extends Mesh<InstancedShader> {
     popped.index = index;
   }
 
-  setInstancePosition(index: int, x: number, y: number, z: number): void {
+  setInstanceLight(index: int, light: number): void {
+    const data = this.data;
+    if (data === null) return;
     const offset = index * InstancedMesh.Stride;
-    const data = nonnull(this.data);
+    if (data[offset + 3] === light) return;
+    data[offset + 3] = light;
+    this.dirtyInstances.add(index);
+  }
+
+  setInstancePosition(index: int, x: number, y: number, z: number): void {
+    const data = this.data;
+    if (data === null) return;
+    const offset = index * InstancedMesh.Stride;
     data[offset + 0] = x;
     data[offset + 1] = y;
     data[offset + 2] = z;
@@ -1375,6 +1394,7 @@ class InstancedMesh extends Mesh<InstancedShader> {
       gl.bindBuffer(ARRAY_BUFFER, buffer.buffer);
       for (const index of dirtyInstances.values()) {
         const offset = index * stride;
+        if (offset >= data.length) continue;
         gl.bufferSubData(ARRAY_BUFFER, 4 * offset, data, offset, stride);
       }
       dirtyInstances.clear();
@@ -1384,7 +1404,8 @@ class InstancedMesh extends Mesh<InstancedShader> {
     this.vao = nonnull(gl.createVertexArray());
     gl.bindVertexArray(this.vao);
     gl.bindBuffer(ARRAY_BUFFER, nonnull(this.buffer).buffer);
-    this.prepareAttribute(shader.a_pos, 3, 0);
+    this.prepareAttribute(shader.a_pos,   3, 0);
+    this.prepareAttribute(shader.a_light, 1, 3);
   }
 
   private prepareAttribute(
@@ -1998,8 +2019,12 @@ interface IHighlightMesh extends IMesh {
   mask: int;
 };
 
+interface IInstance extends IMesh {
+  setLight: (light: number) => void,
+};
+
 interface IInstancedMesh {
-  addInstance: () => IMesh,
+  addInstance: () => IInstance,
   readonly frame: int;
   readonly sprite: Sprite;
 };
@@ -2142,5 +2167,6 @@ class Renderer {
 
 export {kShadowAlpha, Geometry, Renderer, Sprite, Texture};
 export {IMesh as Mesh, ISpriteMesh as SpriteMesh, IShadowMesh as ShadowMesh,
-        IHighlightMesh as HighlightMesh, IInstancedMesh as InstancedMesh,
-        IVoxelMesh as VoxelMesh, ILightTexture as LightTexture};
+        IHighlightMesh as HighlightMesh, IInstance as Instance,
+        IInstancedMesh as InstancedMesh, IVoxelMesh as VoxelMesh,
+        ILightTexture as LightTexture};

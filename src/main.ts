@@ -1,6 +1,6 @@
 import {assert, int, nonnull, Color, Vec3} from './base.js';
 import {BlockId, Column, Env} from './engine.js';
-import {kChunkWidth, kEmptyBlock, kNoMaterial, kWorldHeight} from './engine.js';
+import {kEmptyBlock, kNoMaterial, kWorldHeight} from './engine.js';
 import {Component, ComponentState, ComponentStore} from './ecs.js';
 import {EntityId, kNoEntity} from './ecs.js';
 import {AStar, Check, PathNode, Point as AStarPoint} from './pathing.js';
@@ -915,10 +915,10 @@ const Meshes = (env: TypedEnv): Component<MeshState> => ({
     for (const state of states) {
       if (!state.mesh) continue;
       const {x, y, z, h} = env.position.getX(state.id);
-      const lit = env.world.isBlockLit(
+      const light = env.world.getLight(
           int(Math.floor(x)), int(Math.floor(y)), int(Math.floor(z)));
       state.mesh.setPosition(x, y - h / 2, z);
-      state.mesh.setLight(lit ? 1 : 0.64);
+      state.mesh.setLight(light);
       state.mesh.setHeight(h);
 
       if (state.heading !== null) {

@@ -2,7 +2,7 @@ import {assert, drop, int, nonnull} from './base.js';
 import {Color, Tensor2, Tensor3, Vec3} from './base.js';
 import {EntityComponentSystem} from './ecs.js';
 import {HighlightMesh, InstancedMesh, Mesh} from './renderer.js';
-import {LightTexture, Renderer, Texture, VoxelMesh} from './renderer.js';
+import {Instance, LightTexture, Renderer, Texture, VoxelMesh} from './renderer.js';
 import {TerrainMesher} from './mesher.js';
 import {kSweepResolution, sweep} from './sweep.js';
 
@@ -713,7 +713,7 @@ class Chunk {
   private dirty: boolean = false;
   private ready: boolean = false;
   private neighbors: int = 0;
-  private instances: Map<int, Mesh>;
+  private instances: Map<int, Instance>;
   private solid: VoxelMesh | null = null;
   private water: VoxelMesh | null = null;
   private light: LightTexture | null = null;
@@ -784,14 +784,17 @@ class Chunk {
     this.eachNeighbor(x => x.notifyNeighborDisposed());
   }
 
+  getLightLevel(x: int, y: int, z: int): int {
+    const xm = int(x & kChunkMask), zm = int(z & kChunkMask);
+    const index = int((xm << kChunkShiftX) | y | (zm << kChunkShiftZ));
+    const light = this.stage2_lights.get(index);
+    return light !== undefined ? light : int(this.stage1_lights.data[index]);
+  }
+
   getBlock(x: int, y: int, z: int): BlockId {
     const xm = int(x & kChunkMask), zm = int(z & kChunkMask);
     const index = (xm << kChunkShiftX) | y | (zm << kChunkShiftZ);
     return this.voxels.data[index] as BlockId;
-  }
-
-  getLitHeight(x: int, z: int): int {
-    return 0;
   }
 
   setBlock(x: int, y: int, z: int, block: BlockId): void {
@@ -1325,6 +1328,11 @@ class Chunk {
     this.solid?.setLight(this.light);
     this.water?.setLight(this.light);
 
+    for (const [index, instance] of this.instances.entries()) {
+      const level = int(Math.min(lights[index] + 1, kSunlightLevel));
+      instance.setLight(lighting(level));
+    }
+
     for (const [index, value] of saved.entries()) {
       lights[index] = value;
     }
@@ -1775,10 +1783,8 @@ class World {
     this.equilevels[0] = this.equilevels[h - 1] = 1;
   }
 
-  isBlockLit(x: int, y: int, z: int): boolean {
-    const cx = int(x >> kChunkBits), cz = int(z >> kChunkBits);
-    const chunk = this.chunks.get(cx, cz);
-    return chunk ? y >= chunk.getLitHeight(x, z) : true;
+  getLight(x: int, y: int, z: int): number {
+    return lighting(this.getLightLevel(x, y, z));
   }
 
   getBlock(x: int, y: int, z: int): BlockId {
@@ -1859,6 +1865,14 @@ class World {
     const dy = (cz << kChunkBits) + half - z;
     return dx * dx + dy * dy;
   }
+
+  private getLightLevel(x: int, y: int, z: int): int {
+    if (y < 0) return 0;
+    if (y >= kWorldHeight) return kSunlightLevel;
+    const cx = int(x >> kChunkBits), cz = int(z >> kChunkBits);
+    const chunk = this.chunks.get(cx, cz);
+    return chunk ? chunk.getLightLevel(x, y, z) : kSunlightLevel;
+  }
 };
 
 //////////////////////////////////////////////////////////////////////////////
@@ -1871,6 +1885,8 @@ const kTmpImpacts = Vec3.create();
 
 const kMinZLowerBound = 0.001;
 const kMinZUpperBound = 0.1;
+
+const lighting = (x: int): number => Math.pow(0.8, kSunlightLevel - x);
 
 class Env {
   container: Container;
