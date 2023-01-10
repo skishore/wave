@@ -83,15 +83,15 @@ class TerrainMesher {
     this.renderer = renderer;
   }
 
-  meshChunk(voxels: Tensor3, heightmap: Tensor2, light_map: Tensor2,
-            equilevels: Int8Array, solid: Mesh, water: Mesh): [Mesh, Mesh] {
+  meshChunk(voxels: Tensor3, heightmap: Tensor2, equilevels: Int8Array,
+            solid: Mesh, water: Mesh): [Mesh, Mesh] {
     const solid_geo = solid ? solid.getGeometry() : kCachedGeometryA;
     const water_geo = water ? water.getGeometry() : kCachedGeometryB;
     solid_geo.clear();
     water_geo.clear();
 
     this.computeChunkGeometryWithEquilevels(
-        solid_geo, water_geo, voxels, heightmap, light_map, equilevels);
+        solid_geo, water_geo, voxels, heightmap, equilevels);
 
     return [
       this.buildMesh(solid_geo, solid, 0),
@@ -147,7 +147,7 @@ class TerrainMesher {
 
   private computeChunkGeometryWithEquilevels(
       solid_geo: Geometry, water_geo: Geometry, voxels: Tensor3,
-      heightmap: Tensor2, light_map: Tensor2, equilevels: Int8Array): void {
+      heightmap: Tensor2, equilevels: Int8Array): void {
 
     let max_height = int(0);
     const heightmap_data = heightmap.data;
@@ -182,19 +182,16 @@ class TerrainMesher {
       const y_max = int(Math.min(j, max_height) + 1);
       if (y_min >= y_max) break;
       this.computeChunkGeometry(
-          solid_geo, water_geo, voxels, light_map, y_min, y_max);
+          solid_geo, water_geo, voxels, y_min, y_max);
       i = j;
     }
   }
 
   private computeChunkGeometry(solid_geo: Geometry, water_geo: Geometry,
-                               voxels: Tensor3, light_map: Tensor2,
-                               y_min: int, y_max: int): void {
+                               voxels: Tensor3, y_min: int, y_max: int): void {
 
     const {data, shape, stride} = voxels;
 
-    assert(light_map.shape[0] === shape[0]);
-    assert(light_map.shape[1] === shape[2]);
     kTmpShape[0] = shape[0];
     kTmpShape[1] = int(y_max - y_min);
     kTmpShape[2] = shape[2];
@@ -205,9 +202,6 @@ class TerrainMesher {
       const u = 3 - d - v;
       const ld = kTmpShape[d] - 1, lu = kTmpShape[u] - 2, lv = kTmpShape[v] - 2;
       const sd = stride[d], su = stride[u], sv = stride[v];
-      const hd = d === 1 ? 0 : light_map.stride[d >> 1];
-      const hu = u === 1 ? 0 : light_map.stride[u >> 1];
-      const hv = v === 1 ? 0 : light_map.stride[v >> 1];
       const base = su + sv + y_min * stride[1];
 
       // d is the dimension that the quad faces. A d of {0, 1, 2} corresponds
@@ -262,24 +256,15 @@ class TerrainMesher {
             // two adjacent voxels, we can't combine them into the same greedy
             // meshing quad. The packed layout is:
             //
-            //    - bits 0:8:   AO value (4 x 2-bit values)
-            //    - bits 8:9:   lighting value in {0, 1}
-            //    - bits 9:10:  dir in {0, 1} (0 -> -1, 1 -> +1)
-            //    - bits 10:25: material index
+            //    - bits 0:8:  AO value (4 x 2-bit values)
+            //    - bits 8:9:  dir in {0, 1} (0 -> -1, 1 -> +1)
+            //    - bits 9:24: material index
             //
             const block0 = data[index] as BlockId;
             const block1 = data[index + sd] as BlockId;
             if (block0 === block1) continue;
             const dir = this.getFaceDir(block0, block1, face);
             if (dir === 0) continue;
-
-            const lit = (() => {
-              const xd = id + (dir > 0 ? 1 : 0);
-              const index = hd * xd + hu * (iu + 1) + hv * (iv + 1);
-              const height = light_map.data[index];
-              const current = d === 1 ? xd : iv + 1;
-              return height <= current + y_min;
-            })();
 
             const ix = int(index);
             const nx = int(index + sd);
@@ -289,9 +274,7 @@ class TerrainMesher {
             const ao = dir > 0
               ? this.packAOMask(data, nx, ix, su_fixed, sv_fixed)
               : this.packAOMask(data, ix, nx, su_fixed, sv_fixed);
-            const mask = (material << 10) |
-                         (dir > 0 ? 1 << 9 : 0) |
-                         (lit ? 1 << 8 : 0) | ao;
+            const mask = (material << 9) | (dir > 0 ? 1 << 8 : 0) | ao;
 
             kMaskData[n] = mask;
             kMaskUnion[iu] |= mask;
@@ -318,11 +301,11 @@ class TerrainMesher {
         if (d !== 1) {
           if (id === 0) {
             for (let i = 0; i < area; i++) {
-              if (!(kMaskData[i] & 0x200)) kMaskData[i] = 0;
+              if (!(kMaskData[i] & 0x100)) kMaskData[i] = 0;
             }
           } else if (id === ld - 1) {
             for (let i = 0; i < area; i++) {
-              if ((kMaskData[i] & 0x200)) kMaskData[i] = 0;
+              if ((kMaskData[i] & 0x100)) kMaskData[i] = 0;
             }
           }
         }
@@ -360,9 +343,8 @@ class TerrainMesher {
             kTmpPos[1] += y_min;
 
             const ao  = (mask & 0xff) as int;
-            const lit = (mask & 0x100 ? 1 : 0) as int;
-            const dir = (mask & 0x200 ? 1 : -1) as int;
-            const material = this.getMaterialData((mask >> 10) as MaterialId);
+            const dir = (mask & 0x100 ? 1 : -1) as int;
+            const material = this.getMaterialData((mask >> 9) as MaterialId);
             const geo = material.texture.color[3] < 1 ? water_geo : solid_geo;
             const w_fixed = d > 0 ? w : h;
             const h_fixed = d > 0 ? h : w;
@@ -372,26 +354,26 @@ class TerrainMesher {
                 const pos = kTmpPos;
                 if (dir > 0) {
                   const wave = kWaveValues[d];
-                  this.addQuad(geo, material, dir, ao, lit, wave, d, w, h, pos);
-                  this.patchLiquidSurfaceQuads(geo, voxels, ao, lit, w, h, pos);
+                  this.addQuad(geo, material, dir, ao, wave, d, w, h, pos);
+                  this.patchLiquidSurfaceQuads(geo, voxels, ao, w, h, pos);
                 } else {
-                  this.addQuad(geo, material, dir, ao, lit, 0, d, w, h, pos);
+                  this.addQuad(geo, material, dir, ao, 0, d, w, h, pos);
                 }
               } else {
                 const wave = kWaveValues[d];
                 if (h === lv - iv) {
-                  this.addQuad(geo, material, dir, ao, lit, wave,
+                  this.addQuad(geo, material, dir, ao, wave,
                                d, w_fixed, h_fixed, kTmpPos);
                 } else {
                   this.splitLiquidSideQuads(geo, material, voxels, dir, ao,
-                                            lit, wave, d, w, h, kTmpPos);
+                                            wave, d, w, h, kTmpPos);
                 }
               }
             } else {
-              this.addQuad(geo, material, dir, ao, lit, 0,
+              this.addQuad(geo, material, dir, ao, 0,
                            d, w_fixed, h_fixed, kTmpPos);
               if (material.texture && material.texture.alphaTest) {
-                this.addQuad(geo, material, int(-dir), ao, lit, 0,
+                this.addQuad(geo, material, int(-dir), ao, 0,
                              d, w_fixed, h_fixed, kTmpPos);
               }
             }
@@ -418,7 +400,7 @@ class TerrainMesher {
   // consider (-x, +x, -z, +z), we should broadcast a different subset of the
   // input AO. But doing that is tricky and AO doesn't matter much here.
   private patchLiquidSurfaceQuads(geo: Geometry, voxels: Tensor3, ao: int,
-                                  lit: int, w: int, h: int, pos: Vec3): void {
+                                  w: int, h: int, pos: Vec3): void {
     const base_x = pos[0];
     const base_y = pos[1];
     const base_z = pos[2];
@@ -451,7 +433,7 @@ class TerrainMesher {
         }
         kTmpPos[0] = base_x + start;
         kTmpPos[2] = base_z + Math.max(dz, 0);
-        this.addQuad(geo, material, 1, ao, lit, wave, 2, x - start, 0, kTmpPos);
+        this.addQuad(geo, material, 1, ao, wave, 2, x - start, 0, kTmpPos);
       }
     }
 
@@ -466,7 +448,7 @@ class TerrainMesher {
         }
         kTmpPos[0] = base_x + Math.max(dx, 0);
         kTmpPos[2] = base_z + start;
-        this.addQuad(geo, material, 1, ao, lit, wave, 0, 0, z - start, kTmpPos);
+        this.addQuad(geo, material, 1, ao, wave, 0, 0, z - start, kTmpPos);
       }
     }
   }
@@ -477,7 +459,7 @@ class TerrainMesher {
   // splitting one quad into multiple quads here.
   private splitLiquidSideQuads(
       geo: Geometry, material: Material, voxels: Tensor3, dir: int, ao: int,
-      lit: int, wave: int, d: int, w: number, h: number, pos: Vec3): void {
+      wave: int, d: int, w: number, h: number, pos: Vec3): void {
     const base_x = pos[0];
     const base_y = pos[1];
     const base_z = pos[2];
@@ -498,7 +480,7 @@ class TerrainMesher {
       for (; j < w && test(j) === last; j++) {}
       const w_fixed = d > 0 ? j - i : h;
       const h_fixed = d > 0 ? h : j - i;
-      this.addQuad(geo, material, dir, ao, lit, last ? wave : 0,
+      this.addQuad(geo, material, dir, ao, last ? wave : 0,
                    d, w_fixed, h_fixed, kTmpPos);
       kTmpPos[2 - d] += j - i;
       last = !last;
@@ -543,7 +525,7 @@ class TerrainMesher {
         const material = this.getMaterialData(id);
         const sw = scale * w, sh = scale * h;
         const wave = material.liquid ? 0b1111 : 0;
-        this.addQuad(geo, material, 1, 0, 1, wave, 1, sw, sh, kTmpPos);
+        this.addQuad(geo, material, 1, 0, wave, 1, sw, sh, kTmpPos);
 
         for (let wi = 0; wi < w; wi++) {
           let index = offset + stride * wi;
@@ -602,7 +584,7 @@ class TerrainMesher {
 
           const material = this.getMaterialData(id);
           const wave = material.liquid ? 0b1111 : 0;
-          this.addQuad(geo, material, dir, ao, 1, wave, d, wi, hi, kTmpPos);
+          this.addQuad(geo, material, dir, ao, wave, d, wi, hi, kTmpPos);
 
           const extra = w - 1;
           offset += extra * sj;
@@ -612,9 +594,8 @@ class TerrainMesher {
     }
   }
 
-  private addQuad(geo: Geometry, material: Material,
-                  dir: int, ao: int, lit: int, wave: int,
-                  d: int, w: number, h: number, pos: Vec3) {
+  private addQuad(geo: Geometry, material: Material, dir: int, ao: int,
+                  wave: int, d: int, w: number, h: number, pos: Vec3) {
     const {num_quads} = geo;
     geo.allocateQuads(int(num_quads + 1));
 
@@ -651,8 +632,7 @@ class TerrainMesher {
                       ((ao & 0xff)           << 16) |
                       ((wave & 0xf)          << 24) |
                       ((d & 0x3)             << 28) |
-                      ((dir > 0 ? 1 : 0)     << 30) |
-                      ((lit > 0 ? 1 : 0)     << 31);
+                      ((dir > 0 ? 1 : 0)     << 30);
   }
 
   private getFaceDir(block0: BlockId, block1: BlockId, dir: int) {

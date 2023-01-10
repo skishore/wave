@@ -720,7 +720,6 @@ class Chunk {
   private world: World;
   private voxels: Tensor3;
   private heightmap: Tensor2;
-  private light_map: Tensor2;
   private equilevels: Int8Array;
 
   // Cellular automaton lighting. The main trick here is to get lighting to
@@ -764,7 +763,6 @@ class Chunk {
     this.instances = new Map();
     this.voxels = new Tensor3(kChunkWidth, kWorldHeight, kChunkWidth);
     this.heightmap = new Tensor2(kChunkWidth, kChunkWidth);
-    this.light_map = new Tensor2(kChunkWidth, kChunkWidth);
     this.equilevels = new Int8Array(kWorldHeight);
 
     this.stage1_dirty = [];
@@ -793,8 +791,7 @@ class Chunk {
   }
 
   getLitHeight(x: int, z: int): int {
-    const xm = int(x & kChunkMask), zm = int(z & kChunkMask);
-    return this.light_map.get(xm, zm);
+    return 0;
   }
 
   setBlock(x: int, y: int, z: int, block: BlockId): void {
@@ -1267,7 +1264,7 @@ class Chunk {
 
   private remeshTerrain(): void {
     const {cx, cz, world} = this;
-    const {bedrock, buffer, heightmap, light_map, equilevels} = world;
+    const {bedrock, buffer, heightmap, equilevels} = world;
     equilevels.set(this.equilevels, 1);
     for (const offset of kNeighborOffsets) {
       const [c, dstPos, srcPos, size] = offset;
@@ -1276,11 +1273,9 @@ class Chunk {
       assert(delta === 1);
       if (chunk) {
         this.copyHeightmap(heightmap, dstPos, chunk.heightmap, srcPos, size);
-        this.copyHeightmap(light_map, dstPos, chunk.light_map, srcPos, size);
         this.copyVoxels(buffer, dstPos, chunk.voxels, srcPos, size);
       } else {
         this.zeroHeightmap(heightmap, dstPos, size, delta);
-        this.zeroHeightmap(light_map, dstPos, size, delta);
         this.zeroVoxels(buffer, dstPos, size);
       }
       if (chunk !== this) {
@@ -1305,7 +1300,7 @@ class Chunk {
 
     const x = cx << kChunkBits, z = cz << kChunkBits;
     const meshed = world.mesher.meshChunk(
-        buffer, heightmap, light_map, equilevels, this.solid, this.water);
+        buffer, heightmap, equilevels, this.solid, this.water);
     const [solid, water] = meshed;
     solid?.setPosition(x, 0, z);
     water?.setPosition(x, 0, z);
@@ -1340,7 +1335,6 @@ class Chunk {
     const end = start + count;
     const offset = this.heightmap.index(xm, zm);
     const height = this.heightmap.data[offset];
-    const light_ = this.light_map.data[offset];
     const voxels = this.voxels;
     assert(voxels.stride[1] === 1);
 
@@ -1352,17 +1346,6 @@ class Chunk {
       this.heightmap.data[offset] = start - i;
     } else if (block !== kEmptyBlock && height <= end) {
       this.heightmap.data[offset] = end;
-    }
-
-    const opaque = this.world.registry.opaque;
-    if (!opaque[block] && start < light_ && light_ <= end) {
-      let i = 0;
-      for (; i < start; i++) {
-        if (opaque[voxels.data[index - i - 1]]) break;
-      }
-      this.light_map.data[offset] = start - i;
-    } else if (opaque[block] && light_ <= end) {
-      this.light_map.data[offset] = end;
     }
   }
 
@@ -1764,7 +1747,6 @@ class World {
   loadFrontier: Loader | null;
   buffer: Tensor3;
   heightmap: Tensor2;
-  light_map: Tensor2;
   equilevels: Int8Array;
 
   constructor(registry: Registry, renderer: Renderer) {
@@ -1789,7 +1771,6 @@ class World {
     const h = int(kWorldHeight + 2);
     this.buffer = new Tensor3(w, h, w);
     this.heightmap = new Tensor2(w, w);
-    this.light_map = new Tensor2(w, w);
     this.equilevels = new Int8Array(h);
     this.equilevels[0] = this.equilevels[h - 1] = 1;
   }

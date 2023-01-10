@@ -873,8 +873,6 @@ class Mesh<S> {
 
 //////////////////////////////////////////////////////////////////////////////
 
-const kShadowAlpha = 0.36;
-
 const kVoxelShader = `
   uniform ivec2 u_mask;
   uniform float u_move;
@@ -887,13 +885,13 @@ const kVoxelShader = `
   in uint  a_ao;
   in uint  a_mask;
   in uint  a_texture;
-  // 4-bit wave; 2-bit dim; 1-bit dir; 1-bit lit
+  // 4-bit wave; 2-bit dim; 1-bit dir
   in int   a_wddl;
 
   out vec3 v_pos;
   out vec3 v_uvw;
+  out float v_ao;
   out float v_move;
-  out float v_light;
 
   int unpackI2(uint packed, int index) {
     return (int(packed) >> (2 * index)) & 3;
@@ -903,9 +901,7 @@ const kVoxelShader = `
     int instance = gl_VertexID + 3 * (gl_InstanceID & 1);
     int index = unpackI2(a_indices, instance);
 
-    float shadow = a_wddl < 0 ? 0.0 : 0.0;
-    float ao = 1.0 - 0.3 * float(unpackI2(a_ao, index));
-    v_light = ao * (1.0 - ${kShadowAlpha} * shadow);
+    v_ao = 1.0 - 0.3 * float(unpackI2(a_ao, index));
 
     int dim = (a_wddl >> 4) & 0x3;
     float dir = ((a_wddl & 64) != 0) ? 1.0 : -1.0;
@@ -949,8 +945,8 @@ const kVoxelShader = `
   uniform sampler3D u_light;
   in vec3 v_pos;
   in vec3 v_uvw;
+  in float v_ao;
   in float v_move;
-  in float v_light;
   out vec4 o_color;
 
   void main() {
@@ -962,7 +958,7 @@ const kVoxelShader = `
     float depth = u_fogDepth * gl_FragCoord.w;
     float fog = clamp(exp2(-depth * depth), 0.0, 1.0);
     vec3 index = v_uvw + vec3(v_move, v_move, 0.0);
-    vec4 color = vec4(vec3(light * v_light), 1.0) * texture(u_texture, index);
+    vec4 color = vec4(vec3(light * v_ao), 1.0) * texture(u_texture, index);
     o_color = mix(color, vec4(u_fogColor, color[3]), fog);
     if (o_color[3] < 0.5 * u_alphaTest) discard;
   }
@@ -1654,6 +1650,8 @@ class SpriteManager implements MeshManager<SpriteShader> {
 };
 
 //////////////////////////////////////////////////////////////////////////////
+
+const kShadowAlpha = 0.25;
 
 const kShadowShader = `
   uniform float u_size;
