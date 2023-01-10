@@ -2132,12 +2132,12 @@ class Renderer {
     return this.voxels_manager.addMesh(geo, phase);
   }
 
-  render(move: number, wave: number): string {
+  render(move: number, wave: number, sparkle: boolean): string {
     const {gl, overlay} = this;
     const [r, g, b] = kDefaultSkyColor;
     gl.clearColor(r, g, b, 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-    this.voxels_manager.atlas.sparkle();
+    if (sparkle) this.voxels_manager.atlas.sparkle();
 
     const camera = this.camera;
     const planes = camera.getCullingPlanes();

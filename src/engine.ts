@@ -1900,7 +1900,7 @@ class Env {
   private highlightSide: int = -1;
   private highlightPosition: Vec3;
   private timing: Timing;
-  private frame: int = 0;
+  private frame: number = 0;
 
   constructor(id: string) {
     this.container = new Container(id);
@@ -1944,7 +1944,9 @@ class Env {
   render(dt: number): void {
     if (!this.container.inputs.pointer) return;
 
-    this.frame = int((this.frame + 1) & 0xffff);
+    const old_frame = this.frame;
+    this.frame = old_frame + 60 * dt;
+    if (this.frame > 0xffff) this.frame -= 0xffff;
     const pos = this.frame / 256;
     const rad = 2 * Math.PI * pos;
     const move = 0.25 * (Math.cos(rad) * 0.5 + pos);
@@ -1958,7 +1960,8 @@ class Env {
     this.entities.render(dt);
     this.updateHighlightMesh();
     this.updateOverlayColor(wave);
-    const renderer_stats = this.renderer.render(move, wave);
+    const sparkle = int(old_frame) !== int(this.frame);
+    const renderer_stats = this.renderer.render(move, wave, sparkle);
 
     const timing = this.timing;
     if (timing.renderPerf.frame() % 20 !== 0) return;
