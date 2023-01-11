@@ -852,6 +852,8 @@ class Chunk {
   }
 
   relightChunk(): void {
+    // Called from remeshChunk to set the meshes' light textures, even if
+    // !this.needsRelight(). Each step checks a dirty flag so that's okay.
     this.eachNeighbor(x => x.lightingStage1());
     this.lightingStage1();
     this.lightingStage2();
@@ -981,7 +983,8 @@ class Chunk {
   private lightingStage1(): void {
     if (this.stage1_dirty.length === 0) return;
 
-    const {heightmap, voxels} = this;
+    const heightmap_data = this.heightmap.data;
+    const voxels_data = this.voxels.data;
     const opaque = this.world.registry.opaque;
     const lights = this.stage1_lights;
     const edges = this.stage1_edges;
@@ -992,6 +995,8 @@ class Chunk {
     assert(lights.stride[0] === (1 << 8));
     assert(lights.stride[2] === (1 << 12));
 
+    // Stage 1 lighting operates on "index" values, which are (x, y, z)
+    // coordinates represented as indices into our {lights, voxel} Tensor3.
     let prev = this.stage1_dirty;
     let next: int[] = [];
 
@@ -1002,11 +1007,13 @@ class Chunk {
       return x_edge || z_edge;
     };
 
-    // Returns the updated lighting value at the given index.
+    // Returns the updated lighting value at the given index. Note that we
+    // can never use the `prev` light value in this computation: it can be
+    // arbitrarily out-of-date since the chunk contents can change.
     const query = (index: int): int => {
-      if (opaque[voxels.data[index]]) return 0;
+      if (opaque[voxels_data[index]]) return 0;
 
-      const height = heightmap.data[index >> 8];
+      const height = heightmap_data[index >> 8];
       if ((index & 0xff) >= height) return kSunlightLevel;
 
       let max_neighbor = 1;
@@ -1078,10 +1085,16 @@ class Chunk {
       zone[index] = chunk;
     }
 
+    // Stage 1 lighting tracks nodes by "index", where an index can be used
+    // to look up a chunk (x, y, z) coordinate in a Tensor3. Stage 2 lighting
+    // deals with multiple chunks, so we deal with "locations". The first 16
+    // bits of a location are an index; bits 16:18 are a chunk x coordinate,
+    // and bits 18:20 are a chunk z coordinate.
+    //
     // To keep the cellular automaton as fast as possible, we update stage 1
-    // lighting in place, in place. We must undo this operation at the end of
-    // this method, so we track a list of (location, previous value) pairs in
-    // `deltas` as we make the updates.
+    // lighting in place. We must undo these changes at the end of this call,
+    // so we track a list of (location, previous value) pairs in `deltas` as
+    // we make the updates.
     //
     // To avoid needing Theta(n) heap allocations, we flatten `deltas`.
     const deltas: int[] = [];
@@ -1155,14 +1168,30 @@ class Chunk {
       return -1;
     };
 
-    // Returns the updated lighting value at the given index.
-    const query = (location: int): int => {
-      const chunk = zone[location >> 16]!;
-      const index = location & 0xffff;
-      if (opaque[chunk.voxels.data[index]]) return 0;
+    // Returns the updated lighting value at the given location.
+    //
+    // This helper carefully uses the `prev` light level ways that are
+    // not possible in stage 1, because we take advantage of the fact that
+    // stage 1 lighting is correct when we run stage 2. The stage 2 light at
+    // at a cell is always greater than or equal to the stage 1 light, so:
+    //
+    //   - If the current light level is non-zero, then the cell is definitely
+    //     not a solid cell (solid cells always have a light level of 0).
+    //
+    //   - If the current light level is kSunlightLevel, the maximum level,
+    //     then we don't need to examine neighbors; the light is unchanged.
+    //     Conversely, if the current light level is less than the max, then
+    //     the cell definitely isn't in unobstructed sunlight, since it would
+    //     have a stage 1 light of kSunlightLevel in that case.
+    //
+    const query = (location: int, prev: int): int => {
+      if (prev === kSunlightLevel) return kSunlightLevel;
 
-      const height = chunk.heightmap.data[index >> 8];
-      if ((index & 0xff) >= height) return kSunlightLevel;
+      if (prev === 0) {
+        const chunk = zone[location >> 16]!;
+        const index = location & 0xffff;
+        if (opaque[chunk.voxels.data[index]]) return 0;
+      }
 
       let max_neighbor = 1;
       for (const spread of kSpread) {
@@ -1175,7 +1204,7 @@ class Chunk {
       return int(max_neighbor - 1);
     };
 
-    // Enqueues new indices that may be affected by the given change.
+    // Enqueues new locations that may be affected by the given change.
     const enqueue = (location: int, hi: int, lo: int): void => {
       for (const spread of kSpread) {
         const neighbor_index = shift(location, spread);
@@ -1191,7 +1220,7 @@ class Chunk {
         // TODO(skishore): If the index is too far from the center given its
         // current light value, drop the update here.
         const prev = current(location);
-        const next = query(location);
+        const next = query(location, prev);
         if (next === prev) continue;
 
         data[location >> 16]![location & 0xffff] = next;
