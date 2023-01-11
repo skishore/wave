@@ -156,6 +156,13 @@ const kEmptyBlock = 0 as BlockId;
 const kUnknownBlock = 1 as BlockId;
 
 class Registry {
+  // If a block's light value is -1, then the block is opaque and it always
+  // has a computed light level of 0.
+  //
+  // Otherwise, the block casts a light equal to this value (but its computed
+  // light may be greater than that, due to light from its neighbors).
+  //
+  light: int[];
   opaque: boolean[];
   solid: boolean[];
   private faces: MaybeMaterialId[];
@@ -166,6 +173,7 @@ class Registry {
   constructor() {
     this.opaque = [false, false];
     this.solid = [false, true];
+    this.light = [0, 0];
     this.faces = []
     for (let i = 0; i < 12; i++) {
       this.faces.push(kNoMaterial);
@@ -175,7 +183,7 @@ class Registry {
     this.ids = new Map();
   }
 
-  addBlock(xs: string[], solid: boolean): BlockId {
+  addBlock(xs: string[], solid: boolean, light: int = 0): BlockId {
     type Materials = [string, string, string, string, string, string];
     const materials = ((): Materials => {
       switch (xs.length) {
@@ -205,19 +213,22 @@ class Registry {
       if (alphaBlend || alphaTest) opaque = false;
     });
 
+    light = opaque && light === 0 ? -1 : light;
     const result = this.opaque.length as BlockId;
     this.opaque.push(opaque);
     this.solid.push(solid);
+    this.light.push(light);
     this.meshes.push(null);
     return result;
   }
 
-  addBlockMesh(mesh: InstancedMesh, solid: boolean): BlockId {
+  addBlockMesh(mesh: InstancedMesh, solid: boolean, light: int = 0): BlockId {
     const result = this.opaque.length as BlockId;
     for (let i = 0; i < 6; i++) this.faces.push(kNoMaterial);
     this.meshes.push(mesh);
     this.opaque.push(false);
     this.solid.push(solid);
+    this.light.push(light);
     return result;
   }
 
@@ -788,7 +799,12 @@ class Chunk {
     const xm = int(x & kChunkMask), zm = int(z & kChunkMask);
     const index = int((xm << kChunkShiftX) | y | (zm << kChunkShiftZ));
     const light = this.stage2_lights.get(index);
-    return light !== undefined ? light : int(this.stage1_lights.data[index]);
+    const base = light !== undefined ? light : this.stage1_lights.data[index];
+
+    const registry = this.world.registry;
+    const block = this.voxels.data[index] as BlockId;
+    const mesh = registry.getBlockMesh(block);
+    return int(Math.min(base + (mesh ? 1 : 0), kSunlightLevel));
   }
 
   getBlock(x: int, y: int, z: int): BlockId {
@@ -835,6 +851,13 @@ class Chunk {
     assert(voxels.stride[1] === 1);
     const index = voxels.index(xm, start, zm);
     voxels.data.fill(block, index, index + count);
+
+    const light = this.world.registry.light[block];
+    if (light > 0) {
+      for (let i = 0; i < count; i++) {
+        this.stage1_dirty.push(int(index + i));
+      }
+    }
 
     this.updateHeightmap(xm, zm, index, start, count, block);
   }
@@ -985,7 +1008,7 @@ class Chunk {
 
     const heightmap_data = this.heightmap.data;
     const voxels_data = this.voxels.data;
-    const opaque = this.world.registry.opaque;
+    const block_light = this.world.registry.light;
     const lights = this.stage1_lights;
     const edges = this.stage1_edges;
     const data = lights.data;
@@ -1011,12 +1034,13 @@ class Chunk {
     // can never use the `prev` light value in this computation: it can be
     // arbitrarily out-of-date since the chunk contents can change.
     const query = (index: int): int => {
-      if (opaque[voxels_data[index]]) return 0;
+      const from_block = block_light[voxels_data[index]];
+      if (from_block < 0) return 0;
 
       const height = heightmap_data[index >> 8];
       if ((index & 0xff) >= height) return kSunlightLevel;
 
-      let max_neighbor = 1;
+      let max_neighbor = from_block + 1;
       for (const spread of kSpread) {
         if ((index & spread.mask) === spread.test) continue;
         const neighbor_index = int(index + spread.diff);
@@ -1193,7 +1217,7 @@ class Chunk {
         if (opaque[chunk.voxels.data[index]]) return 0;
       }
 
-      let max_neighbor = 1;
+      let max_neighbor = prev + 1;
       for (const spread of kSpread) {
         const neighbor_index = shift(location, spread);
         if (neighbor_index >= 0) {
