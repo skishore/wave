@@ -119,7 +119,7 @@ const carve_caves = (blocks: Blocks, x: int, z: int, column: Column,
   }
 
   if (max < height && max < limit && (hash_point(x, z) & 63) === 4) {
-    column.overwrite(blocks.fungi, min);
+    //column.overwrite(blocks.fungi, min);
   }
 
   return max;

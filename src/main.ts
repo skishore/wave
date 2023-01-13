@@ -30,6 +30,7 @@ type Position = [number, number, number];
 class TypedEnv extends Env {
   particles: int = 0;
   blocks: Blocks | null = null;
+  point_lights: Map<string, PointLight>;
   lifetime: ComponentStore<LifetimeState>;
   position: ComponentStore<PositionState>;
   movement: ComponentStore<MovementState>;
@@ -38,11 +39,13 @@ class TypedEnv extends Env {
   meshes: ComponentStore<MeshState>;
   shadow: ComponentStore<ShadowState>;
   inputs: ComponentStore<InputState>;
+  lights: ComponentStore<LightState>;
   target: ComponentStore;
 
   constructor(id: string) {
     super(id);
     const ents = this.entities;
+    this.point_lights = new Map();
     this.lifetime = ents.registerComponent('lifetime', Lifetime);
     this.position = ents.registerComponent('position', Position);
     this.inputs = ents.registerComponent('inputs', Inputs(this));
@@ -51,6 +54,7 @@ class TypedEnv extends Env {
     this.physics = ents.registerComponent('physics', Physics(this));
     this.meshes = ents.registerComponent('meshes', Meshes(this));
     this.shadow = ents.registerComponent('shadow', Shadow(this));
+    this.lights = ents.registerComponent('lights', Lights(this));
     this.target = ents.registerComponent('camera-target', CameraTarget(this));
   }
 };
@@ -74,7 +78,7 @@ const flowWater = (env: TypedEnv, water: BlockId, points: Point[]) => {
     env.world.setBlock(p[0], p[1], p[2], water);
     for (const d of kWaterDisplacements) {
       const n: Point = [int(p[0] - d[0]), int(p[1] - d[1]), int(p[2] - d[2])];
-      const key = `${n[0]}-${n[1]}-${n[2]}`;
+      const key = `${n[0]},${n[1]},${n[2]}`;
       if (visited.has(key)) continue;
       visited.add(key);
       next.push(n);
@@ -321,13 +325,11 @@ const Physics = (env: TypedEnv): Component<PhysicsState> => ({
     const position = env.position.get(state.id);
     if (position) setPositionFromPhysics(position, state);
   },
-  onRender: (dt: number, states: PhysicsState[]) => {
+  onUpdate: (dt: number, states: PhysicsState[]) => {
     for (const state of states) {
+      runPhysics(env, dt, state);
       setPositionFromPhysics(env.position.getX(state.id), state);
     }
-  },
-  onUpdate: (dt: number, states: PhysicsState[]) => {
-    for (const state of states) runPhysics(env, dt, state);
   },
 });
 
@@ -988,6 +990,72 @@ const Shadow = (env: TypedEnv): Component<ShadowState> => ({
   },
 });
 
+// An entity with a LightState casts light.
+
+interface LightState {
+  id: EntityId,
+  index: int,
+  level: int,
+};
+
+interface PointLight {
+  x: int,
+  y: int,
+  z: int,
+  level: int,
+};
+
+const Lights = (env: TypedEnv): Component<LightState> => ({
+  init: () => ({id: kNoEntity, index: 0, level: 0}),
+  onRemove: (state: LightState) => {},
+  onUpdate: (dt: number, states: LightState[]) => {
+    const old_lights = env.point_lights;
+    const new_lights: Map<string, PointLight> = new Map();
+
+    for (const state of states) {
+      if (state.level === 0) continue;
+      const position = env.position.getX(state.id);
+      const x = int(Math.floor(position.x));
+      const y = int(Math.floor(position.y));
+      const z = int(Math.floor(position.z));
+
+      const fx = position.x - x;
+      const fz = position.z - z;
+      const ax = fx <  0.25 ? int(x - 1) : x;
+      const bx = fx >= 0.75 ? int(x + 1) : x;
+      const az = fz <  0.25 ? int(z - 1) : z;
+      const bz = fz >= 0.75 ? int(z + 1) : z;
+
+      for (let x = ax; x <= bx; x++) {
+        for (let z = az; z <= bz; z++) {
+          const key = `${x},${y},${z}`;
+          const new_value = new_lights.get(key);
+          if (new_value === undefined) {
+            new_lights.set(key, {x, y, z, level: state.level});
+          } else {
+            new_value.level = int(Math.max(new_value.level, state.level));
+          }
+        }
+      }
+    }
+
+    for (const [key, old_value] of old_lights.entries()) {
+      if (new_lights.get(key)?.level !== old_value.level) {
+        const {x, y, z} = old_value;
+        env.world.setPointLight(x, y, z, 0);
+      }
+    }
+    for (const [key, new_value] of new_lights.entries()) {
+      if (old_lights.get(key)?.level !== new_value.level) {
+        const {x, y, z, level} = new_value;
+        env.world.setPointLight(x, y, z, level);
+      }
+    }
+
+    env.point_lights = new_lights;
+  },
+});
+
 // CameraTarget signifies that the camera will follow an entity.
 
 const CameraTarget = (env: TypedEnv): Component => ({
@@ -1049,6 +1117,10 @@ const addEntity = (env: TypedEnv, image: string, size: number,
   const sprite = {url: `images/${image}.png`, x: int(32), y: int(32)};
   mesh.mesh = env.renderer.addSpriteMesh(size, sprite);
   mesh.columns = 3;
+
+  if (image !== 'player') {
+    env.lights.add(entity).level = 14;
+  }
 
   env.physics.add(entity);
   env.shadow.add(entity);

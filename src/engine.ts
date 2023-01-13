@@ -642,7 +642,7 @@ const kChunkRadius = 12;
 
 const kNumChunksToLoadPerFrame = 1;
 const kNumChunksToMeshPerFrame = 1;
-const kNumChunksToLightPerFrame = 1;
+const kNumChunksToLightPerFrame = 4;
 const kNumLODChunksToMeshPerFrame = 1;
 
 const kFrontierLOD = 2;
@@ -728,6 +728,7 @@ class Chunk {
   private solid: VoxelMesh | null = null;
   private water: VoxelMesh | null = null;
   private light: LightTexture | null = null;
+  private point_lights: Map<int, int>;
   private world: World;
   private voxels: Tensor3;
   private heightmap: Tensor2;
@@ -775,6 +776,7 @@ class Chunk {
     this.voxels = new Tensor3(kChunkWidth, kWorldHeight, kChunkWidth);
     this.heightmap = new Tensor2(kChunkWidth, kChunkWidth);
     this.equilevels = new Int8Array(kWorldHeight);
+    this.point_lights = new Map();
 
     this.stage1_dirty = [];
     this.stage1_edges = new Set();
@@ -819,7 +821,7 @@ class Chunk {
 
     const old = voxels.get(xm, y, zm) as BlockId;
     if (old === block) return;
-    const index = voxels.index(xm, y, zm);
+    const index = int((xm << kChunkShiftX) | y | (zm << kChunkShiftZ));
     voxels.data[index] = block;
 
     this.dirty = true;
@@ -860,6 +862,15 @@ class Chunk {
     }
 
     this.updateHeightmap(xm, zm, index, start, count, block);
+  }
+
+  setPointLight(x: int, y: int, z: int, level: int): void {
+    const xm = int(x & kChunkMask), zm = int(z & kChunkMask);
+    const index = int((xm << kChunkShiftX) | y | (zm << kChunkShiftZ));
+    level > 0 ? this.point_lights.set(index, level)
+              : this.point_lights.delete(index);
+    this.stage1_dirty.push(index);
+    this.stage2_dirty = true;
   }
 
   hasMesh(): boolean {
@@ -1037,10 +1048,13 @@ class Chunk {
       const from_block = block_light[voxels_data[index]];
       if (from_block < 0) return 0;
 
+      const from_point = this.point_lights.get(index) || 0;
+      const base = Math.max(from_block, from_point);
+
       const height = heightmap_data[index >> 8];
       if ((index & 0xff) >= height) return kSunlightLevel;
 
-      let max_neighbor = from_block + 1;
+      let max_neighbor = base + 1;
       for (const spread of kSpread) {
         if ((index & spread.mask) === spread.test) continue;
         const neighbor_index = int(index + spread.diff);
@@ -1875,6 +1889,15 @@ class World {
         buffer.set(x, 0, z, bedrock);
       }
     }
+  }
+
+  setPointLight(x: int, y: int, z: int, level: int): void {
+    if (!(0 <= y && y < kWorldHeight)) return;
+    const cx = int(x >> kChunkBits), cz = int(z >> kChunkBits);
+    const chunk = this.chunks.get(cx, cz);
+    // We can't support a block light of kSunlightLevel until we have separate
+    // channels for block light and sunlight.
+    chunk?.setPointLight(x, y, z, int(Math.min(level, kSunlightLevel - 1)));
   }
 
   recenter(x: number, y: number, z: number) {
