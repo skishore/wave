@@ -1101,11 +1101,13 @@ class Chunk {
     const {cx, cz} = this;
     const chunks = this.world.chunks;
     const zone: (Chunk | null)[] = new Array(16).fill(null);
-    const data: (Uint8Array | null)[] = new Array(16).fill(null);
+    const zone_lights: (Uint8Array | null)[] = new Array(16).fill(null);
+    const zone_voxels: (Uint8Array | null)[] = new Array(16).fill(null);
     for (const {x, z} of kZone) {
       const index = getIndex(x, z);
       const chunk = nonnull(chunks.get(int(x + cx), int(z + cz)));
-      data[index] = chunk.stage1_lights.data;
+      zone_lights[index] = chunk.stage1_lights.data;
+      zone_voxels[index] = chunk.voxels.data;
       zone[index] = chunk;
     }
 
@@ -1123,12 +1125,17 @@ class Chunk {
     // To avoid needing Theta(n) heap allocations, we flatten `deltas`.
     const deltas: int[] = [];
     const opaque = this.world.registry.opaque;
-    let prev: int[] = [];
-    let next: int[] = [];
+
+    // Cells at a light level of i appear in stage[kSunlightLevel - i - 1].
+    // Cells at a light level of {0, 1} don't propagate, so we drop them.
+    assert(kSunlightLevel > 2);
+    const stages: int[][] = Array(kSunlightLevel - 2).fill(null).map(_ => []);
+    const stage0 = stages[0];
 
     for (const {x, z} of kZone) {
       const chunk = nonnull(zone[getIndex(x, z)]);
       const edges = Array.from(chunk.stage1_edges);
+      const light = chunk.stage1_lights.data;
       const heightmap = chunk.heightmap.data;
 
       for (let i = 0; i < 4; i++) {
@@ -1139,34 +1146,53 @@ class Chunk {
         const nx = int(x + dx), nz = int(z + dz);
         if (!(-1 <= nx && nx <= 1 && -1 <= nz && nz <= 1)) continue;
 
-        const source = test;
-        const target = source ^ mask;
-        const stride = mask === 0x0f00 ? 0x1000 : 0x0100;
-        const neighbor_index = getIndex(nx, nz);
-        const neighbor_union = neighbor_index << 16;
-        const neighbor_chunk = nonnull(zone[neighbor_index]);
-        const neighbor_heightmap = neighbor_chunk.heightmap.data;
+        const ni = getIndex(nx, nz);
+        const neighbor_union = ni << 16;
+        const neighbor_chunk = nonnull(zone[ni]);
+        const neighbor_light = neighbor_chunk.stage1_lights.data;
 
         for (const index of edges) {
           if ((index & mask) !== test) continue;
-          prev.push(((index ^ mask) | neighbor_union) as int);
+
+          const level = light[index] - 1;
+          const neighbor_index = index ^ mask;
+          const neighbor_level = int(neighbor_light[neighbor_index]);
+          if (level <= neighbor_level) continue;
+
+          const neighbor_location = (neighbor_index | neighbor_union) as int;
+          neighbor_light[neighbor_index] = level;
+          deltas.push(neighbor_location);
+          deltas.push(neighbor_level);
+
+          if (level <= 1) continue;
+          stages[kSunlightLevel - level - 1].push(neighbor_location);
         }
 
         let offset = 0;
+        const source = test;
+        const target = source ^ mask;
+        const stride = mask === 0x0f00 ? 0x1000 : 0x0100;
+        const neighbor_heightmap = neighbor_chunk.heightmap.data;
+        const level = kSunlightLevel - 1;
+
         for (let j = 0; j < kChunkWidth; j++, offset += stride) {
           const height = heightmap[(source + offset) >> 8];
           const neighbor_height = neighbor_heightmap[(target + offset) >> 8];
           for (let y = height; y < neighbor_height; y++) {
-            prev.push(((target + offset + y) | neighbor_union) as int);
+            const neighbor_index = target + offset + y;
+            const neighbor_level = int(neighbor_light[neighbor_index]);
+            if (level <= neighbor_level) continue;
+
+            const neighbor_location = (neighbor_index | neighbor_union) as int;
+            neighbor_light[neighbor_index] = level;
+            deltas.push(neighbor_location);
+            deltas.push(neighbor_level);
+
+            stage0.push(neighbor_location);
           }
         }
       }
     }
-
-    // Returns the current light value at a given location.
-    const current = (location: int): int => {
-      return int(data[location >> 16]![location & 0xffff]);
-    };
 
     // Returns the given location, shifted by the delta. If the shift is out
     // of bounds any direction, it'll return -1.
@@ -1192,71 +1218,40 @@ class Chunk {
       return -1;
     };
 
-    // Returns the updated lighting value at the given location.
-    //
-    // This helper carefully uses the `prev` light level ways that are
-    // not possible in stage 1, because we take advantage of the fact that
-    // stage 1 lighting is correct when we run stage 2. The stage 2 light at
-    // at a cell is always greater than or equal to the stage 1 light, so:
-    //
-    //   - If the current light level is non-zero, then the cell is definitely
-    //     not a solid cell (solid cells always have a light level of 0).
-    //
-    //   - If the current light level is kSunlightLevel, the maximum level,
-    //     then we don't need to examine neighbors; the light is unchanged.
-    //     Conversely, if the current light level is less than the max, then
-    //     the cell definitely isn't in unobstructed sunlight, since it would
-    //     have a stage 1 light of kSunlightLevel in that case.
-    //
-    const query = (location: int, prev: int): int => {
-      if (prev === kSunlightLevel) return kSunlightLevel;
+    for (let level = int(kSunlightLevel - 2); level > 0; level--) {
+      const prev = stages[kSunlightLevel - level - 2];
+      const next = level > 1 ? stages[kSunlightLevel - level - 1] : null;
+      const prev_level = level + 1;
 
-      if (prev === 0) {
-        const chunk = zone[location >> 16]!;
-        const index = location & 0xffff;
-        if (opaque[chunk.voxels.data[index]]) return 0;
-      }
-
-      let max_neighbor = prev + 1;
-      for (const spread of kSpread) {
-        const neighbor_index = shift(location, spread);
-        if (neighbor_index >= 0) {
-          const neighbor = current(neighbor_index);
-          if (neighbor > max_neighbor) max_neighbor = neighbor;
-        }
-      }
-      return int(max_neighbor - 1);
-    };
-
-    // Enqueues new locations that may be affected by the given change.
-    const enqueue = (location: int, hi: int, lo: int): void => {
-      for (const spread of kSpread) {
-        const neighbor_index = shift(location, spread);
-        if (neighbor_index >= 0) {
-          const neighbor = current(neighbor_index);
-          if (lo <= neighbor && neighbor <= hi) next.push(neighbor_index);
-        }
-      }
-    };
-
-    while (prev.length > 0) {
       for (const location of prev) {
+        const current_level = zone_lights[location >> 16]![location & 0xffff];
+        if (current_level != prev_level) continue;
+
         // TODO(skishore): If the index is too far from the center given its
-        // current light value, drop the update here.
-        const prev = current(location);
-        const next = query(location, prev);
-        if (next === prev) continue;
+        // current light value, don't enqueue its neighbors here.
+        for (const spread of kSpread) {
+          const neighbor_location = shift(location, spread);
+          if (neighbor_location < 0) continue;
 
-        data[location >> 16]![location & 0xffff] = next;
-        deltas.push(location);
-        deltas.push(prev);
+          const neighbor_union = neighbor_location >> 16;
+          const neighbor_index = neighbor_location & 0xffff;
+          const neighbor_light = zone_lights[neighbor_union]!;
+          const neighbor_level = int(neighbor_light[neighbor_index]);
+          if (level <= neighbor_level) continue;
 
-        const hi = maxUpdatedNeighborLight(next, prev);
-        const lo = minUpdatedNeighborLight(next, prev);
-        enqueue(location, hi, lo);
+          if (neighbor_level === 0) {
+            const voxels = zone_voxels[neighbor_union]!;
+            if (opaque[voxels[neighbor_index]]) continue;
+          }
+
+          neighbor_light[neighbor_index] = level;
+          deltas.push(neighbor_location);
+          deltas.push(neighbor_level);
+
+          if (next === null) continue;
+          next.push(neighbor_location);
+        }
       }
-      [prev, next] = [next, prev];
-      next.length = 0;
     }
 
     assert(getIndex(0, 0) === 5);
@@ -1272,7 +1267,7 @@ class Chunk {
     }
     for (let i = deltas.length - 2; i >= 0; i -= 2) {
       const location = deltas[i + 0];
-      data[location >> 16]![location & 0xffff] = deltas[i + 1];
+      zone_lights[location >> 16]![location & 0xffff] = deltas[i + 1];
     }
     this.stage2_dirty = false;
   }
