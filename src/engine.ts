@@ -1194,6 +1194,19 @@ class Chunk {
       }
     }
 
+    // Returns the taxicab distance from the location to the center chunk.
+    const distance = (location: int): int => {
+      const cx = (location >> 16) & 0x3;
+      const x  = (location >> 8 ) & 0xf;
+      const dx = cx === 0 ? 16 - x : cx === 1 ? 0 : x - 31;
+
+      const cz = (location >> 18) & 0x3;
+      const z  = (location >> 12) & 0xf;
+      const dz = cz === 0 ? 16 - z : cz === 1 ? 0 : z - 31;
+
+      return int(dx + dz);
+    };
+
     // Returns the given location, shifted by the delta. If the shift is out
     // of bounds any direction, it'll return -1.
     const shift = (location: int, spread: LightSpread): int => {
@@ -1224,6 +1237,7 @@ class Chunk {
       const prev_level = level + 1;
 
       for (const location of prev) {
+        if (distance(location) > level) continue;
         const current_level = zone_lights[location >> 16]![location & 0xffff];
         if (current_level != prev_level) continue;
 
