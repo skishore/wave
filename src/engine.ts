@@ -435,6 +435,7 @@ class Column {
       const level = this.decorations[i + 1];
       chunk.setColumn(x, z, level, 1, block);
     }
+    return;
     this.detectEquiLevelChanges(first);
   }
 
@@ -647,7 +648,7 @@ const kNumLODChunksToMeshPerFrame = 1;
 
 const kFrontierLOD = 2;
 const kFrontierRadius = 8;
-const kFrontierLevels = 6;
+const kFrontierLevels = 0;
 
 // Enable debug assertions for the equi-levels optimization.
 const kCheckEquilevels = false;
@@ -2232,3 +2233,4 @@ class Env {
 
 export {BlockId, MaterialId, Column, Env};
 export {kChunkWidth, kEmptyBlock, kNoMaterial, kWorldHeight};
+export {Circle};

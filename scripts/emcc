@@ -1,3 +1,14 @@
 #!/bin/bash
-CC="emcc -g2 -O2 -fno-exceptions -fno-rtti -mnontrapping-fptoint -sALLOW_MEMORY_GROWTH -sFILESYSTEM=0 -sWASM=1"
-$CC src/engine.cpp
+
+#TODO(skishore): Get the code to compile with -Wsign-conversion.
+CC="emcc -O2 -fno-exceptions -fno-rtti -mnontrapping-fptoint -sALLOW_MEMORY_GROWTH -sENVIRONMENT=web -sFILESYSTEM=0 -sWASM=1 -Wl,--export=malloc -Wl,--export=free -Wall -Wconversion -Werror -Wno-sign-conversion -g2"
+#CC="emcc -O2 -fno-exceptions -fno-rtti -mnontrapping-fptoint -sALLOW_MEMORY_GROWTH -sENVIRONMENT=web -sFILESYSTEM=0 -sWASM=1 -Wl,--export=malloc -Wl,--export=free -Wall -Wconversion -Werror -Wno-sign-conversion -DNDEBUG"
+
+set -ex
+
+$CC src/engine.cpp src/open-simplex-2d.cpp src/worldgen.cpp
+
+echo "" >> a.out.js
+echo "__ATPOSTRUN__.push(() => window.onWasmCompile(Module));" >> a.out.js
+sed -i '' 's/var asm = createWasm/window.beforeWasmCompile(asmLibraryArg); var asm = createWasm/g' a.out.js
+stat -f '%z' a.out.wasm

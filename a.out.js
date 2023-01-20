@@ -10,11 +10,9 @@ var quit_ = (status, toThrow) => {
  throw toThrow;
 };
 
-var ENVIRONMENT_IS_WEB = typeof window == "object";
+var ENVIRONMENT_IS_WEB = true;
 
-var ENVIRONMENT_IS_WORKER = typeof importScripts == "function";
-
-var ENVIRONMENT_IS_NODE = typeof process == "object" && typeof process.versions == "object" && typeof process.versions.node == "string";
+var ENVIRONMENT_IS_WORKER = false;
 
 var scriptDirectory = "";
 
@@ -27,64 +25,7 @@ function locateFile(path) {
 
 var read_, readAsync, readBinary, setWindowTitle;
 
-function logExceptionOnExit(e) {
- if (e instanceof ExitStatus) return;
- let toLog = e;
- err("exiting due to exception: " + toLog);
-}
-
-if (ENVIRONMENT_IS_NODE) {
- var fs = require("fs");
- var nodePath = require("path");
- if (ENVIRONMENT_IS_WORKER) {
-  scriptDirectory = nodePath.dirname(scriptDirectory) + "/";
- } else {
-  scriptDirectory = __dirname + "/";
- }
- read_ = (filename, binary) => {
-  filename = isFileURI(filename) ? new URL(filename) : nodePath.normalize(filename);
-  return fs.readFileSync(filename, binary ? undefined : "utf8");
- };
- readBinary = filename => {
-  var ret = read_(filename, true);
-  if (!ret.buffer) {
-   ret = new Uint8Array(ret);
-  }
-  return ret;
- };
- readAsync = (filename, onload, onerror) => {
-  filename = isFileURI(filename) ? new URL(filename) : nodePath.normalize(filename);
-  fs.readFile(filename, function(err, data) {
-   if (err) onerror(err); else onload(data.buffer);
-  });
- };
- if (process["argv"].length > 1) {
-  thisProgram = process["argv"][1].replace(/\\/g, "/");
- }
- arguments_ = process["argv"].slice(2);
- if (typeof module != "undefined") {
-  module["exports"] = Module;
- }
- process["on"]("uncaughtException", function(ex) {
-  if (!(ex instanceof ExitStatus)) {
-   throw ex;
-  }
- });
- process["on"]("unhandledRejection", function(reason) {
-  throw reason;
- });
- quit_ = (status, toThrow) => {
-  if (keepRuntimeAlive()) {
-   process["exitCode"] = status;
-   throw toThrow;
-  }
-  logExceptionOnExit(toThrow);
-  process["exit"](status);
- };
- Module["inspect"] = function() {
-  return "[Emscripten Module object]";
- };
-} else if (ENVIRONMENT_IS_WEB || ENVIRONMENT_IS_WORKER) {
+if (ENVIRONMENT_IS_WEB || ENVIRONMENT_IS_WORKER) {
  if (ENVIRONMENT_IS_WORKER) {
   scriptDirectory = self.location.href;
  } else if (typeof document != "undefined" && document.currentScript) {
@@ -268,10 +209,6 @@ var __ATPOSTRUN__ = [];
 
 var runtimeInitialized = false;
 
-function keepRuntimeAlive() {
- return noExitRuntime;
-}
-
 function preRun() {
  if (Module["preRun"]) {
   if (typeof Module["preRun"] == "function") Module["preRun"] = [ Module["preRun"] ];
@@ -359,10 +296,6 @@ function isDataURI(filename) {
  return filename.startsWith(dataURIPrefix);
 }
 
-function isFileURI(filename) {
- return filename.startsWith("file://");
-}
-
 var wasmBinaryFile;
 
 wasmBinaryFile = "a.out.wasm";
@@ -387,7 +320,7 @@ function getBinary(file) {
 
 function getBinaryPromise() {
  if (!wasmBinary && (ENVIRONMENT_IS_WEB || ENVIRONMENT_IS_WORKER)) {
-  if (typeof fetch == "function" && !isFileURI(wasmBinaryFile)) {
+  if (typeof fetch == "function") {
    return fetch(wasmBinaryFile, {
     credentials: "same-origin"
    }).then(function(response) {
@@ -398,14 +331,6 @@ function getBinaryPromise() {
    }).catch(function() {
     return getBinary(wasmBinaryFile);
    });
-  } else {
-   if (readAsync) {
-    return new Promise(function(resolve, reject) {
-     readAsync(wasmBinaryFile, function(response) {
-      resolve(new Uint8Array(response));
-     }, reject);
-    });
-   }
   }
  }
  return Promise.resolve().then(function() {
@@ -442,7 +367,7 @@ function createWasm() {
   });
  }
  function instantiateAsync() {
-  if (!wasmBinary && typeof WebAssembly.instantiateStreaming == "function" && !isDataURI(wasmBinaryFile) && !isFileURI(wasmBinaryFile) && !ENVIRONMENT_IS_NODE && typeof fetch == "function") {
+  if (!wasmBinary && typeof WebAssembly.instantiateStreaming == "function" && !isDataURI(wasmBinaryFile) && typeof fetch == "function") {
    return fetch(wasmBinaryFile, {
     credentials: "same-origin"
    }).then(function(response) {
@@ -473,12 +398,6 @@ function createWasm() {
 var tempDouble;
 
 var tempI64;
-
-function ExitStatus(status) {
- this.name = "ExitStatus";
- this.message = "Program terminated with exit(" + status + ")";
- this.status = status;
-}
 
 function callRuntimeCallbacks(callbacks) {
  while (callbacks.length > 0) {
@@ -538,22 +457,58 @@ var asmLibraryArg = {
  "emscripten_resize_heap": _emscripten_resize_heap
 };
 
-var asm = createWasm();
+window.beforeWasmCompile(asmLibraryArg); var asm = createWasm();
 
 var ___wasm_call_ctors = Module["___wasm_call_ctors"] = function() {
  return (___wasm_call_ctors = Module["___wasm_call_ctors"] = Module["asm"]["__wasm_call_ctors"]).apply(null, arguments);
 };
 
-var _create_world = Module["_create_world"] = function() {
- return (_create_world = Module["_create_world"] = Module["asm"]["create_world"]).apply(null, arguments);
+var _initializeWorld = Module["_initializeWorld"] = function() {
+ return (_initializeWorld = Module["_initializeWorld"] = Module["asm"]["initializeWorld"]).apply(null, arguments);
 };
 
-var _update_world = Module["_update_world"] = function() {
- return (_update_world = Module["_update_world"] = Module["asm"]["update_world"]).apply(null, arguments);
+var _updateWorld = Module["_updateWorld"] = function() {
+ return (_updateWorld = Module["_updateWorld"] = Module["asm"]["updateWorld"]).apply(null, arguments);
+};
+
+var _getBlock = Module["_getBlock"] = function() {
+ return (_getBlock = Module["_getBlock"] = Module["asm"]["getBlock"]).apply(null, arguments);
+};
+
+var _setBlock = Module["_setBlock"] = function() {
+ return (_setBlock = Module["_setBlock"] = Module["asm"]["setBlock"]).apply(null, arguments);
+};
+
+var _createNoise2D = Module["_createNoise2D"] = function() {
+ return (_createNoise2D = Module["_createNoise2D"] = Module["asm"]["createNoise2D"]).apply(null, arguments);
+};
+
+var _queryNoise2D = Module["_queryNoise2D"] = function() {
+ return (_queryNoise2D = Module["_queryNoise2D"] = Module["asm"]["queryNoise2D"]).apply(null, arguments);
+};
+
+var _noise = Module["_noise"] = function() {
+ return (_noise = Module["_noise"] = Module["asm"]["noise"]).apply(null, arguments);
+};
+
+var _heightmap = Module["_heightmap"] = function() {
+ return (_heightmap = Module["_heightmap"] = Module["asm"]["heightmap"]).apply(null, arguments);
+};
+
+var _loadChunk = Module["_loadChunk"] = function() {
+ return (_loadChunk = Module["_loadChunk"] = Module["asm"]["loadChunk"]).apply(null, arguments);
 };
 
 var ___errno_location = Module["___errno_location"] = function() {
  return (___errno_location = Module["___errno_location"] = Module["asm"]["__errno_location"]).apply(null, arguments);
+};
+
+var _malloc = Module["_malloc"] = function() {
+ return (_malloc = Module["_malloc"] = Module["asm"]["malloc"]).apply(null, arguments);
+};
+
+var _free = Module["_free"] = function() {
+ return (_free = Module["_free"] = Module["asm"]["free"]).apply(null, arguments);
 };
 
 var stackSave = Module["stackSave"] = function() {
@@ -614,3 +569,5 @@ if (Module["preInit"]) {
 }
 
 run();
+
+__ATPOSTRUN__.push(() => window.onWasmCompile(Module));
