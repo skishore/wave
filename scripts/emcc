@@ -1,0 +1,3 @@
+#!/bin/bash
+CC="emcc -g2 -O2 -fno-exceptions -fno-rtti -mnontrapping-fptoint -sALLOW_MEMORY_GROWTH -sFILESYSTEM=0 -sWASM=1"
+$CC src/engine.cpp
