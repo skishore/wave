@@ -84,8 +84,6 @@ if (Module["thisProgram"]) thisProgram = Module["thisProgram"];
 
 if (Module["quit"]) quit_ = Module["quit"];
 
-var POINTER_SIZE = 4;
-
 var wasmBinary;
 
 if (Module["wasmBinary"]) wasmBinary = Module["wasmBinary"];
@@ -101,12 +99,6 @@ var wasmMemory;
 var ABORT = false;
 
 var EXITSTATUS;
-
-function assert(condition, text) {
- if (!condition) {
-  abort(text);
- }
-}
 
 var UTF8Decoder = typeof TextDecoder != "undefined" ? new TextDecoder("utf8") : undefined;
 
@@ -196,8 +188,6 @@ function updateMemoryViews() {
  Module["HEAPF32"] = HEAPF32 = new Float32Array(b);
  Module["HEAPF64"] = HEAPF64 = new Float64Array(b);
 }
-
-var INITIAL_MEMORY = Module["INITIAL_MEMORY"] || 16777216;
 
 var wasmTable;
 
@@ -340,8 +330,8 @@ function getBinaryPromise() {
 
 function createWasm() {
  var info = {
-  "env": asmLibraryArg,
-  "wasi_snapshot_preview1": asmLibraryArg
+  "env": wasmImports,
+  "wasi_snapshot_preview1": wasmImports
  };
  function receiveInstance(instance, module) {
   var exports = instance.exports;
@@ -450,17 +440,17 @@ function _emscripten_resize_heap(requestedSize) {
  return false;
 }
 
-var asmLibraryArg = {
+var wasmImports = {
  "__assert_fail": ___assert_fail,
  "abort": _abort,
  "emscripten_memcpy_big": _emscripten_memcpy_big,
  "emscripten_resize_heap": _emscripten_resize_heap
 };
 
-window.beforeWasmCompile(asmLibraryArg); var asm = createWasm();
+window.beforeWasmCompile(wasmImports); var asm = createWasm();
 
-var ___wasm_call_ctors = Module["___wasm_call_ctors"] = function() {
- return (___wasm_call_ctors = Module["___wasm_call_ctors"] = Module["asm"]["__wasm_call_ctors"]).apply(null, arguments);
+var ___wasm_call_ctors = function() {
+ return (___wasm_call_ctors = Module["asm"]["__wasm_call_ctors"]).apply(null, arguments);
 };
 
 var _initializeWorld = Module["_initializeWorld"] = function() {
@@ -499,8 +489,8 @@ var _loadChunk = Module["_loadChunk"] = function() {
  return (_loadChunk = Module["_loadChunk"] = Module["asm"]["loadChunk"]).apply(null, arguments);
 };
 
-var ___errno_location = Module["___errno_location"] = function() {
- return (___errno_location = Module["___errno_location"] = Module["asm"]["__errno_location"]).apply(null, arguments);
+var ___errno_location = function() {
+ return (___errno_location = Module["asm"]["__errno_location"]).apply(null, arguments);
 };
 
 var _malloc = Module["_malloc"] = function() {
@@ -511,16 +501,16 @@ var _free = Module["_free"] = function() {
  return (_free = Module["_free"] = Module["asm"]["free"]).apply(null, arguments);
 };
 
-var stackSave = Module["stackSave"] = function() {
- return (stackSave = Module["stackSave"] = Module["asm"]["stackSave"]).apply(null, arguments);
+var stackSave = function() {
+ return (stackSave = Module["asm"]["stackSave"]).apply(null, arguments);
 };
 
-var stackRestore = Module["stackRestore"] = function() {
- return (stackRestore = Module["stackRestore"] = Module["asm"]["stackRestore"]).apply(null, arguments);
+var stackRestore = function() {
+ return (stackRestore = Module["asm"]["stackRestore"]).apply(null, arguments);
 };
 
-var stackAlloc = Module["stackAlloc"] = function() {
- return (stackAlloc = Module["stackAlloc"] = Module["asm"]["stackAlloc"]).apply(null, arguments);
+var stackAlloc = function() {
+ return (stackAlloc = Module["asm"]["stackAlloc"]).apply(null, arguments);
 };
 
 var calledRun;
@@ -530,8 +520,7 @@ dependenciesFulfilled = function runCaller() {
  if (!calledRun) dependenciesFulfilled = runCaller;
 };
 
-function run(args) {
- args = args || arguments_;
+function run() {
  if (runDependencies > 0) {
   return;
  }

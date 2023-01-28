@@ -1,6 +1,7 @@
 #include "worldgen.h"
 
 #include <algorithm>
+#include <cmath>
 #include <vector>
 
 #include "base.h"

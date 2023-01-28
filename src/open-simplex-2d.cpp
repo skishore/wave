@@ -1,6 +1,7 @@
 #include "open-simplex-2d.h"
 
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 

@@ -10,5 +10,5 @@ $CC src/engine.cpp src/open-simplex-2d.cpp src/worldgen.cpp
 
 echo "" >> a.out.js
 echo "__ATPOSTRUN__.push(() => window.onWasmCompile(Module));" >> a.out.js
-sed -i '' 's/var asm = createWasm/window.beforeWasmCompile(asmLibraryArg); var asm = createWasm/g' a.out.js
+sed -i '' 's/var asm = createWasm/window.beforeWasmCompile(wasmImports); var asm = createWasm/g' a.out.js
 stat -f '%z' a.out.wasm
