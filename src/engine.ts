@@ -1974,18 +1974,18 @@ const kMinZUpperBound = 0.1;
 const lighting = (x: int): number => Math.pow(0.8, kSunlightLevel - x);
 
 class Env {
-  container: Container;
   entities: EntityComponentSystem;
   registry: Registry;
   renderer: Renderer;
-  world: World;
   private cameraColor: Color;
   private cameraMaterial: MaybeMaterialId;
+  private container: Container;
   private highlight: HighlightMesh;
   private highlightSide: int = -1;
   private highlightPosition: Vec3;
   private timing: Timing;
   private frame: number = 0;
+  private world: World;
 
   constructor(id: string) {
     this.container = new Container(id);
@@ -2005,6 +2005,18 @@ class Env {
     this.timing = new Timing(remesh, render, update);
   }
 
+  getBlock(x: int, y: int, z: int): BlockId {
+    return this.world.getBlock(x, y, z);
+  }
+
+  getLight(x: int, y: int, z: int): number {
+    return this.world.getLight(x, y, z);
+  }
+
+  getMutableInputs(): Record<Input, boolean> {
+    return this.container.inputs;
+  }
+
   getTargetedBlock(): Vec3 | null {
     return this.highlightSide < 0 ? null : this.highlightPosition;
   }
@@ -2013,9 +2025,25 @@ class Env {
     return this.highlightSide;
   }
 
+  setBlock(x: int, y: int, z: int, block: BlockId): void {
+    this.world.setBlock(x, y, z, block);
+  }
+
   setCameraTarget(x: number, y: number, z: number): void {
     this.renderer.camera.setTarget(x, y, z);
     this.setSafeZoomDistance();
+  }
+
+  setLoader(bedrock: BlockId, loadChunk: Loader, loadFrontier?: Loader) {
+    this.world.setLoader(bedrock, loadChunk, loadFrontier);
+  }
+
+  setPointLight(x: int, y: int, z: int, level: int): void {
+    this.world.setPointLight(x, y, z, level);
+  }
+
+  recenter(x: number, y: number, z: number): void {
+    this.world.recenter(x, y, z);
   }
 
   refresh(): void {

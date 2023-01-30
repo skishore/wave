@@ -34,7 +34,7 @@ interface Blocks {
 
 // Noise helpers:
 
-let noise_counter = (Math.random() * (1 << 30)) | 0;
+let noise_counter = 0; // (Math.random() * (1 << 30)) | 0;
 const noise2D = (): (x: number, y: number) => number => {
   return makeNoise2D(noise_counter++);
 };

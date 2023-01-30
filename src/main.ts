@@ -62,7 +62,7 @@ class TypedEnv extends Env {
 const hasWaterNeighbor = (env: TypedEnv, water: BlockId, p: Point) => {
   for (const d of kWaterDisplacements) {
     const x = int(d[0] + p[0]), y = int(d[1] + p[1]), z = int(d[2] + p[2]);
-    const block = env.world.getBlock(x, y, z);
+    const block = env.getBlock(x, y, z);
     if (block === water) return true;
   }
   return false;
@@ -73,9 +73,9 @@ const flowWater = (env: TypedEnv, water: BlockId, points: Point[]) => {
   const visited: Set<string> = new Set();
 
   for (const p of points) {
-    const block = env.world.getBlock(p[0], p[1], p[2]);
+    const block = env.getBlock(p[0], p[1], p[2]);
     if (block !== kEmptyBlock || !hasWaterNeighbor(env, water, p)) continue;
-    env.world.setBlock(p[0], p[1], p[2], water);
+    env.setBlock(p[0], p[1], p[2], water);
     for (const d of kWaterDisplacements) {
       const n: Point = [int(p[0] - d[0]), int(p[1] - d[1]), int(p[2] - d[2])];
       const key = `${n[0]},${n[1]},${n[2]}`;
@@ -206,7 +206,7 @@ const tryAutoStepping =
     const x = int(Math.floor(vel[0] > 0 ? max[0] + 0.5 : min[0] - 0.5));
     const y = int(Math.floor(min[1]));
     const z = int(Math.floor((min[2] + max[2]) / 2));
-    const block = env.world.getBlock(x, y, z);
+    const block = env.getBlock(x, y, z);
     return opaque[block] && solid[block];
   })();
   const step_z = (() => {
@@ -215,7 +215,7 @@ const tryAutoStepping =
     const x = int(Math.floor((min[0] + max[0]) / 2));
     const y = int(Math.floor(min[1]));
     const z = int(Math.floor(vel[2] > 0 ? max[2] + 0.5 : min[2] - 0.5));
-    const block = env.world.getBlock(x, y, z);
+    const block = env.getBlock(x, y, z);
     return opaque[block] && solid[block];
   })();
   if (!step_x && !step_z) return;
@@ -250,7 +250,7 @@ const runPhysics = (env: TypedEnv, dt: number, state: PhysicsState) => {
   if (state.mass <= 0) return;
 
   const check = (x: int, y: int, z: int) => {
-    const block = env.world.getBlock(x, y, z);
+    const block = env.getBlock(x, y, z);
     return !env.registry.solid[block];
   };
 
@@ -258,7 +258,7 @@ const runPhysics = (env: TypedEnv, dt: number, state: PhysicsState) => {
   const x = int(Math.floor((min[0] + max[0]) / 2));
   const y = int(Math.floor(min[1]));
   const z = int(Math.floor((min[2] + max[2]) / 2));
-  const block = env.world.getBlock(x, y, z);
+  const block = env.getBlock(x, y, z);
   state.inGrass = env.registry.getBlockMesh(block) !== null;
   state.inFluid = block !== kEmptyBlock && !state.inGrass;
 
@@ -470,9 +470,9 @@ const generateParticles =
 
 const modifyBlock = (env: TypedEnv, x: int, y: int, z: int,
                      block: BlockId, side: int): void => {
-  const old_block = env.world.getBlock(x, y, z);
-  env.world.setBlock(x, y, z, block);
-  const new_block = env.world.getBlock(x, y, z);
+  const old_block = env.getBlock(x, y, z);
+  env.setBlock(x, y, z, block);
+  const new_block = env.getBlock(x, y, z);
 
   if (env.blocks) {
     const water = env.blocks.water;
@@ -514,7 +514,7 @@ const tryToModifyBlock =
 
   if (block === kEmptyBlock) {
     for (let dy = 1; dy < 8; dy++) {
-      const above = env.world.getBlock(x, int(y + dy), z);
+      const above = env.getBlock(x, int(y + dy), z);
       if (env.registry.getBlockMesh(above) === null) break;
       modifyBlock(env, x, int(y + dy), z, block, side);
     }
@@ -591,7 +591,7 @@ const runInputs = (env: TypedEnv, state: InputState) => {
   if (!movement) return;
 
   // Process the inputs to get a heading, running, and jumping state.
-  const inputs = env.container.inputs;
+  const inputs = env.getMutableInputs();
   const fb = (inputs.up ? 1 : 0) - (inputs.down ? 1 : 0);
   const lr = (inputs.right ? 1 : 0) - (inputs.left ? 1 : 0);
   movement.jumping = inputs.space;
@@ -674,7 +674,7 @@ interface PathingState {
 };
 
 const solid = (env: TypedEnv, x: int, y: int, z: int): boolean => {
-  const block = env.world.getBlock(x, y, z);
+  const block = env.getBlock(x, y, z);
   return env.registry.solid[block];
 };
 
@@ -749,7 +749,7 @@ const nextPathStep = (env: TypedEnv, state: PathingState,
   if (result && !needs_precision && path_index < path.length - 1) {
     const blocked = (() => {
       const check = (x: int, y: int, z: int) => {
-        const block = env.world.getBlock(x, y, z);
+        const block = env.getBlock(x, y, z);
         return !env.registry.solid[block];
       };
 
@@ -917,7 +917,7 @@ const Meshes = (env: TypedEnv): Component<MeshState> => ({
     for (const state of states) {
       if (!state.mesh) continue;
       const {x, y, z, h} = env.position.getX(state.id);
-      const light = env.world.getLight(
+      const light = env.getLight(
           int(Math.floor(x)), int(Math.floor(y)), int(Math.floor(z)));
       state.mesh.setPosition(x, y - h / 2, z);
       state.mesh.setLight(light);
@@ -1042,13 +1042,13 @@ const Lights = (env: TypedEnv): Component<LightState> => ({
     for (const [key, old_value] of old_lights.entries()) {
       if (new_lights.get(key)?.level !== old_value.level) {
         const {x, y, z} = old_value;
-        env.world.setPointLight(x, y, z, 0);
+        env.setPointLight(x, y, z, 0);
       }
     }
     for (const [key, new_value] of new_lights.entries()) {
       if (old_lights.get(key)?.level !== new_value.level) {
         const {x, y, z, level} = new_value;
-        env.world.setPointLight(x, y, z, level);
+        env.setPointLight(x, y, z, level);
       }
     }
 
@@ -1072,7 +1072,7 @@ const CameraTarget = (env: TypedEnv): Component => ({
   onUpdate: (dt: number, states: ComponentState[]) => {
     for (const state of states) {
       const {x, y, z} = env.position.getX(state.id);
-      env.world.recenter(x, y, z);
+      env.recenter(x, y, z);
     }
   },
 });
@@ -1189,7 +1189,7 @@ const main = () => {
   env.blocks = blocks;
   const loadChunkFn = loadChunk(blocks);
   const loadFrontierFn = loadFrontier(blocks);
-  env.world.setLoader(blocks.bedrock, loadChunkFn, loadFrontierFn);
+  env.setLoader(blocks.bedrock, loadChunkFn, loadFrontierFn);
   env.refresh();
 };
 
