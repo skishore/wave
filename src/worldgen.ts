@@ -34,7 +34,7 @@ interface Blocks {
 
 // Noise helpers:
 
-let noise_counter = 0; // (Math.random() * (1 << 30)) | 0;
+let noise_counter = (Math.random() * (1 << 30)) | 0;
 const noise2D = (): (x: number, y: number) => number => {
   return makeNoise2D(noise_counter++);
 };
@@ -274,7 +274,6 @@ const loadChunk = (blocks: Blocks) => (x: int, z: int, column: Column) => {
     }
   }
   const cave_height = carve_caves(blocks, x, z, column, limit, height);
-  return;
 
   if (tile === blocks.grass && cave_height < height) {
     const hash = hash_point(x, z) & 63;
@@ -290,4 +289,3 @@ const loadFrontier = (blocks: Blocks) => (x: int, z: int, column: Column) => {
 };
 
 export {Blocks, getHeight, loadChunk, loadFrontier};
-export {HeightmapResult, heightmap, mgv7_np_terrain_cliff as noise};

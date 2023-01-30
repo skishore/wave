@@ -435,7 +435,6 @@ class Column {
       const level = this.decorations[i + 1];
       chunk.setColumn(x, z, level, 1, block);
     }
-    return;
     this.detectEquiLevelChanges(first);
   }
 
@@ -648,7 +647,7 @@ const kNumLODChunksToMeshPerFrame = 1;
 
 const kFrontierLOD = 2;
 const kFrontierRadius = 8;
-const kFrontierLevels = 0;
+const kFrontierLevels = 6;
 
 // Enable debug assertions for the equi-levels optimization.
 const kCheckEquilevels = false;
@@ -2231,6 +2230,64 @@ class Env {
 
 //////////////////////////////////////////////////////////////////////////////
 
-export {BlockId, MaterialId, Column, Env};
+type WasmCharPtr   = int & {__cpp_type__: 'char*'};
+type WasmNoise2D   = int & {__cpp_type__: 'voxels::Noise2D*'};
+type WasmHeightmap = int & {__cpp_type__: 'voxels::Heightmap*'};
+
+interface WasmModule {
+  HEAP8:   Int8Array,
+  HEAP16:  Int16Array,
+  HEAP32:  Int32Array,
+  HEAPF32: Float32Array,
+  HEAPF64: Float32Array,
+  HEAPU8:  Uint8Array,
+  HEAPU16: Uint16Array,
+  HEAPU32: Uint32Array,
+  asm: {
+    free:   (WasmCharPtr: int) => void,
+    malloc: (bytes: int) => WasmCharPtr,
+
+    noise: (x: int, y: int) => number,
+    heightmap: (x: int, y: int) => WasmHeightmap,
+    loadChunk: (cx: int, cz: int) => WasmCharPtr,
+
+    createNoise2D: (seed: int) => WasmNoise2D,
+    queryNoise2D:  (noise: WasmNoise2D, x: number, y: number) => number,
+
+    initializeWorld: (radius: number) => void,
+    updateWorld:     (x: int, z: int) => void,
+  },
+};
+
+class WasmHelper {
+  module: WasmModule;
+  initializeWorld: (radius: number) => void;
+  updateWorld: (x: int, z: int) => void;
+
+  constructor(module: WasmModule) {
+    this.module = module;
+    this.initializeWorld = module.asm.initializeWorld;
+    this.updateWorld = module.asm.updateWorld;
+  }
+};
+
+let loaded = false;
+let helper: WasmHelper | null = null;
+let on_start_callbacks: (() => void)[] = [];
+
+const checkReady = () => {
+  if (!(loaded && helper)) return;
+  on_start_callbacks.forEach(x => x());
+};
+
+const init = (fn: () => void) => on_start_callbacks.push(fn);
+
+window.onload = () => { loaded = true; checkReady(); };
+(window as any).beforeWasmCompile = (env: any) => {};
+(window as any).onWasmCompile =
+  (m: WasmModule) => { helper = new WasmHelper(m); checkReady(); };
+
+//////////////////////////////////////////////////////////////////////////////
+
+export {BlockId, MaterialId, Column, Env, init};
 export {kChunkWidth, kEmptyBlock, kNoMaterial, kWorldHeight};
-export {Circle};
