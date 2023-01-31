@@ -784,8 +784,8 @@ const nextPathStep = (env: TypedEnv, state: PathingState,
       // the current path is blocked, then the path from the center of the cell
       // is not blocked (i.e. double-check the supposed invariant). If it fails,
       // then pathing to the block center is useless and we'll skip it.
-      return (dy <= 0 || check_move(0, dy, 0)) &&
-             (!(dx || dz) || check_move(dx, 0, dz));
+      return (dy > 0 && check_move(0, dy, 0)) ||
+             ((dx || dz) && check_move(dx, 0, dz));
     })();
 
     if (blocked) {
