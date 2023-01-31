@@ -16,7 +16,8 @@ constexpr int kChunkMask  = kChunkWidth - 1;
 constexpr int kWorldHeight = 256;
 
 enum class Block : uint8_t {
-  Air, Unknown, Dirt, Sand, Snow, Grass, Stone, Water, Bedrock };
+  Air, Unknown, Bedrock, Bush, Dirt, Fungi, Grass,
+  Rock, Sand, Snow, Stone, Trunk, Water };
 
 #define WASM_EXPORT(X) __attribute__((export_name(#X))) extern "C"
 
@@ -28,6 +29,13 @@ enum class Block : uint8_t {
 
 constexpr bool isPowTwo(int input) {
   return (input & (input - 1)) == 0;
+}
+
+template <typename T, typename U>
+constexpr T safe_cast(U u) {
+  const auto result = static_cast<T>(u);
+  assert(static_cast<U>(result) == u);
+  return result;
 }
 
 template <typename T>

@@ -16,6 +16,49 @@ namespace voxels {
 
 //////////////////////////////////////////////////////////////////////////////
 
+struct Material { uint8_t id; };
+
+struct MaybeMaterial {
+  uint8_t id;
+
+  constexpr bool operator==(const MaybeMaterial& o) const { return id == o.id; }
+  constexpr bool operator!=(const MaybeMaterial& o) const { return id != o.id; }
+};
+
+constexpr MaybeMaterial kNoMaterial = {0};
+constexpr Material assertMaterial(MaybeMaterial m) {
+  assert(m != kNoMaterial);
+  return Material{safe_cast<uint8_t>(m.id - 1)};
+}
+
+struct MaterialData {
+  bool liquid;
+  bool alphaTest;
+  uint8_t texture;
+  double color[4];
+};
+
+struct BlockData {
+  bool opaque;
+  bool solid;
+  int8_t light;
+  MaybeMaterial faces[6];
+};
+
+struct Registry {
+  static_assert(sizeof(Block) == 1);
+  static_assert(sizeof(Material) == 1);
+
+  Registry() {}
+
+  std::array<BlockData, 256> blocks;
+  std::array<MaterialData, 256> materials;
+
+  DISALLOW_COPY_AND_ASSIGN(Registry);
+};
+
+//////////////////////////////////////////////////////////////////////////////
+
 constexpr int kNumChunksToLoadPerFrame  = 1;
 //constexpr int kNumChunksToMeshPerFrame  = 1;
 //constexpr int kNumChunksToLightPerFrame = 4;
@@ -23,6 +66,12 @@ constexpr int kNumChunksToLoadPerFrame  = 1;
 // Require a layer of air blocks at the top of the world. Doing so simplifies
 // our data structures and shaders (for example, a height fits in a uint8_t).
 constexpr int kBuildHeight = kWorldHeight - 1;
+
+constexpr size_t kNumNeighbors = 8;
+constexpr Point kNeighbors[kNumNeighbors] = {
+  {-1,  0}, { 1,  0}, { 0, -1}, { 0,  1},
+  {-1, -1}, {-1,  1}, { 1, -1}, { 1,  1},
+};
 
 struct World;
 
@@ -32,15 +81,26 @@ struct Chunk {
   void create(Point p, World* w) {
     assert(w != nullptr);
 
-    dirty = stage1_dirty = stage2_dirty = true;
-    ready = false;
     point = p;
     world = w;
     neighbors = 0;
+
     load();
+
+    eachNeighbor([&](Chunk* chunk) {
+      chunk->notifyNeighborLoaded();
+      neighbors++;
+    });
+    dirty = stage1_dirty = stage2_dirty = true;
+    ready = checkReady();
   }
 
-  void destroy() {}
+  void destroy() {
+    dropMeshes();
+    eachNeighbor([](Chunk* chunk) {
+      chunk->notifyNeighborDisposed();
+    });
+  }
 
   Block getBlock(int x, int y, int z) {
     assert(0 <= x && x < kChunkWidth);
@@ -63,7 +123,7 @@ struct Chunk {
     updateHeightmap(x, z, y, 1, block, index);
     equilevels[y] = 0;
 
-    constexpr auto M = kChunkWidth - 1;
+    constexpr auto M = kChunkMask;
     const auto neighbor = [&](int dx, int dz) {
       const auto neighbor = getNeighbor(dx, dz);
       if (neighbor) neighbor->dirty = true;
@@ -84,6 +144,21 @@ struct Chunk {
   template <typename T> friend struct Circle;
 
   Chunk* getNeighbor(int dx, int dz) const;
+
+  bool checkReady() const {
+    return neighbors == kNumNeighbors;
+  }
+
+  void dropMeshes() {
+  }
+
+  template <typename Fn>
+  void eachNeighbor(Fn fn) {
+    for (const auto& point : kNeighbors) {
+      const auto neighbor = getNeighbor(point.x, point.z);
+      if (neighbor) fn(neighbor);
+    }
+  }
 
   void load() {
     std::array<int, kWorldHeight> mismatches;
@@ -174,6 +249,20 @@ struct Chunk {
     assert(base_start == test_start);
   }
 
+  void notifyNeighborDisposed() {
+    assert(neighbors > 0);
+    neighbors--;
+    const auto old = ready;
+    ready = checkReady();
+    if (old && !ready) dropMeshes();
+  }
+
+  void notifyNeighborLoaded() {
+    assert(neighbors < kNumNeighbors);
+    neighbors++;
+    ready = checkReady();
+  }
+
   void setColumn(int x, int z, int start, int count, Block block) {
     static_assert(sizeof(block) == 1);
     assert(0 <= x && x < kChunkWidth);
@@ -254,7 +343,8 @@ struct Circle {
       return a.normSquared() < b.normSquared();
     });
 
-    deltas = allocate_array<int>(floor + 1, 0);
+    numDeltas = floor + 1;
+    deltas = allocate_array<int>(numDeltas, 0);
     for (auto i = 0; i < total; i++) {
       const auto& point = points[i];
       const auto ax = abs(point.x);
@@ -272,7 +362,8 @@ struct Circle {
     if (center == p) return;
     each([&](const Point& point) {
       const auto diff = point - p;
-      if (abs(diff.z) <= deltas[abs(diff.x)]) return false;
+      const auto ax = abs(diff.x), az = abs(diff.z);
+      if (ax < numDeltas && az <= deltas[ax]) return false;
 
       const auto index = getIndex(point);
       const auto value = lookup[index];
@@ -319,10 +410,11 @@ struct Circle {
   int mask = 0;
   int shift = 0;
   int total = 0;
+  int numDeltas = 0;
   std::unique_ptr<T[]> storage;    // size: total
   std::unique_ptr<T*[]> unused;    // size: total
   std::unique_ptr<Point[]> points; // size: total
-  std::unique_ptr<int[]> deltas;   // size: ceil(radius)
+  std::unique_ptr<int[]> deltas;   // size: numDeltas
   std::unique_ptr<T*[]> lookup;    // size: 1 << (2 * shift)
 };
 
@@ -352,7 +444,7 @@ struct World {
   }
 
   void recenter(Point p) {
-    const auto c = Point{p.x / kChunkWidth, p.z / kChunkWidth};
+    const auto c = Point{p.x >> kChunkBits, p.z >> kChunkBits};
     chunks.recenter(c);
 
     auto loaded = 0;
@@ -364,10 +456,13 @@ struct World {
     });
   }
 
+  Registry& mutableRegistry() { return registry; };
+
  private:
   friend struct Chunk;
 
   Circle<Chunk> chunks;
+  Registry registry;
 
   DISALLOW_COPY_AND_ASSIGN(World);
 };
@@ -406,4 +501,31 @@ WASM_EXPORT(setBlock)
 void setBlock(int x, int y, int z, int block) {
   assert(world);
   world->setBlock(x, y, z, static_cast<voxels::Block>(block));
+}
+
+WASM_EXPORT(registerBlock)
+void registerBlock(int block, bool opaque, bool solid, int light, int face0,
+                   int face1, int face2, int face3, int face4, int face5) {
+  using voxels::safe_cast;
+  const auto material = [](int x) {
+    return voxels::MaybeMaterial{safe_cast<uint8_t>(x)};
+  };
+
+  assert(world);
+  world->mutableRegistry().blocks[safe_cast<uint8_t>(block)] = {
+    opaque, solid, safe_cast<int8_t>(light),
+    {material(face0), material(face1), material(face2),
+     material(face3), material(face4), material(face5)},
+  };
+}
+
+WASM_EXPORT(registerMaterial)
+void registerMaterial(int material, bool liquid, bool alphaTest, int texture,
+                      double r, double g, double b, double a) {
+  using voxels::safe_cast;
+
+  assert(world);
+  world->mutableRegistry().materials[safe_cast<uint8_t>(material)] = {
+    liquid, alphaTest, safe_cast<uint8_t>(texture), {r, g, b, a},
+  };
 }

@@ -469,6 +469,14 @@ var _setBlock = Module["_setBlock"] = function() {
  return (_setBlock = Module["_setBlock"] = Module["asm"]["setBlock"]).apply(null, arguments);
 };
 
+var _registerBlock = Module["_registerBlock"] = function() {
+ return (_registerBlock = Module["_registerBlock"] = Module["asm"]["registerBlock"]).apply(null, arguments);
+};
+
+var _registerMaterial = Module["_registerMaterial"] = function() {
+ return (_registerMaterial = Module["_registerMaterial"] = Module["asm"]["registerMaterial"]).apply(null, arguments);
+};
+
 var _createNoise2D = Module["_createNoise2D"] = function() {
  return (_createNoise2D = Module["_createNoise2D"] = Module["asm"]["createNoise2D"]).apply(null, arguments);
 };

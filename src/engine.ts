@@ -169,8 +169,13 @@ class Registry {
   private meshes: (InstancedMesh | null)[];
   private materials: Material[];
   private ids: Map<string, MaterialId>;
+  private helper: WasmHelper;
+  private renderer: Renderer;
 
-  constructor() {
+  constructor(helper: WasmHelper, renderer: Renderer) {
+    this.helper = helper;
+    this.renderer = renderer;
+
     this.opaque = [false, false];
     this.solid = [false, true];
     this.light = [0, 0];
@@ -181,6 +186,9 @@ class Registry {
     this.meshes = [null, null];
     this.materials = [];
     this.ids = new Map();
+
+    this.registerBlock(kEmptyBlock);
+    this.registerBlock(kUnknownBlock);
   }
 
   addBlock(xs: string[], solid: boolean, light: int = 0): BlockId {
@@ -219,6 +227,7 @@ class Registry {
     this.solid.push(solid);
     this.light.push(light);
     this.meshes.push(null);
+    this.registerBlock(result);
     return result;
   }
 
@@ -229,14 +238,18 @@ class Registry {
     this.opaque.push(false);
     this.solid.push(solid);
     this.light.push(light);
+    this.registerBlock(result);
     return result;
   }
 
   addMaterial(name: string, texture: Texture, liquid: boolean = false) {
     assert(name.length > 0, () => 'Empty material name!');
     assert(!this.ids.has(name), () => `Duplicate material: ${name}`);
-    this.ids.set(name, this.materials.length as MaterialId);
-    this.materials.push({liquid, texture, textureIndex: -1});
+    const id = this.materials.length as MaterialId;
+    const textureIndex = this.renderer.addTexture(texture);
+    this.ids.set(name, id);
+    this.materials.push({liquid, texture, textureIndex});
+    this.registerMaterial(id);
   }
 
   // faces has 6 elements for each block type: [+x, -x, +y, -y, +z, -z]
@@ -251,6 +264,25 @@ class Registry {
   getMaterialData(id: MaterialId): Material {
     assert(0 < id && id <= this.materials.length);
     return this.materials[id - 1];
+  }
+
+  private registerBlock(id: BlockId): void {
+    assert(0 <= id && id < this.opaque.length);
+    const b = 6 * id;
+    const faces = this.faces;
+    this.helper.module.asm.registerBlock(
+        id, this.opaque[id], this.solid[id], this.light[id],
+        faces[b + 0], faces[b + 1], faces[b + 2],
+        faces[b + 3], faces[b + 4], faces[b + 5]);
+  }
+
+  private registerMaterial(id: MaterialId): void {
+    assert(0 <= id && id < this.materials.length);
+    const material = this.materials[id]
+    const [r, g, b, a] = material.texture.color;
+    this.helper.module.asm.registerMaterial(
+        id, material.liquid, material.texture.alphaTest,
+        material.textureIndex, r, g, b, a);
   }
 };
 
@@ -1902,8 +1934,8 @@ class World {
 
   recenter(x: number, y: number, z: number) {
     const {chunks, frontier, loadChunk} = this;
-    const cx = int(Math.floor(x) >> kChunkBits);
-    const cz = int(Math.floor(z) >> kChunkBits);
+    const cx = int(Math.round(x) >> kChunkBits);
+    const cz = int(Math.round(z) >> kChunkBits);
     chunks.center(cx, cz);
     frontier.center(cx, cz);
 
@@ -1977,6 +2009,7 @@ class Env {
   entities: EntityComponentSystem;
   registry: Registry;
   renderer: Renderer;
+  private helper: WasmHelper;
   private cameraColor: Color;
   private cameraMaterial: MaybeMaterialId;
   private container: Container;
@@ -1988,10 +2021,13 @@ class Env {
   private world: World;
 
   constructor(id: string) {
+    this.helper = nonnull(helper);
+    this.helper.initializeWorld(kChunkRadius);
+
     this.container = new Container(id);
     this.entities = new EntityComponentSystem();
-    this.registry = new Registry();
     this.renderer = new Renderer(this.container.canvas);
+    this.registry = new Registry(this.helper, this.renderer);
     this.world = new World(this.registry, this.renderer);
     this.highlight = this.renderer.addHighlightMesh();
     this.highlightPosition = Vec3.create();
@@ -2043,6 +2079,7 @@ class Env {
   }
 
   recenter(x: number, y: number, z: number): void {
+    this.helper.updateWorld(int(Math.round(x)), int(Math.round(z)));
     this.world.recenter(x, y, z);
   }
 
@@ -2284,6 +2321,9 @@ interface WasmModule {
 
     initializeWorld: (radius: number) => void,
     updateWorld:     (x: int, z: int) => void,
+
+    registerBlock: any,
+    registerMaterial: any,
   },
 };
 

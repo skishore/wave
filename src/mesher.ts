@@ -608,16 +608,10 @@ class TerrainMesher {
       ? (triangleHint ? kIndexOffsets.C : kIndexOffsets.D)
       : (triangleHint ? kIndexOffsets.A : kIndexOffsets.B);
 
-    let textureIndex = material.textureIndex;
-    if (textureIndex < 0) {
-      textureIndex = this.renderer.addTexture(material.texture);
-      material.textureIndex = textureIndex;
-      assert(textureIndex >= 0);
-    }
-
     const x = pos[0];
     const y = pos[1];
     const z = pos[2];
+    const textureIndex = material.textureIndex;
 
     assert(x === ((x << 16) >> 16));
     assert(y === ((y << 16) >> 16));
