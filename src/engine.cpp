@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "base.h"
+#include "mesher.h"
 #include "worldgen.h"
 
 //////////////////////////////////////////////////////////////////////////////
@@ -16,62 +17,43 @@ namespace voxels {
 
 //////////////////////////////////////////////////////////////////////////////
 
-struct Material { uint8_t id; };
-
-struct MaybeMaterial {
-  uint8_t id;
-
-  constexpr bool operator==(const MaybeMaterial& o) const { return id == o.id; }
-  constexpr bool operator!=(const MaybeMaterial& o) const { return id != o.id; }
-};
-
-constexpr MaybeMaterial kNoMaterial = {0};
-constexpr Material assertMaterial(MaybeMaterial m) {
-  assert(m != kNoMaterial);
-  return Material{safe_cast<uint8_t>(m.id - 1)};
-}
-
-struct MaterialData {
-  bool liquid;
-  bool alphaTest;
-  uint8_t texture;
-  double color[4];
-};
-
-struct BlockData {
-  bool opaque;
-  bool solid;
-  int8_t light;
-  MaybeMaterial faces[6];
-};
-
-struct Registry {
-  static_assert(sizeof(Block) == 1);
-  static_assert(sizeof(Material) == 1);
-
-  Registry() {}
-
-  std::array<BlockData, 256> blocks;
-  std::array<MaterialData, 256> materials;
-
-  DISALLOW_COPY_AND_ASSIGN(Registry);
-};
-
-//////////////////////////////////////////////////////////////////////////////
-
 constexpr int kNumChunksToLoadPerFrame  = 1;
-//constexpr int kNumChunksToMeshPerFrame  = 1;
-//constexpr int kNumChunksToLightPerFrame = 4;
+constexpr int kNumChunksToMeshPerFrame  = 1;
+constexpr int kNumChunksToLightPerFrame = 4;
 
 // Require a layer of air blocks at the top of the world. Doing so simplifies
 // our data structures and shaders (for example, a height fits in a uint8_t).
 constexpr int kBuildHeight = kWorldHeight - 1;
+
+// Used to mask x- and z-values into a chunk's index range.
+constexpr int kChunkMask = kChunkWidth - 1;
 
 constexpr size_t kNumNeighbors = 8;
 constexpr Point kNeighbors[kNumNeighbors] = {
   {-1,  0}, { 1,  0}, { 0, -1}, { 0,  1},
   {-1, -1}, {-1,  1}, { 1, -1}, { 1,  1},
 };
+
+// Debugging helper for the equilevels optimization.
+template <typename T, typename U>
+void checkEquilevels(const T& equilevels, const U& voxels) {
+  if constexpr (true) return;
+
+  auto count = 0;
+  const auto [sx, sy, sz] = voxels.shape;
+  for (auto y = 0; y < sy; y++) {
+    if (!equilevels[y]) continue;
+    const auto base = voxels.get(0, y, 0);
+    for (auto x = 0; x < sx; x++) {
+      for (auto z = 0; z < sz; z++) {
+        assert(voxels.get(x, y, z) == base);
+      }
+    }
+    count++;
+  }
+  const auto fraction = count / static_cast<double>(sy);
+  printf("equilevels: %d/%lu (%f%%)\n", count, sy, fraction);
+}
 
 struct World;
 
@@ -110,6 +92,31 @@ struct Chunk {
     return voxels.get(x, y, z);
   }
 
+  bool hasMesh() const {
+    return solid || water;
+  }
+
+  bool needsRelight() const {
+    return stage2_dirty && ready && hasMesh();
+  }
+
+  bool needsRemesh() const {
+    return dirty && ready;
+  }
+
+  void relightChunk() {
+    // Called from remeshChunk to set the meshes' light textures, even if
+    // !this.needsRelight(). Each step checks a dirty flag, so that's okay.
+    stage1_dirty = stage2_dirty = false;
+  }
+
+  void remeshChunk() {
+    assert(needsRemesh());
+    remeshTerrain();
+    relightChunk();
+    dirty = false;
+  }
+
   void setBlock(int x, int y, int z, Block block) {
     assert(0 <= x && x < kChunkWidth);
     assert(0 <= z && z < kChunkWidth);
@@ -125,7 +132,7 @@ struct Chunk {
 
     constexpr auto M = kChunkMask;
     const auto neighbor = [&](int dx, int dz) {
-      const auto neighbor = getNeighbor(dx, dz);
+      const auto neighbor = getNeighbor({dx, dz});
       if (neighbor) neighbor->dirty = true;
     };
     if (x == 0) neighbor(-1,  0);
@@ -143,28 +150,30 @@ struct Chunk {
 
   template <typename T> friend struct Circle;
 
-  Chunk* getNeighbor(int dx, int dz) const;
+  Mesher& getMesher() const;
+  Chunk* getNeighbor(Point delta) const;
 
   bool checkReady() const {
     return neighbors == kNumNeighbors;
   }
 
   void dropMeshes() {
+    solid = std::nullopt;
+    water = std::nullopt;
   }
 
   template <typename Fn>
   void eachNeighbor(Fn fn) {
-    for (const auto& point : kNeighbors) {
-      const auto neighbor = getNeighbor(point.x, point.z);
+    for (const auto& delta : kNeighbors) {
+      const auto neighbor = getNeighbor(delta);
       if (neighbor) fn(neighbor);
     }
   }
 
   void load() {
     std::array<int, kWorldHeight> mismatches;
-    mismatches.fill(0);
-
     heightmap.data.fill(0);
+    mismatches.fill(0);
 
     static_assert(alignof(ChunkItem) == 1);
     constexpr auto size = sizeof(ChunkItem);
@@ -202,21 +211,7 @@ struct Chunk {
     }
     assert(cur_mismatches == 0);
 
-    if constexpr (false) {
-      auto count = 0;
-      for (auto y = 0; y < kWorldHeight; y++) {
-        if (!equilevels[y]) continue;
-        const auto base = voxels.get(0, y, 0);
-        for (auto x = 0; x < kChunkWidth; x++) {
-          for (auto z = 0; z < kChunkWidth; z++) {
-            assert(voxels.get(x, y, z) == base);
-          }
-        }
-        count++;
-      }
-      const auto fraction = 1.0 * count / kWorldHeight;
-      printf("equilevels: %d/%d (%f%%)\n", count, kWorldHeight, fraction);
-    }
+    checkEquilevels(equilevels, voxels);
   }
 
   void detectMismatches(const ChunkItem* base, const ChunkItem* test,
@@ -263,6 +258,109 @@ struct Chunk {
     ready = checkReady();
   }
 
+  void remeshTerrain() {
+    auto& mesher = getMesher();
+
+    static_assert(sizeof(equilevels[0]) == 1);
+    static_assert(sizeof(mesher.equilevels[0]) == 1);
+    std::memcpy(&mesher.equilevels[1], &equilevels[0], equilevels.size());
+
+    for (const auto& [delta, dstPos, srcPos, size] : kMesherOffsets) {
+      const auto chunk = getNeighbor(delta);
+      if (chunk) {
+        copyHeightmap(mesher.heightmap, dstPos, chunk->heightmap, srcPos, size);
+        copyVoxels(mesher.voxels, dstPos, chunk->voxels, srcPos, size);
+      } else {
+        zeroHeightmap(mesher.heightmap, dstPos, size);
+        zeroVoxels(mesher.voxels, dstPos, size);
+      }
+      if (chunk != this) {
+        copyEquilevels(mesher.equilevels, chunk, srcPos, size);
+      }
+    }
+
+    checkEquilevels(mesher.equilevels, mesher.voxels);
+
+    mesher.meshChunk();
+  }
+
+  void copyHeightmap(MeshTensor2<uint8_t>& dst, Point dstPos,
+                     ChunkTensor2<uint8_t>& src, Point srcPos, Point size) {
+    for (auto x = 0; x < size.x; x++) {
+      for (auto z = 0; z < size.z; z++) {
+        const auto sindex = src.index(srcPos.x + x, srcPos.z + z);
+        const auto dindex = dst.index(dstPos.x + x, dstPos.z + z);
+        dst.data[dindex] = src.data[sindex];
+      }
+    }
+  }
+
+  void copyVoxels(MeshTensor3<Block>& dst, Point dstPos,
+                  ChunkTensor3<Block>& src, Point srcPos, Point size) {
+    static_assert(sizeof(Block) == 1);
+    static_assert(std::remove_reference_t<decltype(src)>::stride[1] == 1);
+    static_assert(std::remove_reference_t<decltype(dst)>::stride[1] == 1);
+    constexpr size_t bytes = ChunkTensor3<Block>::shape[1];
+
+    for (auto x = 0; x < size.x; x++) {
+      for (auto z = 0; z < size.z; z++) {
+        const auto sindex = src.index(srcPos.x + x, 0, srcPos.z + z);
+        const auto dindex = dst.index(dstPos.x + x, 1, dstPos.z + z);
+        memcpy(&dst.data[dindex], &src.data[sindex], bytes);
+      }
+    }
+  }
+
+  void zeroHeightmap(MeshTensor2<uint8_t>& dst, Point dstPos, Point size) {
+    for (auto x = 0; x < size.x; x++) {
+      for (auto z = 0; z < size.z; z++) {
+        dst.set(dstPos.x + x, dstPos.z + z, 0);
+      }
+    }
+  }
+
+  void zeroVoxels(MeshTensor3<Block>& dst, Point dstPos, Point size) {
+    static_assert(sizeof(Block) == 1);
+    static_assert(ChunkTensor3<Block>::stride[1] == 1);
+    constexpr size_t bytes = ChunkTensor3<Block>::shape[1];
+
+    for (auto x = 0; x < size.x; x++) {
+      for (auto z = 0; z < size.z; z++) {
+        const auto dindex = dst.index(dstPos.x + x, 1, dstPos.z + z);
+        memset(&dst.data[dindex], static_cast<int>(Block::Air), bytes);
+      }
+    }
+  }
+
+  void copyEquilevels(MeshTensor1<uint8_t>& dst, Chunk* chunk,
+                      Point srcPos, Point size) {
+    static_assert(ChunkTensor3<Block>::stride[1] == 1);
+
+    if (chunk == nullptr) {
+      for (auto i = 0; i < kWorldHeight; i++) {
+        if (dst[i + 1] == 0) continue;
+        if (voxels.data[i] != Block::Air) dst[i + 1] = 0;
+      }
+      return;
+    }
+
+    assert(size.x == 1 || size.z == 1);
+    const auto stride = chunk->voxels.stride[size.x == 1 ? 2 : 0];
+    const auto index  = chunk->voxels.index(srcPos.x, 0, srcPos.z);
+    const auto limit  = stride * (size.x == 1 ? size.z : size.x);
+
+    for (auto i = 0; i < kWorldHeight; i++) {
+      if (dst[i + 1] == 0) continue;
+      const auto base = voxels.data[i];
+      if (chunk->equilevels[i] == 1 && chunk->voxels.data[i] == base) continue;
+      for (auto offset = 0; offset < limit; offset += stride) {
+        if (chunk->voxels.data[index + offset + i] == base) continue;
+        dst[i + 1] = 0;
+        break;
+      }
+    }
+  }
+
   void setColumn(int x, int z, int start, int count, Block block) {
     static_assert(sizeof(block) == 1);
     assert(0 <= x && x < kChunkWidth);
@@ -293,8 +391,6 @@ struct Chunk {
   }
 
   // Chunk data layout follows.
-  using Equilevels = std::array<uint8_t, kWorldHeight>;
-
   bool dirty;
   bool ready;
   bool stage1_dirty;
@@ -302,7 +398,9 @@ struct Chunk {
   Point point;
   World* world;
   int neighbors;
-  Equilevels equilevels;
+  std::optional<int> solid;
+  std::optional<int> water;
+  ChunkTensor1<uint8_t> equilevels;
   ChunkTensor2<uint8_t> heightmap;
   ChunkTensor3<uint8_t> lights;
   ChunkTensor3<Block> voxels;
@@ -360,7 +458,7 @@ struct Circle {
 
   void recenter(Point p) {
     if (center == p) return;
-    each([&](const Point& point) {
+    each([&](Point point) {
       const auto diff = point - p;
       const auto ax = abs(diff.x), az = abs(diff.z);
       if (ax < numDeltas && az <= deltas[ax]) return false;
@@ -411,15 +509,15 @@ struct Circle {
   int shift = 0;
   int total = 0;
   int numDeltas = 0;
-  std::unique_ptr<T[]> storage;    // size: total
-  std::unique_ptr<T*[]> unused;    // size: total
+  std::unique_ptr<T[]> storage;     // size: total
+  std::unique_ptr<T*[]> unused;     // size: total
   std::unique_ptr<Point[]> points; // size: total
-  std::unique_ptr<int[]> deltas;   // size: numDeltas
-  std::unique_ptr<T*[]> lookup;    // size: 1 << (2 * shift)
+  std::unique_ptr<int[]> deltas;    // size: numDeltas
+  std::unique_ptr<T*[]> lookup;     // size: 1 << (2 * shift)
 };
 
 struct World {
-  World(double radius) : chunks(radius) {}
+  World(double radius) : chunks(radius), mesher(registry) {}
 
   Block getBlock(int x, int y, int z) {
     if (y < 0) return Block::Bedrock;
@@ -448,11 +546,33 @@ struct World {
     chunks.recenter(c);
 
     auto loaded = 0;
-    chunks.each([&](const Point& point) {
+    chunks.each([&](Point point) {
       const auto existing = chunks.get(point);
       if (existing != nullptr) return false;
       chunks.set(point, this);
       return (++loaded) == kNumChunksToLoadPerFrame;
+    });
+  }
+
+  void remesh() {
+    auto lit = 0, meshed = 0, total = 0;
+    chunks.each([&](Point point) {
+      total++;
+      const auto canRelight = lit < kNumChunksToLightPerFrame;
+      const auto canRemesh = total <= 9 || meshed < kNumChunksToMeshPerFrame;
+      if (!(canRelight || canRemesh)) return true;
+
+      const auto chunk = chunks.get(point);
+      if (!chunk) return false;
+
+      if (canRemesh && chunk->needsRemesh()) {
+        chunk->remeshChunk();
+        meshed++;
+      } else if (canRelight && chunk->needsRelight()) {
+        chunk->relightChunk();
+        lit++;
+      }
+      return false;
     });
   }
 
@@ -463,12 +583,17 @@ struct World {
 
   Circle<Chunk> chunks;
   Registry registry;
+  Mesher mesher;
 
   DISALLOW_COPY_AND_ASSIGN(World);
 };
 
-Chunk* Chunk::getNeighbor(int dx, int dz) const {
-  return world->chunks.get(point + Point{dx, dz});
+Mesher& Chunk::getMesher() const {
+  return world->mesher;
+}
+
+Chunk* Chunk::getNeighbor(Point delta) const {
+  return world->chunks.get(point + delta);
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -485,10 +610,16 @@ void initializeWorld(double radius) {
   world.emplace(radius + 0.5);
 }
 
-WASM_EXPORT(updateWorld)
-void updateWorld(int x, int z) {
+WASM_EXPORT(recenterWorld)
+void recenterWorld(int x, int z) {
   assert(world);
   world->recenter({x, z});
+}
+
+WASM_EXPORT(remeshWorld)
+void remeshWorld() {
+  assert(world);
+  world->remesh();
 }
 
 WASM_EXPORT(getBlock)
@@ -512,11 +643,11 @@ void registerBlock(int block, bool opaque, bool solid, int light, int face0,
   };
 
   assert(world);
-  world->mutableRegistry().blocks[safe_cast<uint8_t>(block)] = {
+  world->mutableRegistry().addBlock(safe_cast<voxels::Block>(block), {
     opaque, solid, safe_cast<int8_t>(light),
     {material(face0), material(face1), material(face2),
      material(face3), material(face4), material(face5)},
-  };
+  });
 }
 
 WASM_EXPORT(registerMaterial)
@@ -525,7 +656,7 @@ void registerMaterial(int material, bool liquid, bool alphaTest, int texture,
   using voxels::safe_cast;
 
   assert(world);
-  world->mutableRegistry().materials[safe_cast<uint8_t>(material)] = {
+  world->mutableRegistry().addMaterial({safe_cast<uint8_t>(material)}, {
     liquid, alphaTest, safe_cast<uint8_t>(texture), {r, g, b, a},
-  };
+  });
 }

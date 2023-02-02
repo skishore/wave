@@ -12,7 +12,6 @@ static_assert(sizeof(int) == 4);
 
 constexpr int kChunkBits  = 4;
 constexpr int kChunkWidth = 1 << kChunkBits;
-constexpr int kChunkMask  = kChunkWidth - 1;
 constexpr int kWorldHeight = 256;
 
 enum class Block : uint8_t {
@@ -70,8 +69,8 @@ struct Point {
   int z;
 };
 
-template <typename T>
-struct ChunkTensor2 {
+template <typename T, size_t X, size_t Z>
+struct Tensor2 {
   T get(int x, int z) const {
     return data[index(x, z)];
   }
@@ -81,15 +80,19 @@ struct ChunkTensor2 {
   }
 
   static int index(int x, int z) {
-    static_assert(isPowTwo(kChunkWidth));
-    return x | (z * kChunkWidth);
+    if constexpr (isPowTwo(X)) {
+      return x | (z * X);
+    }
+    return x + (z * X);
   }
 
-  std::array<T, kChunkWidth * kChunkWidth> data;
+  std::array<T, X * Z> data;
+  constexpr static size_t shape[2]  = {X, Z};
+  constexpr static size_t stride[2] = {1, X};
 };
 
-template <typename T>
-struct ChunkTensor3 {
+template <typename T, size_t X, size_t Y, size_t Z>
+struct Tensor3 {
   T get(int x, int y, int z) const {
     return data[index(x, y, z)];
   }
@@ -99,13 +102,30 @@ struct ChunkTensor3 {
   }
 
   static int index(int x, int y, int z) {
-    static_assert(isPowTwo(kChunkWidth));
-    static_assert(isPowTwo(kWorldHeight));
-    return y | (x * kWorldHeight) | (z * kChunkWidth * kWorldHeight);
+    if constexpr (isPowTwo(X) && isPowTwo(Y)) {
+      return y | (x * Y) | (z * X * Y);
+    }
+    return y + (x * Y) + (z * X * Y);
   }
 
-  std::array<T, kWorldHeight * kChunkWidth * kChunkWidth> data;
+  std::array<T, X * Y * Z> data;
+  constexpr static size_t shape[3]  = {X, Y, Z};
+  constexpr static size_t stride[3] = {Y, 1, X * Y};
 };
+
+template <typename T> using ChunkTensor1 =
+  std::array<T, kWorldHeight>;
+template <typename T> using ChunkTensor2 =
+  Tensor2<T, kChunkWidth, kChunkWidth>;
+template <typename T> using ChunkTensor3 =
+  Tensor3<T, kChunkWidth, kWorldHeight, kChunkWidth>;
+
+template <typename T> using MeshTensor1 =
+  std::array<T, kWorldHeight + 2>;
+template <typename T> using MeshTensor2 =
+  Tensor2<T, kChunkWidth + 2, kChunkWidth + 2>;
+template <typename T> using MeshTensor3 =
+  Tensor3<T, kChunkWidth + 2, kWorldHeight + 2, kChunkWidth + 2>;
 
 //////////////////////////////////////////////////////////////////////////////
 

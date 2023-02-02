@@ -1932,10 +1932,10 @@ class World {
     chunk?.setPointLight(x, y, z, int(Math.min(level, kSunlightLevel - 1)));
   }
 
-  recenter(x: number, y: number, z: number) {
+  recenter(ix: int, iz: int) {
     const {chunks, frontier, loadChunk} = this;
-    const cx = int(Math.round(x) >> kChunkBits);
-    const cz = int(Math.round(z) >> kChunkBits);
+    const cx = int(ix >> kChunkBits);
+    const cz = int(iz >> kChunkBits);
     chunks.center(cx, cz);
     frontier.center(cx, cz);
 
@@ -2035,7 +2035,7 @@ class Env {
     this.cameraColor = kWhite.slice() as Color;
     this.cameraMaterial = kNoMaterial;
 
-    const remesh = this.world.remesh.bind(this.world);
+    const remesh = this.remesh.bind(this);
     const render = this.render.bind(this);
     const update = this.update.bind(this);
     this.timing = new Timing(remesh, render, update);
@@ -2079,8 +2079,9 @@ class Env {
   }
 
   recenter(x: number, y: number, z: number): void {
-    this.helper.updateWorld(int(Math.round(x)), int(Math.round(z)));
-    this.world.recenter(x, y, z);
+    const ix = int(Math.round(x)), iz = int(Math.round(z));
+    this.helper.recenterWorld(ix, iz);
+    this.world.recenter(ix, iz);
   }
 
   refresh(): void {
@@ -2089,6 +2090,11 @@ class Env {
     this.update(0);
     this.render(0);
     this.container.inputs.pointer = saved;
+  }
+
+  remesh(): void {
+    this.helper.remeshWorld();
+    this.world.remesh();
   }
 
   render(dt: number): void {
@@ -2317,10 +2323,11 @@ interface WasmModule {
     loadChunk: (cx: int, cz: int) => WasmCharPtr,
 
     createNoise2D: (seed: int) => WasmNoise2D,
-    queryNoise2D:  (noise: WasmNoise2D, x: number, y: number) => number,
+    queryNoise2D: (noise: WasmNoise2D, x: number, y: number) => number,
 
     initializeWorld: (radius: number) => void,
-    updateWorld:     (x: int, z: int) => void,
+    recenterWorld: (x: int, z: int) => void,
+    remeshWorld: () => void,
 
     registerBlock: any,
     registerMaterial: any,
@@ -2330,12 +2337,14 @@ interface WasmModule {
 class WasmHelper {
   module: WasmModule;
   initializeWorld: (radius: number) => void;
-  updateWorld: (x: int, z: int) => void;
+  recenterWorld: (x: int, z: int) => void;
+  remeshWorld: () => void;
 
   constructor(module: WasmModule) {
     this.module = module;
     this.initializeWorld = module.asm.initializeWorld;
-    this.updateWorld = module.asm.updateWorld;
+    this.recenterWorld = module.asm.recenterWorld;
+    this.remeshWorld = module.asm.remeshWorld;
   }
 };
 

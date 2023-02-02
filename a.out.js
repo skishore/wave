@@ -457,8 +457,12 @@ var _initializeWorld = Module["_initializeWorld"] = function() {
  return (_initializeWorld = Module["_initializeWorld"] = Module["asm"]["initializeWorld"]).apply(null, arguments);
 };
 
-var _updateWorld = Module["_updateWorld"] = function() {
- return (_updateWorld = Module["_updateWorld"] = Module["asm"]["updateWorld"]).apply(null, arguments);
+var _recenterWorld = Module["_recenterWorld"] = function() {
+ return (_recenterWorld = Module["_recenterWorld"] = Module["asm"]["recenterWorld"]).apply(null, arguments);
+};
+
+var _remeshWorld = Module["_remeshWorld"] = function() {
+ return (_remeshWorld = Module["_remeshWorld"] = Module["asm"]["remeshWorld"]).apply(null, arguments);
 };
 
 var _getBlock = Module["_getBlock"] = function() {

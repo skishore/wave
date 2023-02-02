@@ -274,6 +274,7 @@ const loadChunk = (blocks: Blocks) => (x: int, z: int, column: Column) => {
     }
   }
   const cave_height = carve_caves(blocks, x, z, column, limit, height);
+  return;
 
   if (tile === blocks.grass && cave_height < height) {
     const hash = hash_point(x, z) & 63;
