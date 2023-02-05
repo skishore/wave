@@ -18,6 +18,30 @@ namespace voxels {
 
 //////////////////////////////////////////////////////////////////////////////
 
+// The maximum light level: that cast by the sun.
+constexpr size_t kSunlightLevel = 0xf;
+
+// Stage 1 lighting operates on ChunkTensor3 indices. To quickly move from an
+// index to a neighbor's index, first mask it and compare against test - if it
+// is equal, the neighbor is out of bounds. Otherwise, add diff.
+struct LightSpread { int diff; int mask; int test; };
+constexpr LightSpread kLightSpread[6] = {
+  {-0x0100, 0x0f00, 0x0000},
+  {+0x0100, 0x0f00, 0x0f00},
+  {-0x1000, 0xf000, 0x0000},
+  {+0x1000, 0xf000, 0xf000},
+  {-0x0001, 0x00ff, 0x0000},
+  {+0x0001, 0x00ff, 0x00ff},
+};
+
+struct LightDelta { int location; int value; };
+
+// Lighting cellular automaton buffers.
+static std::array<std::vector<int>, kSunlightLevel - 2> kLightBuffers;
+static std::vector<LightDelta> kLightDeltas;
+
+//////////////////////////////////////////////////////////////////////////////
+
 constexpr int kNumChunksToLoadPerFrame  = 1;
 constexpr int kNumChunksToMeshPerFrame  = 1;
 constexpr int kNumChunksToLightPerFrame = 4;
@@ -31,6 +55,11 @@ constexpr int kChunkMask = kChunkWidth - 1;
 
 constexpr size_t kNumNeighbors = 8;
 constexpr Point kNeighbors[kNumNeighbors] = {
+  {-1,  0}, { 1,  0}, { 0, -1}, { 0,  1},
+  {-1, -1}, {-1,  1}, { 1, -1}, { 1,  1},
+};
+constexpr Point kZone[kNumNeighbors + 1] = {
+  { 0,  0},
   {-1,  0}, { 1,  0}, { 0, -1}, { 0,  1},
   {-1, -1}, {-1,  1}, { 1, -1}, { 1,  1},
 };
@@ -55,6 +84,8 @@ void checkEquilevels(const T& equilevels, const U& voxels) {
   const auto fraction = count / static_cast<double>(sy);
   printf("equilevels: %d/%lu (%f%%)\n", count, sy, fraction);
 }
+
+//////////////////////////////////////////////////////////////////////////////
 
 struct World;
 
@@ -109,7 +140,12 @@ struct Chunk {
   void relightChunk() {
     // Called from remeshChunk to set the meshes' light textures, even if
     // !this.needsRelight(). Each step checks a dirty flag, so that's okay.
-    stage1_dirty = stage2_dirty = false;
+    eachNeighbor([](Chunk* chunk) {
+      chunk->lightingStage1();
+    });
+    lightingStage1();
+    lightingStage2();
+    setLightTexture();
   }
 
   void remeshChunk() {
@@ -154,12 +190,14 @@ struct Chunk {
 
   Mesher& getMesher() const;
   Chunk* getNeighbor(Point delta) const;
+  const Registry& getRegistry() const;
 
   bool checkReady() const {
     return neighbors == kNumNeighbors;
   }
 
   void dropMeshes() {
+    light = std::nullopt;
     solid = std::nullopt;
     water = std::nullopt;
     dirty = true;
@@ -170,6 +208,308 @@ struct Chunk {
     for (const auto& delta : kNeighbors) {
       const auto neighbor = getNeighbor(delta);
       if (neighbor) fn(neighbor);
+    }
+  }
+
+  void lightingStage1() {
+    if (!stage1_dirty) return;
+
+    static_assert(decltype(stage1_lights)::stride[0] == kLightSpread[1].diff);
+    static_assert(decltype(stage1_lights)::stride[1] == kLightSpread[5].diff);
+    static_assert(decltype(stage1_lights)::stride[2] == kLightSpread[3].diff);
+    static_assert(decltype(heightmap)::stride[0] == kLightSpread[1].diff >> 8);
+    static_assert(decltype(heightmap)::stride[1] == kLightSpread[3].diff >> 8);
+
+    const auto& registry = getRegistry();
+    const auto opaque = [&](Block block) {
+      return registry.getBlockUnsafe(block).opaque;
+    };
+
+    // Cells at a light level of i appear in buffer[kSunlightLevel - i - 1].
+    // Cells at a light level of {0, 1} don't propagate, so we drop them.
+    static_assert(kSunlightLevel > 2);
+    static_assert(kLightBuffers.size() == kSunlightLevel - 2);
+    for (auto& buffer : kLightBuffers) buffer.clear();
+    stage1_lights.data.fill(kSunlightLevel);
+    stage1_edges.clear();
+
+    // Use the heightmap to efficiently mark all fully-lit cells, and to
+    // enqueue all neighbors of those cells into the first light buffer.
+    for (auto z = 0; z < kChunkWidth; z++) {
+      for (auto x = 0; x < kChunkWidth; x++) {
+        const auto index = (x << 8) | (z << 12);
+        const auto height = heightmap.data[index >> 8];
+
+        for (auto i = 0; i < 4; i++) {
+          const auto& spread = kLightSpread[i];
+          if ((index & spread.mask) == spread.test) continue;
+
+          const auto neighbor_index = index + spread.diff;
+          const auto neighbor_height = heightmap.data[neighbor_index >> 8];
+          for (auto y = height; y < neighbor_height; y++) {
+            kLightBuffers[0].push_back(neighbor_index + y);
+          }
+
+          if (height > 0) {
+            kLightBuffers[0].push_back(index + height - 1);
+            static_assert(sizeof(stage1_lights.data[0]) == 1);
+            memset(&stage1_lights.data[index], 0, height);
+          }
+        }
+      }
+    }
+
+    // Returns true if the given index is on an x-z edge of the chunk.
+    const auto edge = [&](int index) {
+      const auto x_edge = (((index >> 8)  + 1) & 0xf) < 2;
+      const auto z_edge = (((index >> 12) + 1) & 0xf) < 2;
+      return x_edge || z_edge;
+    };
+
+    // Propagate *to* the first round of neighbors of fully-lit cells.
+    // De-dupe indices during this stage, based on setting their light level.
+    static_assert(kLightBuffers.size() > 1);
+    for (const auto index : kLightBuffers[0]) {
+      constexpr auto level = kSunlightLevel - 1;
+      if (level <= stage1_lights.data[index]) continue;
+      if (opaque(voxels.data[index])) continue;
+      kLightBuffers[1].push_back(index);
+      stage1_lights.data[index] = level;
+      if (edge(index)) stage1_edges.insert(index);
+    }
+    std::swap(kLightBuffers[0], kLightBuffers[1]);
+    kLightBuffers[1].clear();
+
+    // For all later levels, we propagate *from* the previous light level to
+    // the next one, using its light value to de-dupe indices at that level.
+    constexpr int max = static_cast<int>(kSunlightLevel - 2);
+    for (auto level = max; level; level--) {
+      const auto prev = &kLightBuffers[max - level];
+      const auto next = level > 1 ? &kLightBuffers[max - level + 1] : nullptr;
+      const auto prev_level = level + 1;
+
+      for (const auto index : *prev) {
+        if (stage1_lights.data[index] != prev_level) continue;
+
+        for (const auto& spread : kLightSpread) {
+          if ((index & spread.mask) == spread.test) continue;
+
+          const auto neighbor_index = index + spread.diff;
+          const auto neighbor_level = stage1_lights.data[neighbor_index];
+          if (level <= neighbor_level) continue;
+          if (opaque(voxels.data[neighbor_index])) continue;
+
+          stage1_lights.data[neighbor_index] = static_cast<uint8_t>(level);
+          if (!next) continue;
+
+          if (edge(neighbor_index)) stage1_edges.insert(neighbor_index);
+          next->push_back(neighbor_index);
+        }
+      }
+    }
+
+    stage1_dirty = false;
+    eachNeighbor([](Chunk* chunk) { chunk->stage2_dirty = true; });
+  }
+
+  void lightingStage2() {
+    if (!(ready && stage2_dirty)) return;
+
+    const auto& registry = getRegistry();
+    const auto opaque = [&](Block block) {
+      return registry.getBlockUnsafe(block).opaque;
+    };
+
+    const auto getIndex = [](Point delta) {
+      return (delta.x + 1) | ((delta.z + 1) << 2);
+    };
+    std::array<Chunk*, 16> zone;
+    for (const auto& delta : kZone) {
+      const auto neighbor = getNeighbor(delta);
+      zone[getIndex(delta)] = neighbor;
+      assert(neighbor != nullptr);
+    }
+
+    // Stage 1 lighting tracks nodes by "index", where an index can be used
+    // to look up a chunk (x, y, z) coordinate in a Tensor3. Stage 2 lighting
+    // deals with multiple chunks, so we deal with "locations". The first 16
+    // bits of a location are an index; bits 16:18 are a chunk x coordinate,
+    // and bits 18:20 are a chunk z coordinate.
+    //
+    // To keep the cellular automaton as fast as possible, we update stage 1
+    // lighting in place. We must undo these changes at the end of this call,
+    // so we track a list of (location, previous value) pairs in `deltas` as
+    // we make the updates.
+    //
+    // Cells at a light level of i appear in buffer[kSunlightLevel - i - 1].
+    // Cells at a light level of {0, 1} don't propagate, so we drop them.
+    static_assert(kSunlightLevel > 2);
+    static_assert(kLightBuffers.size() == kSunlightLevel - 2);
+    for (auto& buffer : kLightBuffers) buffer.clear();
+    kLightDeltas.clear();
+
+    for (const auto& delta : kZone) {
+      const auto chunk = zone[getIndex(delta)];
+      const auto& light = chunk->stage1_lights.data;
+      const auto& heightmap = chunk->heightmap.data;
+
+      for (auto i = 0; i < 4; i++) {
+        const auto& spread = kLightSpread[i];
+        assert(spread.mask == 0x0f00 || spread.mask == 0xf000);
+        const auto dx = spread.mask == 0x0f00 ? spread.diff >> 8  : 0;
+        const auto dz = spread.mask == 0xf000 ? spread.diff >> 12 : 0;
+        const auto n = delta + Point{dx, dz};
+        if (!(-1 <= n.x && n.x <= 1 && -1 <= n.z && n.z <= 1)) continue;
+
+        const auto ni = getIndex(n);
+        const auto neighbor_union = ni << 16;
+        const auto neighbor_chunk = zone[ni];
+        const auto& neighbor_voxel = neighbor_chunk->voxels.data;
+        auto& neighbor_light = neighbor_chunk->stage1_lights.data;
+
+        // Update the neighbor cell's light value to `level`, if it is greater
+        // than the neighbor's current light value.
+        const auto propagate = [&](int level, int neighbor_index) {
+          const auto neighbor_level = neighbor_light[neighbor_index];
+          if (level <= neighbor_level) return;
+          if (!neighbor_level && opaque(neighbor_voxel[neighbor_index])) return;
+
+          const auto neighbor_location = neighbor_index | neighbor_union;
+          neighbor_light[neighbor_index] = static_cast<uint8_t>(level);
+          kLightDeltas.push_back({neighbor_location, neighbor_level});
+          if (level <= 1) return;
+
+          const auto buffer = kSunlightLevel - level - 1;
+          kLightBuffers[buffer].push_back(neighbor_location);
+        };
+
+        // Propagate light from the sparse edge map.
+        for (const auto index : chunk->stage1_edges) {
+          if ((index & spread.mask) != spread.test) continue;
+          const auto neighbor_index = index ^ spread.mask;
+          propagate(light[index] - 1, neighbor_index);
+        }
+
+        auto offset = 0;
+        const auto source = spread.test;
+        const auto target = source ^ spread.mask;
+        const auto stride = spread.mask == 0x0f00 ? 0x1000 : 0x0100;
+        const auto& neighbor_heightmap = neighbor_chunk->heightmap.data;
+
+        // Propagate light from fully-lit cells on the edge, using heights.
+        for (auto j = 0; j < kChunkWidth; j++, offset += stride) {
+          const auto height = heightmap[(source + offset) >> 8];
+          const auto neighbor_height = neighbor_heightmap[(target + offset) >> 8];
+          for (auto y = height; y < neighbor_height; y++) {
+            const auto neighbor_index = target + offset + y;
+            propagate(kSunlightLevel - 1, neighbor_index);
+          }
+        }
+      }
+    }
+
+    // Returns the taxicab distance from the location to the center chunk.
+    const auto distance = [](int location) {
+      const auto cx = (location >> 16) & 0x3;
+      const auto x  = (location >> 8 ) & 0xf;
+      const auto dx = cx == 0 ? 16 - x : cx == 1 ? 0 : x - 31;
+
+      const auto cz = (location >> 18) & 0x3;
+      const auto z  = (location >> 12) & 0xf;
+      const auto dz = cz == 0 ? 16 - z : cz == 1 ? 0 : z - 31;
+
+      return dx + dz;
+    };
+
+    // Returns the given location, shifted by the delta. If the shift is out
+    // of bounds any direction, it'll return -1.
+    const auto shift = [](int location, const LightSpread& spread) {
+      const auto [diff, mask, test] = spread;
+      if ((location & mask) != test) return int(location + diff);
+      switch (mask) {
+        case 0x00ff: return -1;
+        case 0x0f00: {
+          const auto x = ((location >> 16) & 0x3) + (diff >> 8);
+          const auto z = ((location >> 18) & 0x3);
+          if (!(0 <= x && x <= 2)) return -1;
+          return int(((location & 0xffff) ^ mask) | (x << 16) | (z << 18));
+        }
+        case 0xf000: {
+          const auto x = ((location >> 16) & 0x3);
+          const auto z = ((location >> 18) & 0x3) + (diff >> 12);
+          if (!(0 <= z && z <= 2)) return -1;
+          return int(((location & 0xffff) ^ mask) | (x << 16) | (z << 18));
+        }
+        default: assert(false);
+      }
+      return -1;
+    };
+
+    constexpr int max = static_cast<int>(kSunlightLevel - 2);
+    for (auto level = max; level > 0; level--) {
+      const auto prev = &kLightBuffers[max - level];
+      const auto next = level > 1 ? &kLightBuffers[max - level + 1] : nullptr;
+      const auto prev_level = level + 1;
+
+      for (const auto location : *prev) {
+        if (distance(location) > level) continue;
+        const auto chunk = zone[location >> 16];
+        const auto current_level = chunk->stage1_lights.data[location & 0xffff];
+        if (current_level != prev_level) continue;
+
+        for (const auto& spread : kLightSpread) {
+          const auto neighbor_location = shift(location, spread);
+          if (neighbor_location < 0) continue;
+
+          const auto neighbor_chunk = zone[neighbor_location >> 16];
+          const auto& neighbor_voxel = neighbor_chunk->voxels.data;
+          auto& neighbor_light = neighbor_chunk->stage1_lights.data;
+
+          const auto neighbor_index = neighbor_location & 0xffff;
+          const auto neighbor_level = neighbor_light[neighbor_index];
+          if (level <= neighbor_level) continue;
+          if (!neighbor_level && opaque(neighbor_voxel[neighbor_index])) continue;
+
+          neighbor_light[neighbor_index] = static_cast<uint8_t>(level);
+          kLightDeltas.push_back({neighbor_location, neighbor_level});
+          if (next) next->push_back(neighbor_location);
+        }
+      }
+    }
+
+    const auto test = getIndex({0, 0});
+    const auto& input = stage1_lights.data;
+    auto& output = stage2_lights;
+    output.clear();
+
+    for (const auto& delta : kLightDeltas) {
+      if ((delta.location >> 16) != test) continue;
+      const auto index = delta.location & 0xffff;
+      output[index] = input[index];
+    }
+    for (auto it = kLightDeltas.rbegin(); it != kLightDeltas.rend(); it++) {
+      const auto location = it->location;
+      const auto value = static_cast<uint8_t>(it->value);
+      zone[location >> 16]->stage1_lights.data[location & 0xffff] = value;
+    }
+    stage2_dirty = false;
+  }
+
+  void setLightTexture() {
+    if (!hasMesh()) return;
+
+    kLightDeltas.clear();
+    for (const auto& pair : stage2_lights) {
+      kLightDeltas.push_back({pair.first, stage1_lights.data[pair.first]});
+      stage1_lights.data[pair.first] = static_cast<uint8_t>(pair.second);
+    }
+
+    light.emplace(stage1_lights);
+    if (solid) solid->setLight(*light);
+    if (water) water->setLight(*light);
+
+    for (const auto& delta : kLightDeltas) {
+      stage1_lights.data[delta.location] = static_cast<uint8_t>(delta.value);
     }
   }
 
@@ -386,7 +726,7 @@ struct Chunk {
                        Block block, int index) {
     const auto end = start + count;
     const auto offset = heightmap.index(x, z);
-    const auto height = heightmap.data[index];
+    const auto height = heightmap.data[offset];
     using T = decltype(height);
 
     if (block == Block::Air && start < height && height <= end) {
@@ -395,12 +735,40 @@ struct Chunk {
         if (voxels.data[index - i - 1] != Block::Air) break;
       }
       heightmap.data[offset] = static_cast<T>(start - i);
-    } else if (block != Block::Air && height < end) {
+    } else if (block != Block::Air && height <= end) {
       heightmap.data[offset] = static_cast<T>(end);
     }
   }
 
-  // Chunk data layout follows.
+  // Cellular automaton lighting is the most complex and expensive logic here.
+  // The main problem here is to get lighting to work across multiple chunks.
+  // We use the fact that the max light level is smaller than a chunk's width.
+  //
+  // When we traverse the voxel graph to propagate lighting values, we always
+  // track voxels by their index in a chunk. The index is just a 16-bit int,
+  // and we can extract (x, y, z) coordinates from it or compute neighboring
+  // indices with simple arithmetic.
+  //
+  // Stage 1 lighting is chunk-local. It assumes that all neighboring chunks
+  // are completely dark and propagates sunlight within this chunk. When we
+  // edit blocks in a chunk, we only need to recompute its stage 1 lighting -
+  // never any neighbors'. We use an incremental algorithm to compute these
+  // values, tracking a list of dirty sources when we edit the chunk. We store
+  // stage 1 lights in a dense array.
+  //
+  // When we update stage 1 lighting, we also keep track of "edges": blocks on
+  // the x-z boundary of the chunk that could shine light into neighbors in
+  // other chunks. The edge map is sparse: it only includes edge voxels with
+  // light values x where 1 < x < kSunlightMax. The vast majority of the edge
+  // voxels have light values equal to kSunlightMax, and these are implicit in
+  // the heightmap, so we save memory by skipping those.
+  //
+  // Stage 2 lighting includes neighboring voxels. To compute it for a given
+  // chunk, we load the chunk and its neighbors and propagate the neighbors'
+  // edge lighting (including the implicit lights implied by the heightmap).
+  // We store stage 2 lights sparsely, as a delta on stage 1 lights.
+
+  // Basic chunk metadata.
   bool dirty;
   bool ready;
   bool stage1_dirty;
@@ -408,11 +776,20 @@ struct Chunk {
   Point point;
   World* world;
   int neighbors;
+
+  // JS renderer resources.
+  std::optional<LightTexture> light;
   std::optional<VoxelMesh> solid;
   std::optional<VoxelMesh> water;
+
+  // Lighting; the stage 1 light array comes later.
+  HashSet<int> stage1_edges;
+  HashMap<int, int> stage2_lights;
+
+  // Large data arrays, in increasing order of size.
   ChunkTensor1<uint8_t> equilevels;
   ChunkTensor2<uint8_t> heightmap;
-  ChunkTensor3<uint8_t> lights;
+  ChunkTensor3<uint8_t> stage1_lights;
   ChunkTensor3<Block> voxels;
 
   DISALLOW_COPY_AND_ASSIGN(Chunk);
@@ -604,6 +981,10 @@ Mesher& Chunk::getMesher() const {
 
 Chunk* Chunk::getNeighbor(Point delta) const {
   return world->chunks.get(point + delta);
+}
+
+const Registry& Chunk::getRegistry() const {
+  return world->registry;
 }
 
 //////////////////////////////////////////////////////////////////////////////

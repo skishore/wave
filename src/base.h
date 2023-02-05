@@ -3,9 +3,27 @@
 #include <cassert>
 #include <memory>
 
+#include "parallel-hashmap/phmap.h"
+
 //////////////////////////////////////////////////////////////////////////////
 
 namespace voxels {
+
+//////////////////////////////////////////////////////////////////////////////
+
+#define WASM_EXPORT(X) __attribute__((export_name(#X))) extern "C"
+
+#define DISALLOW_COPY_AND_ASSIGN(X) \
+  X(X&&) = delete;                  \
+  X(const X&) = delete;             \
+  X& operator=(X&&) = delete;       \
+  X& operator=(const X&) = delete;
+
+template <typename T>
+using HashSet = phmap::flat_hash_set<T>;
+
+template <typename K, typename V>
+using HashMap = phmap::flat_hash_map<K, V>;
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -18,14 +36,6 @@ constexpr int kWorldHeight = 256;
 enum class Block : uint8_t {
   Air, Unknown, Bedrock, Bush, Dirt, Fungi, Grass,
   Rock, Sand, Snow, Stone, Trunk, Water };
-
-#define WASM_EXPORT(X) __attribute__((export_name(#X))) extern "C"
-
-#define DISALLOW_COPY_AND_ASSIGN(X) \
-  X(X&&) = delete;                  \
-  X(const X&) = delete;             \
-  X& operator=(X&&) = delete;       \
-  X& operator=(const X&) = delete;
 
 constexpr bool isPowTwo(int input) {
   return (input & (input - 1)) == 0;

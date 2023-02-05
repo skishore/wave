@@ -389,11 +389,23 @@ var tempDouble;
 
 var tempI64;
 
+function js_AddLightTexture(data, size) {
+ throw new Error();
+}
+
+function js_FreeLightTexture(handle) {
+ throw new Error();
+}
+
 function js_AddVoxelMesh(data, size, phase) {
  throw new Error();
 }
 
 function js_FreeVoxelMesh(handle) {
+ throw new Error();
+}
+
+function js_SetVoxelMeshLight(mesh, texture) {
  throw new Error();
 }
 
@@ -461,9 +473,12 @@ var wasmImports = {
  "abort": _abort,
  "emscripten_memcpy_big": _emscripten_memcpy_big,
  "emscripten_resize_heap": _emscripten_resize_heap,
+ "js_AddLightTexture": js_AddLightTexture,
  "js_AddVoxelMesh": js_AddVoxelMesh,
+ "js_FreeLightTexture": js_FreeLightTexture,
  "js_FreeVoxelMesh": js_FreeVoxelMesh,
  "js_SetVoxelMeshGeometry": js_SetVoxelMeshGeometry,
+ "js_SetVoxelMeshLight": js_SetVoxelMeshLight,
  "js_SetVoxelMeshPosition": js_SetVoxelMeshPosition
 };
 
@@ -545,9 +560,9 @@ var stackAlloc = function() {
  return (stackAlloc = Module["asm"]["stackAlloc"]).apply(null, arguments);
 };
 
-var ___start_em_js = Module["___start_em_js"] = 9428;
+var ___start_em_js = Module["___start_em_js"] = 10308;
 
-var ___stop_em_js = Module["___stop_em_js"] = 9668;
+var ___stop_em_js = Module["___stop_em_js"] = 10695;
 
 var calledRun;
 

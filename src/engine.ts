@@ -698,9 +698,9 @@ const kNeighborOffsets = ((): [Point, Point, Point, Point][] => {
     [[ 0,  0, -1], [1, 1, 0], [0, 0, L], [W, H, 1]],
     [[ 0,  0,  1], [1, 1, N], [0, 0, 0], [W, H, 1]],
     [[-1,  0,  1], [0, 1, N], [L, 0, 0], [1, H, 1]],
-    [[ 1,  0,  1], [N, 1, N], [0, 0, 0], [1, H, 1]],
     [[-1,  0, -1], [0, 1, 0], [L, 0, L], [1, H, 1]],
     [[ 1,  0, -1], [N, 1, 0], [0, 0, L], [1, H, 1]],
+    [[ 1,  0,  1], [N, 1, N], [0, 0, 0], [1, H, 1]],
   ];
 })();
 const kZone = kNeighborOffsets.map(x => ({x: x[0][0], z: x[0][2]}));
@@ -2388,6 +2388,7 @@ class WasmHelper {
 
   // Bindings to call JavaScript from C++.
 
+  lights: WasmHandle<LightTexture>;
   meshes: WasmHandle<VoxelMesh>;
   renderer: Renderer | null = null;
 
@@ -2398,6 +2399,8 @@ class WasmHelper {
     this.remeshWorld = module.asm.remeshWorld;
     this.getBlock = module.asm.getBlock;
     this.setBlock = module.asm.setBlock;
+
+    this.lights = new WasmHandle();
     this.meshes = new WasmHandle();
   }
 };
@@ -2411,18 +2414,33 @@ const checkReady = () => {
   on_start_callbacks.forEach(x => x());
 };
 
+const js_AddLightTexture = (data: int, size: int) => {
+  const h = nonnull(helper);
+  const r = nonnull(h.renderer);
+  const buffer = h.module.HEAPU8.subarray(data, data + size);
+  return h.lights.allocate(r.addLightTexture(buffer));
+};
+
+const js_FreeLightTexture = (handle: int) => {
+  nonnull(helper).lights.free(handle).dispose();
+};
+
 const js_AddVoxelMesh = (data: int, size: int, phase: int) => {
   const h = nonnull(helper);
   const r = nonnull(h.renderer);
   const offset = data >> 2;
   const buffer = h.module.HEAP32.slice(offset, offset + size);
   const geo = new Geometry(buffer, int(size / Geometry.StrideInInt32));
-  const result = h.meshes.allocate(r.addVoxelMesh(geo, phase));
-  return result;
+  return h.meshes.allocate(r.addVoxelMesh(geo, phase));
 };
 
 const js_FreeVoxelMesh = (handle: int): void => {
   nonnull(helper).meshes.free(handle).dispose();
+};
+
+const js_SetVoxelMeshLight = (mesh: int, texture: int) => {
+  const h = nonnull(helper);
+  h.meshes.get(mesh).setLight(h.lights.get(texture));
 };
 
 const js_SetVoxelMeshGeometry = (handle: int, data: int, size: int): void => {
@@ -2441,8 +2459,11 @@ const init = (fn: () => void) => on_start_callbacks.push(fn);
 
 window.onload = () => { loaded = true; checkReady(); };
 (window as any).beforeWasmCompile = (env: any) => {
+  env.js_AddLightTexture  = js_AddLightTexture;
+  env.js_FreeLightTexture = js_FreeLightTexture;
   env.js_AddVoxelMesh  = js_AddVoxelMesh;
   env.js_FreeVoxelMesh = js_FreeVoxelMesh;
+  env.js_SetVoxelMeshLight    = js_SetVoxelMeshLight;
   env.js_SetVoxelMeshGeometry = js_SetVoxelMeshGeometry;
   env.js_SetVoxelMeshPosition = js_SetVoxelMeshPosition;
 };

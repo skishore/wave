@@ -309,6 +309,8 @@ void Mesher::computeChunkGeometry(int y_min, int y_max) {
               if (h == lv - iv) {
                 addQuad(geo, material, dir, ao, wave, d, w_fixed, h_fixed, pos);
               } else {
+                // Replace this call with splitLiquidSurfaceQuads.
+                addQuad(geo, material, dir, ao, wave, d, w_fixed, h_fixed, pos);
                 //splitLiquidSideQuads(geo, material, voxels, dir,
                 //                     ao, wave, d, w, h, pos);
               }
