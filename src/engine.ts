@@ -1,7 +1,7 @@
 import {assert, drop, int, nonnull} from './base.js';
 import {Color, Tensor2, Tensor3, Vec3} from './base.js';
 import {EntityComponentSystem} from './ecs.js';
-import {HighlightMesh, InstancedMesh, Mesh} from './renderer.js';
+import {HighlightMesh, InstancedMesh, Geometry, Mesh} from './renderer.js';
 import {Instance, LightTexture, Renderer, Texture, VoxelMesh} from './renderer.js';
 import {TerrainMesher} from './mesher.js';
 import {kSweepResolution, sweep} from './sweep.js';
@@ -679,7 +679,7 @@ const kNumLODChunksToMeshPerFrame = 1;
 
 const kFrontierLOD = 2;
 const kFrontierRadius = 8;
-const kFrontierLevels = 6;
+const kFrontierLevels = 0;
 
 // Enable debug assertions for the equi-levels optimization.
 const kCheckEquilevels = false;
@@ -1417,6 +1417,8 @@ class Chunk {
     water?.setPosition(x, 0, z);
     this.solid = solid;
     this.water = water;
+
+    this.dropMeshes();
   }
 
   private setLightTexture(): void {
@@ -2021,12 +2023,14 @@ class Env {
   private world: World;
 
   constructor(id: string) {
-    this.helper = nonnull(helper);
-    this.helper.initializeWorld(kChunkRadius);
-
     this.container = new Container(id);
     this.entities = new EntityComponentSystem();
     this.renderer = new Renderer(this.container.canvas);
+
+    this.helper = nonnull(helper);
+    this.helper.renderer = this.renderer;
+    this.helper.initializeWorld(kChunkRadius);
+
     this.registry = new Registry(this.helper, this.renderer);
     this.world = new World(this.registry, this.renderer);
     this.highlight = this.renderer.addHighlightMesh();
@@ -2042,7 +2046,7 @@ class Env {
   }
 
   getBlock(x: int, y: int, z: int): BlockId {
-    return this.world.getBlock(x, y, z);
+    return this.helper.getBlock(x, y, z);
   }
 
   getLight(x: int, y: int, z: int): number {
@@ -2062,6 +2066,7 @@ class Env {
   }
 
   setBlock(x: int, y: int, z: int, block: BlockId): void {
+    this.helper.setBlock(x, y, z, block);
     this.world.setBlock(x, y, z, block);
   }
 
@@ -2329,22 +2334,71 @@ interface WasmModule {
     recenterWorld: (x: int, z: int) => void,
     remeshWorld: () => void,
 
+    getBlock: (x: int, y: int, z: int) => BlockId,
+    setBlock: (x: int, y: int, z: int, block: BlockId) => void,
+
     registerBlock: any,
     registerMaterial: any,
   },
 };
 
+class WasmHandle<T> {
+  entries: (T | null)[];
+  freeList: int[];
+
+  constructor() {
+    this.entries = [];
+    this.freeList = [];
+  }
+
+  allocate(value: T): int {
+    const free = this.freeList.pop();
+    if (free !== undefined) {
+      this.entries[free] = value;
+      return free;
+    }
+    const result = int(this.entries.length);
+    this.entries.push(value);
+    return result;
+  }
+
+  free(index: int): T {
+    const value = nonnull(this.entries[index]);
+    this.entries[index] = null;
+    this.freeList.push(index);
+    return value;
+  }
+
+  get(index: int): T {
+    return nonnull(this.entries[index]);
+  }
+};
+
 class WasmHelper {
   module: WasmModule;
+
+  // Bindings to call C++ from JavaScript.
+
   initializeWorld: (radius: number) => void;
   recenterWorld: (x: int, z: int) => void;
   remeshWorld: () => void;
+
+  getBlock: (x: int, y: int, z: int) => BlockId;
+  setBlock: (x: int, y: int, z: int, block: BlockId) => void;
+
+  // Bindings to call JavaScript from C++.
+
+  meshes: WasmHandle<VoxelMesh>;
+  renderer: Renderer | null = null;
 
   constructor(module: WasmModule) {
     this.module = module;
     this.initializeWorld = module.asm.initializeWorld;
     this.recenterWorld = module.asm.recenterWorld;
     this.remeshWorld = module.asm.remeshWorld;
+    this.getBlock = module.asm.getBlock;
+    this.setBlock = module.asm.setBlock;
+    this.meshes = new WasmHandle();
   }
 };
 
@@ -2357,10 +2411,41 @@ const checkReady = () => {
   on_start_callbacks.forEach(x => x());
 };
 
+const js_AddVoxelMesh = (data: int, size: int, phase: int) => {
+  const h = nonnull(helper);
+  const r = nonnull(h.renderer);
+  const offset = data >> 2;
+  const buffer = h.module.HEAP32.slice(offset, offset + size);
+  const geo = new Geometry(buffer, int(size / Geometry.StrideInInt32));
+  const result = h.meshes.allocate(r.addVoxelMesh(geo, phase));
+  return result;
+};
+
+const js_FreeVoxelMesh = (handle: int): void => {
+  nonnull(helper).meshes.free(handle).dispose();
+};
+
+const js_SetVoxelMeshGeometry = (handle: int, data: int, size: int): void => {
+  const h = nonnull(helper);
+  const offset = data >> 2;
+  const buffer = h.module.HEAP32.slice(offset, offset + size);
+  const geo = new Geometry(buffer, int(size / Geometry.StrideInInt32));
+  h.meshes.get(handle).setGeometry(geo);
+};
+
+const js_SetVoxelMeshPosition = (handle: int, x: int, y: int, z: int): void => {
+  nonnull(helper).meshes.get(handle).setPosition(x, y, z);
+};
+
 const init = (fn: () => void) => on_start_callbacks.push(fn);
 
 window.onload = () => { loaded = true; checkReady(); };
-(window as any).beforeWasmCompile = (env: any) => {};
+(window as any).beforeWasmCompile = (env: any) => {
+  env.js_AddVoxelMesh  = js_AddVoxelMesh;
+  env.js_FreeVoxelMesh = js_FreeVoxelMesh;
+  env.js_SetVoxelMeshGeometry = js_SetVoxelMeshGeometry;
+  env.js_SetVoxelMeshPosition = js_SetVoxelMeshPosition;
+};
 (window as any).onWasmCompile =
   (m: WasmModule) => { helper = new WasmHelper(m); checkReady(); };
 

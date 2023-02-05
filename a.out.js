@@ -389,6 +389,22 @@ var tempDouble;
 
 var tempI64;
 
+function js_AddVoxelMesh(data, size, phase) {
+ throw new Error();
+}
+
+function js_FreeVoxelMesh(handle) {
+ throw new Error();
+}
+
+function js_SetVoxelMeshGeometry(handle, data, size) {
+ throw new Error();
+}
+
+function js_SetVoxelMeshPosition(handle, x, y, z) {
+ throw new Error();
+}
+
 function callRuntimeCallbacks(callbacks) {
  while (callbacks.length > 0) {
   callbacks.shift()(Module);
@@ -444,7 +460,11 @@ var wasmImports = {
  "__assert_fail": ___assert_fail,
  "abort": _abort,
  "emscripten_memcpy_big": _emscripten_memcpy_big,
- "emscripten_resize_heap": _emscripten_resize_heap
+ "emscripten_resize_heap": _emscripten_resize_heap,
+ "js_AddVoxelMesh": js_AddVoxelMesh,
+ "js_FreeVoxelMesh": js_FreeVoxelMesh,
+ "js_SetVoxelMeshGeometry": js_SetVoxelMeshGeometry,
+ "js_SetVoxelMeshPosition": js_SetVoxelMeshPosition
 };
 
 window.beforeWasmCompile(wasmImports); var asm = createWasm();
@@ -524,6 +544,10 @@ var stackRestore = function() {
 var stackAlloc = function() {
  return (stackAlloc = Module["asm"]["stackAlloc"]).apply(null, arguments);
 };
+
+var ___start_em_js = Module["___start_em_js"] = 9428;
+
+var ___stop_em_js = Module["___stop_em_js"] = 9668;
 
 var calledRun;
 

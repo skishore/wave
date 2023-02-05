@@ -1,14 +1,13 @@
+#include "mesher.h"
+
 #include <algorithm>
 #include <array>
-#include <cassert>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <optional>
 #include <type_traits>
 #include <vector>
-
-#include "mesher.h"
 
 //////////////////////////////////////////////////////////////////////////////
 

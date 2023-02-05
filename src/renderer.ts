@@ -649,6 +649,12 @@ class Geometry {
     return new Geometry(quads, num_quads);
   }
 
+  static clone_raw(geo: Geometry): Geometry {
+    const num_quads = geo.num_quads;
+    const quads = geo.quads.slice(0, num_quads * Geometry.StrideInInt32);
+    return new Geometry(quads, num_quads);
+  }
+
   static empty(): Geometry {
     return new Geometry(new Int32Array(), 0);
   }

@@ -1,6 +1,8 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
+#include <vector>
 
 #include "base.h"
 
@@ -10,15 +12,20 @@ namespace voxels {
 
 //////////////////////////////////////////////////////////////////////////////
 
-struct Noise2D {
-  Noise2D(uint32_t seed = 0);
+struct VoxelMesh {
+  using Quad = std::array<uint32_t, 4>;
+  using Quads = std::vector<Quad>;
 
-  double query(double x, double y) const;
+  VoxelMesh(const Quads& quads, int phase);
+  ~VoxelMesh();
+
+  void setGeometry(const Quads& quads);
+  void setPosition(int x, int y, int z);
 
  private:
-  std::array<uint8_t, 256> perm;
+  int binding;
 
-  DISALLOW_COPY_AND_ASSIGN(Noise2D);
+  DISALLOW_COPY_AND_ASSIGN(VoxelMesh);
 };
 
 //////////////////////////////////////////////////////////////////////////////

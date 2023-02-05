@@ -1,10 +1,12 @@
 #pragma once
 
-#include "base.h"
-
 #include <array>
+#include <cassert>
 #include <ranges>
 #include <vector>
+
+#include "base.h"
+#include "renderer.h"
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -120,8 +122,8 @@ struct Mesher {
   void meshChunk();
 
  private:
-  using Quad = std::array<uint32_t, 4>;
-  using Quads = std::vector<Quad>;
+  using Quad  = VoxelMesh::Quad;
+  using Quads = VoxelMesh::Quads;
 
   void addQuad(Quads* quads, const MaterialData& material, int dir, int ao,
                int wave, int d, int w, int h, const std::array<int, 3>& pos);

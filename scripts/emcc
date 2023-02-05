@@ -6,7 +6,7 @@ CC="emcc -O2 -fno-exceptions -fno-rtti -mnontrapping-fptoint -sALLOW_MEMORY_GROW
 
 set -ex
 
-$CC src/engine.cpp src/mesher.cpp src/open-simplex-2d.cpp src/worldgen.cpp
+$CC src/engine.cpp src/mesher.cpp src/open-simplex-2d.cpp src/renderer.cpp src/worldgen.cpp
 
 echo "" >> a.out.js
 echo "__ATPOSTRUN__.push(() => window.onWasmCompile(Module));" >> a.out.js

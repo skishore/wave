@@ -9,6 +9,7 @@
 
 #include "base.h"
 #include "mesher.h"
+#include "renderer.h"
 #include "worldgen.h"
 
 //////////////////////////////////////////////////////////////////////////////
@@ -62,6 +63,7 @@ struct Chunk {
 
   void create(Point p, World* w) {
     assert(w != nullptr);
+    assert(!solid && !water);
 
     point = p;
     world = w;
@@ -160,6 +162,7 @@ struct Chunk {
   void dropMeshes() {
     solid = std::nullopt;
     water = std::nullopt;
+    dirty = true;
   }
 
   template <typename Fn>
@@ -281,7 +284,14 @@ struct Chunk {
 
     checkEquilevels(mesher.equilevels, mesher.voxels);
 
+    const auto mesh = [&](auto& mesh, const auto& quads, int phase) {
+      if (quads.empty()) return mesh.reset();
+      mesh ? mesh->setGeometry(quads) : void(mesh.emplace(quads, phase));
+      mesh->setPosition(point.x << kChunkBits, 0, point.z << kChunkBits);
+    };
     mesher.meshChunk();
+    mesh(solid, mesher.solid_geo, 0);
+    mesh(water, mesher.water_geo, 1);
   }
 
   void copyHeightmap(MeshTensor2<uint8_t>& dst, Point dstPos,
@@ -398,8 +408,8 @@ struct Chunk {
   Point point;
   World* world;
   int neighbors;
-  std::optional<int> solid;
-  std::optional<int> water;
+  std::optional<VoxelMesh> solid;
+  std::optional<VoxelMesh> water;
   ChunkTensor1<uint8_t> equilevels;
   ChunkTensor2<uint8_t> heightmap;
   ChunkTensor3<uint8_t> lights;
