@@ -129,6 +129,12 @@ struct Mesher {
                int wave, int d, int w, int h, const std::array<int, 3>& pos);
   void computeChunkGeometry(int y_min, int y_max);
 
+  void patchLiquidSurfaceQuads(
+      Quads* quads, int ao, int w, int h, const std::array<int, 3>& pos);
+  void splitLiquidSideQuads(
+      Quads* quads, const MaterialData& material, int dir, int ao, int wave,
+      int d, int w, int h, const std::array<int, 3>& pos);
+
   bool getTriangleHint(int ao) const;
   int getFaceDir(Block block0, Block block1, int face) const;
   int packAOMask(int ipos, int ineg, int dj, int dk) const;

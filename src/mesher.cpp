@@ -300,7 +300,7 @@ void Mesher::computeChunkGeometry(int y_min, int y_max) {
               if (dir > 0) {
                 const auto wave = kWaveValues[d];
                 addQuad(geo, material, dir, ao, wave, d, w, h, pos);
-                //patchLiquidSurfaceQuads(geo, voxels, ao, w, h, pos);
+                patchLiquidSurfaceQuads(geo, ao, w, h, pos);
               } else {
                 addQuad(geo, material, dir, ao, 0, d, w, h, pos);
               }
@@ -309,10 +309,7 @@ void Mesher::computeChunkGeometry(int y_min, int y_max) {
               if (h == lv - iv) {
                 addQuad(geo, material, dir, ao, wave, d, w_fixed, h_fixed, pos);
               } else {
-                // Replace this call with splitLiquidSurfaceQuads.
-                addQuad(geo, material, dir, ao, wave, d, w_fixed, h_fixed, pos);
-                //splitLiquidSideQuads(geo, material, voxels, dir,
-                //                     ao, wave, d, w, h, pos);
+                splitLiquidSideQuads(geo, material, dir, ao, wave, d, w, h, pos);
               }
             }
           } else {
@@ -331,6 +328,106 @@ void Mesher::computeChunkGeometry(int y_min, int y_max) {
         }
       }
     }
+  }
+}
+
+// We displace a liquid's upper surface downward using the `wave` attribute.
+//
+// When a liquid is adjacent to a downward surface, such as a rock that ends
+// right above the water, we have to add small vertical patches to avoid
+// leaving gaps in the liquid's surface.
+//
+// NOTE: The AO values here are not quite right. For each of the faces we
+// consider (-x, +x, -z, +z), we should broadcast a different subset of the
+// input AO. But doing that is tricky and AO doesn't matter much here.
+void Mesher::patchLiquidSurfaceQuads(
+    Quads* quads, int ao, int w, int h, const std::array<int, 3>& pos) {
+  const auto base_x = pos[0];
+  const auto base_y = pos[1];
+  const auto base_z = pos[2];
+  const auto water = voxels.get(base_x + 1, base_y, base_z + 1);
+  const auto id = registry.getBlock(water).faces[0];
+  if (id == kNoMaterial) return;
+
+  const auto patch = [&](int x, int z, int face) {
+    const auto ax = base_x + x + 1;
+    const auto az = base_z + z + 1;
+
+    const auto& below = registry.getBlock(voxels.get(ax, base_y + 0, az));
+    if (below.opaque || below.faces[face] == kNoMaterial) return false;
+
+    const auto& above = registry.getBlock(voxels.get(ax, base_y + 1, az));
+    return above.opaque || above.faces[3] != kNoMaterial;
+  };
+
+  std::array<int, 3> tmp = pos;
+  const auto& material = registry.getMaterial(assertMaterialUnsafe(id));
+
+  for (auto face = 4; face < 6; face++) {
+    const auto dz = face == 4 ? -1 : w;
+    const auto wave = kWaveValues[1] - kWaveValues[2];
+    for (auto x = 0; x < h; x++) {
+      if (!patch(x, dz, face)) continue;
+      auto start = x;
+      for (x++; x < h; x++) {
+        if (!patch(x, dz, face)) break;
+      }
+      tmp[0] = base_x + start;
+      tmp[2] = base_z + std::max(dz, 0);
+      addQuad(quads, material, 1, ao, wave, 2, x - start, 0, tmp);
+    }
+  }
+
+  for (auto face = 0; face < 2; face++) {
+    const auto dx = face == 0 ? -1 : h;
+    const auto wave = kWaveValues[1] - kWaveValues[0];
+    for (auto z = 0; z < w; z++) {
+      if (!patch(dx, z, face)) continue;
+      auto start = z;
+      for (z++; z < w; z++) {
+        if (!patch(dx, z, face)) break;
+      }
+      tmp[0] = base_x + std::max(dx, 0);
+      tmp[2] = base_z + start;
+      addQuad(quads, material, 1, ao, wave, 0, 0, z - start, tmp);
+    }
+  }
+}
+
+// For vertical liquid surfaces, we need to check the block right above the
+// surface to check if the top of this quad should get the wave effect. This
+// test may change along the width of the liquid quad, so we may end up
+// splitting one quad into multiple quads here.
+void Mesher::splitLiquidSideQuads(
+    Quads* quads, const MaterialData& material, int dir, int ao, int wave,
+    int d, int w, int h, const std::array<int, 3>& pos) {
+  const auto base_x = pos[0];
+  const auto base_y = pos[1];
+  const auto base_z = pos[2];
+
+  const auto ax = base_x + (d == 0 && dir > 0 ? 0 : 1);
+  const auto az = base_z + (d == 2 && dir > 0 ? 0 : 1);
+  const auto ay = base_y + h + 1;
+
+  std::array<int, 3> tmp = pos;
+
+  const auto test = [&](int i) {
+    const auto above = d == 0 ? voxels.get(ax, ay, az + i)
+                              : voxels.get(ax + i, ay, az);
+    const auto& data = registry.getBlock(above);
+    return data.opaque || data.faces[3] == kNoMaterial;
+  };
+
+  auto last = test(0);
+  for (auto i = 0; i < w; i++) {
+    auto j = i + 1;
+    for (; j < w && test(j) == last; j++) {}
+    const auto w_fixed = d > 0 ? j - i : h;
+    const auto h_fixed = d > 0 ? h : j - i;
+    addQuad(quads, material, dir, ao, last ? wave : 0, d, w_fixed, h_fixed, tmp);
+    tmp[2 - d] += j - i;
+    last = !last;
+    i = j - 1;
   }
 }
 
