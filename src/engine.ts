@@ -910,7 +910,8 @@ class Chunk {
   }
 
   needsRelight(): boolean {
-    return this.stage2_dirty && this.ready && this.hasMesh();
+    //return this.stage2_dirty && this.ready && this.hasMesh();
+    return this.stage2_dirty && this.ready;
   }
 
   needsRemesh(): boolean {
@@ -1422,7 +1423,7 @@ class Chunk {
   }
 
   private setLightTexture(): void {
-    if (!this.hasMesh()) return;
+    //if (!this.hasMesh()) return;
 
     // TODO(skishore): Share a texture between the two meshes.
     const saved = new Map();
@@ -2050,7 +2051,7 @@ class Env {
   }
 
   getLight(x: int, y: int, z: int): number {
-    return this.world.getLight(x, y, z);
+    return lighting(this.helper.getLightLevel(x, y, z));
   }
 
   getMutableInputs(): Record<Input, boolean> {
@@ -2080,6 +2081,7 @@ class Env {
   }
 
   setPointLight(x: int, y: int, z: int, level: int): void {
+    this.helper.setPointLight(x, y, z, level);
     this.world.setPointLight(x, y, z, level);
   }
 
@@ -2294,7 +2296,7 @@ class Env {
     }
 
     const color = this.registry.getMaterialData(new_material).texture.color;
-    const light = this.world.getLight(xi, yi, zi);
+    const light = this.getLight(xi, yi, zi);
     const saved = this.cameraColor;
     saved[0] = color[0] * light;
     saved[1] = color[1] * light;
@@ -2336,6 +2338,8 @@ interface WasmModule {
 
     getBlock: (x: int, y: int, z: int) => BlockId,
     setBlock: (x: int, y: int, z: int, block: BlockId) => void,
+    getLightLevel: (x: int, y: int, z: int) => int,
+    setPointLight: (x: int, y: int, z: int, level: int) => void,
 
     registerBlock: any,
     registerMaterial: any,
@@ -2385,6 +2389,8 @@ class WasmHelper {
 
   getBlock: (x: int, y: int, z: int) => BlockId;
   setBlock: (x: int, y: int, z: int, block: BlockId) => void;
+  getLightLevel: (x: int, y: int, z: int) => int;
+  setPointLight: (x: int, y: int, z: int, level: int) => void;
 
   // Bindings to call JavaScript from C++.
 
@@ -2399,6 +2405,8 @@ class WasmHelper {
     this.remeshWorld = module.asm.remeshWorld;
     this.getBlock = module.asm.getBlock;
     this.setBlock = module.asm.setBlock;
+    this.getLightLevel = module.asm.getLightLevel;
+    this.setPointLight = module.asm.setPointLight;
 
     this.lights = new WasmHandle();
     this.meshes = new WasmHandle();

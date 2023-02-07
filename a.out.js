@@ -504,8 +504,16 @@ var _getBlock = Module["_getBlock"] = function() {
  return (_getBlock = Module["_getBlock"] = Module["asm"]["getBlock"]).apply(null, arguments);
 };
 
+var _getLightLevel = Module["_getLightLevel"] = function() {
+ return (_getLightLevel = Module["_getLightLevel"] = Module["asm"]["getLightLevel"]).apply(null, arguments);
+};
+
 var _setBlock = Module["_setBlock"] = function() {
  return (_setBlock = Module["_setBlock"] = Module["asm"]["setBlock"]).apply(null, arguments);
+};
+
+var _setPointLight = Module["_setPointLight"] = function() {
+ return (_setPointLight = Module["_setPointLight"] = Module["asm"]["setPointLight"]).apply(null, arguments);
 };
 
 var _registerBlock = Module["_registerBlock"] = function() {
@@ -560,9 +568,9 @@ var stackAlloc = function() {
  return (stackAlloc = Module["asm"]["stackAlloc"]).apply(null, arguments);
 };
 
-var ___start_em_js = Module["___start_em_js"] = 10356;
+var ___start_em_js = Module["___start_em_js"] = 10436;
 
-var ___stop_em_js = Module["___stop_em_js"] = 10743;
+var ___stop_em_js = Module["___stop_em_js"] = 10823;
 
 var calledRun;
 

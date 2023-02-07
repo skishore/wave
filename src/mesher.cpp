@@ -346,22 +346,22 @@ void Mesher::patchLiquidSurfaceQuads(
   const auto base_y = pos[1];
   const auto base_z = pos[2];
   const auto water = voxels.get(base_x + 1, base_y, base_z + 1);
-  const auto id = registry.getBlock(water).faces[0];
+  const auto id = registry.getBlockUnsafe(water).faces[0];
   if (id == kNoMaterial) return;
 
   const auto patch = [&](int x, int z, int face) {
     const auto ax = base_x + x + 1;
     const auto az = base_z + z + 1;
 
-    const auto& below = registry.getBlock(voxels.get(ax, base_y + 0, az));
+    const auto& below = registry.getBlockUnsafe(voxels.get(ax, base_y + 0, az));
     if (below.opaque || below.faces[face] == kNoMaterial) return false;
 
-    const auto& above = registry.getBlock(voxels.get(ax, base_y + 1, az));
+    const auto& above = registry.getBlockUnsafe(voxels.get(ax, base_y + 1, az));
     return above.opaque || above.faces[3] != kNoMaterial;
   };
 
   std::array<int, 3> tmp = pos;
-  const auto& material = registry.getMaterial(assertMaterialUnsafe(id));
+  const auto& material = registry.getMaterialUnsafe(assertMaterialUnsafe(id));
 
   for (auto face = 4; face < 6; face++) {
     const auto dz = face == 4 ? -1 : w;
@@ -414,7 +414,7 @@ void Mesher::splitLiquidSideQuads(
   const auto test = [&](int i) {
     const auto above = d == 0 ? voxels.get(ax, ay, az + i)
                               : voxels.get(ax + i, ay, az);
-    const auto& data = registry.getBlock(above);
+    const auto& data = registry.getBlockUnsafe(above);
     return data.opaque || data.faces[3] == kNoMaterial;
   };
 

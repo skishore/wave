@@ -19,7 +19,7 @@ namespace voxels {
 //////////////////////////////////////////////////////////////////////////////
 
 // The maximum light level: that cast by the sun.
-constexpr size_t kSunlightLevel = 0xf;
+constexpr int kSunlightLevel = 0xf;
 
 // Stage 1 lighting operates on ChunkTensor3 indices. To quickly move from an
 // index to a neighbor's index, first mask it and compare against test - if it
@@ -39,6 +39,38 @@ struct LightDelta { int location; int value; };
 // Lighting cellular automaton buffers.
 static std::array<std::vector<int>, kSunlightLevel - 2> kLightBuffers;
 static std::vector<LightDelta> kLightDeltas;
+static HashSet<int> kNextDirtyLights;
+
+// If the light at a cell changes from `prev` to `next`, what range
+// of lights in neighboring cells may need updating? The bounds are
+// inclusive on both sides.
+//
+// These equations are tricky. We do some casework to derive them:
+//
+//   - If the light value in a cell drops 8 -> 4, then adjacent cells
+//     with lights in {4, 5, 6, 7} may also drop. 8 is too big, since
+//     an adjacent cell with the same light has a different source.
+//     But 3 is too small: we can cast a light of value 3.
+//
+//   - If the light value increases from 4 -> 8, then adjacent cells
+//     with lights in {3, 4, 5, 6} may increase. 7 is too big, since
+//     we can't raise the adjacent light to 8.
+//
+//   - As a special case, a cell in full sunlight can raise a neighbor
+//     (the one right below) to full sunlight, so we include it here.
+//     `max - (max < kSunlightLevel ? 1 : 0)` is the max we can cast.
+//
+// If we allow for blocks that filter more than one light level at a
+// time, then the lower bounds fail, but the upper bounds still hold.
+//
+constexpr int maxUpdatedNeighborLight(int next, int prev) {
+  const auto max = std::max(next, prev);
+  return max - (max < kSunlightLevel ? 1 : 0) - (next > prev ? 1 : 0);
+};
+constexpr int minUpdatedNeighborLight(int next, int prev) {
+  const auto min = std::min(next, prev);
+  return int(min - (next > prev ? 1 : 0));
+};
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -100,13 +132,19 @@ struct Chunk {
     world = w;
     neighbors = 0;
 
+    point_lights.clear();
+    stage1_dirty.clear();
+    stage1_edges.clear();
+    stage2_lights.clear();
+
     load();
+    lightingInit();
 
     eachNeighbor([&](Chunk* chunk) {
       chunk->notifyNeighborLoaded();
       neighbors++;
     });
-    dirty = stage1_dirty = stage2_dirty = true;
+    dirty = stage2_dirty = true;
     ready = checkReady();
   }
 
@@ -123,6 +161,17 @@ struct Chunk {
     assert(0 <= y && y < kBuildHeight);
 
     return voxels.get(x, y, z);
+  }
+
+  int getLightLevel(int x, int y, int z) {
+    assert(0 <= x && x < kChunkWidth);
+    assert(0 <= z && z < kChunkWidth);
+    assert(0 <= y && y < kWorldHeight);
+
+    // TODO(skishore): Handle mesh blocks here.
+    const auto index = voxels.index(x, y, z);
+    const auto it = stage2_lights.find(index);
+    return it != stage2_lights.end() ? it->second : stage1_lights.data[index];
   }
 
   bool hasMesh() const {
@@ -164,7 +213,8 @@ struct Chunk {
     if (voxels.data[index] == block) return;
     voxels.data[index] = block;
 
-    dirty = stage1_dirty = stage2_dirty = true;
+    stage1_dirty.insert(index);
+    dirty = stage2_dirty = true;
     updateHeightmap(x, z, y, 1, block, index);
     equilevels[y] = 0;
 
@@ -181,6 +231,22 @@ struct Chunk {
     if (x == 0 && z == M) neighbor(-1,  1);
     if (x == M && z == 0) neighbor( 1, -1);
     if (x == M && z == M) neighbor( 1,  1);
+  }
+
+  void setPointLight(int x, int y, int z, int level) {
+    assert(0 <= x && x < kChunkWidth);
+    assert(0 <= z && z < kChunkWidth);
+    assert(0 <= y && y < kWorldHeight);
+
+    const auto index = voxels.index(x, y, z);
+    if (level > 0) {
+      point_lights[index] = level;
+    } else {
+      point_lights.erase(index);
+    }
+
+    stage1_dirty.insert(index);
+    stage2_dirty = true;
   }
 
  private:
@@ -211,9 +277,8 @@ struct Chunk {
     }
   }
 
-  void lightingStage1() {
-    if (!stage1_dirty) return;
-
+  void lightingInit() {
+    // Use for fast bitwise index propagation below.
     static_assert(decltype(stage1_lights)::stride[0] == kLightSpread[1].diff);
     static_assert(decltype(stage1_lights)::stride[1] == kLightSpread[5].diff);
     static_assert(decltype(stage1_lights)::stride[2] == kLightSpread[3].diff);
@@ -221,22 +286,10 @@ struct Chunk {
     static_assert(decltype(heightmap)::stride[1] == kLightSpread[3].diff >> 8);
 
     const auto& registry = getRegistry();
-    const auto opaque = [&](Block block) {
-      return registry.getBlockUnsafe(block).opaque;
-    };
-
-    // Cells at a light level of i appear in buffer[kSunlightLevel - i - 1].
-    // Cells at a light level of {0, 1} don't propagate, so we drop them.
-    static_assert(kSunlightLevel > 2);
-    static_assert(kLightBuffers.size() == kSunlightLevel - 2);
-    for (auto& buffer : kLightBuffers) buffer.clear();
     stage1_lights.data.fill(kSunlightLevel);
-    stage1_edges.clear();
 
-    // Use the heightmap to efficiently mark all fully-lit cells, and to
-    // enqueue all neighbors of those cells into the first light buffer.
-    for (auto z = 0; z < kChunkWidth; z++) {
-      for (auto x = 0; x < kChunkWidth; x++) {
+    for (auto x = 0; x < kChunkWidth; x++) {
+      for (auto z = 0; z < kChunkWidth; z++) {
         const auto index = (x << 8) | (z << 12);
         const auto height = heightmap.data[index >> 8];
 
@@ -247,17 +300,30 @@ struct Chunk {
           const auto neighbor_index = index + spread.diff;
           const auto neighbor_height = heightmap.data[neighbor_index >> 8];
           for (auto y = height; y < neighbor_height; y++) {
-            kLightBuffers[0].push_back(neighbor_index + y);
+            stage1_dirty.insert(neighbor_index + y);
           }
+        }
 
-          if (height > 0) {
-            kLightBuffers[0].push_back(index + height - 1);
-            static_assert(sizeof(stage1_lights.data[0]) == 1);
-            memset(&stage1_lights.data[index], 0, height);
-          }
+        if (height > 0) {
+          const auto below = index + height - 1;
+          const auto& data = registry.getBlockUnsafe(voxels.data[below]);
+          if (!data.opaque) stage1_dirty.insert(below);
+          static_assert(sizeof(stage1_lights.data[0]) == 1);
+          memset(&stage1_lights.data[index], 0, height);
         }
       }
     }
+  }
+
+  void lightingStage1() {
+    if (stage1_dirty.empty()) return;
+
+    // Stage 1 lighting operates on "index" values, which are (x, y, z)
+    // coordinates represented as indices into our {lights, voxel} Tensor3.
+    const auto& registry = getRegistry();
+    auto& prev = stage1_dirty;
+    auto& next = kNextDirtyLights;
+    next.clear();
 
     // Returns true if the given index is on an x-z edge of the chunk.
     const auto edge = [&](int index) {
@@ -266,49 +332,68 @@ struct Chunk {
       return x_edge || z_edge;
     };
 
-    // Propagate *to* the first round of neighbors of fully-lit cells.
-    // De-dupe indices during this stage, based on setting their light level.
-    static_assert(kLightBuffers.size() > 1);
-    for (const auto index : kLightBuffers[0]) {
-      constexpr auto level = kSunlightLevel - 1;
-      if (level <= stage1_lights.data[index]) continue;
-      if (opaque(voxels.data[index])) continue;
-      kLightBuffers[1].push_back(index);
-      stage1_lights.data[index] = level;
-      if (edge(index)) stage1_edges.insert(index);
-    }
-    std::swap(kLightBuffers[0], kLightBuffers[1]);
-    kLightBuffers[1].clear();
+    // Returns the updated lighting value at the given index. Note that we
+    // can never use the `prev` light value in this computation: it can be
+    // arbitrarily out-of-date since the chunk contents can change.
+    const auto query = [&](int index) {
+      const auto& data = registry.getBlockUnsafe(voxels.data[index]);
+      const auto from_block = static_cast<int>(data.light);
+      if (from_block < 0) return 0;
 
-    // For all later levels, we propagate *from* the previous light level to
-    // the next one, using its light value to de-dupe indices at that level.
-    constexpr int max = static_cast<int>(kSunlightLevel - 2);
-    for (auto level = max; level; level--) {
-      const auto prev = &kLightBuffers[max - level];
-      const auto next = level > 1 ? &kLightBuffers[max - level + 1] : nullptr;
-      const auto prev_level = level + 1;
+      const auto it = point_lights.find(index);
+      const auto from_point = it != point_lights.end() ? it->second : 0;
+      const auto base = std::max(from_block, from_point);
 
-      for (const auto index : *prev) {
-        if (stage1_lights.data[index] != prev_level) continue;
+      const auto height = heightmap.data[index >> 8];
+      if ((index & 0xff) >= height) return kSunlightLevel;
 
-        for (const auto& spread : kLightSpread) {
-          if ((index & spread.mask) == spread.test) continue;
-
-          const auto neighbor_index = index + spread.diff;
-          const auto neighbor_level = stage1_lights.data[neighbor_index];
-          if (level <= neighbor_level) continue;
-          if (opaque(voxels.data[neighbor_index])) continue;
-
-          stage1_lights.data[neighbor_index] = static_cast<uint8_t>(level);
-          if (!next) continue;
-
-          if (edge(neighbor_index)) stage1_edges.insert(neighbor_index);
-          next->push_back(neighbor_index);
-        }
+      auto max_neighbor = base + 1;
+      for (const auto& spread : kLightSpread) {
+        if ((index & spread.mask) == spread.test) continue;
+        const auto neighbor = stage1_lights.data[index + spread.diff];
+        if (neighbor > max_neighbor) max_neighbor = neighbor;
       }
+      return max_neighbor - 1;
+    };
+
+    // Enqueues new indices that may be affected by the given change.
+    const auto enqueue = [&](int index, int hi, int lo) {
+      for (const auto& spread : kLightSpread) {
+        if ((index & spread.mask) == spread.test) continue;
+        const auto neighbor_index = index + spread.diff;
+        const auto neighbor = stage1_lights.data[neighbor_index];
+        if (lo <= neighbor && neighbor <= hi) next.insert(neighbor_index);
+      }
+    };
+
+    while (!prev.empty()) {
+      for (const auto index : prev) {
+        const auto prev_level = stage1_lights.data[index];
+        const auto next_level = query(index);
+        if (next_level == prev_level) continue;
+
+        stage1_lights.data[index] = static_cast<uint8_t>(next_level);
+
+        if (edge(index)) {
+          // The edge lights map only contains cells on the edge that are not
+          // at full sunlight, since the heightmap takes care of the rest.
+          const auto next_in_map = 1 < next_level && next_level < kSunlightLevel;
+          const auto prev_in_map = 1 < prev_level && prev_level < kSunlightLevel;
+          if (next_in_map != prev_in_map) {
+            if (next_in_map) stage1_edges.insert(index);
+            else stage1_edges.erase(index);
+          }
+        }
+
+        const auto hi = maxUpdatedNeighborLight(next_level, prev_level);
+        const auto lo = minUpdatedNeighborLight(next_level, prev_level);
+        enqueue(index, hi, lo);
+      }
+      std::swap(prev, next);
+      next.clear();
     }
 
-    stage1_dirty = false;
+    assert(stage1_dirty.empty());
     eachNeighbor([](Chunk* chunk) { chunk->stage2_dirty = true; });
   }
 
@@ -719,6 +804,14 @@ struct Chunk {
 
     const auto index = voxels.index(x, start, z);
     memset(&voxels.data[index], static_cast<uint8_t>(block), count);
+
+    const auto light = getRegistry().getBlock(block).light;
+    if (light > 0) {
+      for (auto i = 0; i < count; i++) {
+        stage1_dirty.insert(index + i);
+      }
+    }
+
     updateHeightmap(x, z, start, count, block, index);
   }
 
@@ -771,7 +864,6 @@ struct Chunk {
   // Basic chunk metadata.
   bool dirty;
   bool ready;
-  bool stage1_dirty;
   bool stage2_dirty;
   Point point;
   World* world;
@@ -783,8 +875,10 @@ struct Chunk {
   std::optional<VoxelMesh> water;
 
   // Lighting; the stage 1 light array comes later.
+  HashSet<int> stage1_dirty;
   HashSet<int> stage1_edges;
   HashMap<int, int> stage2_lights;
+  HashMap<int, int> point_lights;
 
   // Large data arrays, in increasing order of size.
   ChunkTensor1<uint8_t> equilevels;
@@ -910,22 +1004,45 @@ struct World {
     if (y < 0) return Block::Bedrock;
     if (y >= kBuildHeight) return Block::Air;
 
-    const auto cx = x >> kChunkBits;
-    const auto cz = z >> kChunkBits;
+    const auto cx = x >> kChunkBits, xm = x & kChunkMask;
+    const auto cz = z >> kChunkBits, zm = z & kChunkMask;
     const auto chunk = chunks.get({cx, cz});
-    if (chunk == nullptr) return Block::Unknown;
 
-    return chunk->getBlock(x & kChunkMask, y, z & kChunkMask);
+    return chunk ? chunk->getBlock(xm, y, zm) : Block::Unknown;
+  }
+
+  int getLightLevel(int x, int y, int z) {
+    if (y < 0) return 0;
+    if (y >= kWorldHeight) return kSunlightLevel;
+
+    const auto cx = x >> kChunkBits, xm = x & kChunkMask;
+    const auto cz = z >> kChunkBits, zm = z & kChunkMask;
+    const auto chunk = chunks.get({cx, cz});
+
+    return chunk ? chunk->getLightLevel(xm, y, zm) : kSunlightLevel;
   }
 
   void setBlock(int x, int y, int z, Block block) {
     if (!(0 <= y && y < kBuildHeight)) return;
 
-    const auto cx = x >> kChunkBits;
-    const auto cz = z >> kChunkBits;
+    const auto cx = x >> kChunkBits, xm = x & kChunkMask;
+    const auto cz = z >> kChunkBits, zm = z & kChunkMask;
     const auto chunk = chunks.get({cx, cz});
 
-    if (chunk) chunk->setBlock(x & kChunkMask, y, z & kChunkMask, block);
+    if (chunk) chunk->setBlock(xm, y, zm, block);
+  }
+
+  void setPointLight(int x, int y, int z, int level) {
+    if (!(0 <= y && y < kWorldHeight)) return;
+
+    const auto cx = x >> kChunkBits, xm = x & kChunkMask;
+    const auto cz = z >> kChunkBits, zm = z & kChunkMask;
+    const auto chunk = chunks.get({cx, cz});
+
+    // We can't support a block light of kSunlightLevel until we have separate
+    // channels for block light and sunlight.
+    level = std::min(level, static_cast<int>(kSunlightLevel - 1));
+    if (chunk) chunk->setPointLight(xm, y, zm, level);
   }
 
   void recenter(Point p) {
@@ -1019,10 +1136,22 @@ int getBlock(int x, int y, int z) {
   return static_cast<int>(world->getBlock(x, y, z));
 }
 
+WASM_EXPORT(getLightLevel)
+int getLightLevel(int x, int y, int z) {
+  assert(world);
+  return world->getLightLevel(x, y, z);
+}
+
 WASM_EXPORT(setBlock)
 void setBlock(int x, int y, int z, int block) {
   assert(world);
   world->setBlock(x, y, z, static_cast<voxels::Block>(block));
+}
+
+WASM_EXPORT(setPointLight)
+void setPointLight(int x, int y, int z, int level) {
+  assert(world);
+  world->setPointLight(x, y, z, level);
 }
 
 WASM_EXPORT(registerBlock)
