@@ -173,9 +173,6 @@ class Registry {
   private renderer: Renderer;
 
   constructor(helper: WasmHelper, renderer: Renderer) {
-    this.helper = helper;
-    this.renderer = renderer;
-
     this.opaque = [false, false];
     this.solid = [false, true];
     this.light = [0, 0];
@@ -186,6 +183,10 @@ class Registry {
     this.meshes = [null, null];
     this.materials = [];
     this.ids = new Map();
+
+    this.helper = helper;
+    this.renderer = renderer;
+    this.helper.block_to_instance = this.meshes;
 
     this.registerBlock(kEmptyBlock);
     this.registerBlock(kUnknownBlock);
@@ -271,7 +272,7 @@ class Registry {
     const b = 6 * id;
     const faces = this.faces;
     this.helper.module.asm.registerBlock(
-        id, this.opaque[id], this.solid[id], this.light[id],
+        id, !!this.meshes[id], this.opaque[id], this.solid[id], this.light[id],
         faces[b + 0], faces[b + 1], faces[b + 2],
         faces[b + 3], faces[b + 4], faces[b + 5]);
   }
@@ -2033,6 +2034,8 @@ class Env {
     this.helper.initializeWorld(kChunkRadius);
 
     this.registry = new Registry(this.helper, this.renderer);
+    this.helper.registry = this.registry;
+
     this.world = new World(this.registry, this.renderer);
     this.highlight = this.renderer.addHighlightMesh();
     this.highlightPosition = Vec3.create();
@@ -2146,7 +2149,7 @@ class Env {
   }
 
   private getRenderBlock(x: int, y: int, z: int): BlockId {
-    const result = this.world.getBlock(x, y, z);
+    const result = this.helper.getBlock(x, y, z);
     if (result === kEmptyBlock || result === kUnknownBlock ||
         this.registry.getBlockFaceMaterial(result, 3) === kNoMaterial) {
       return kEmptyBlock;
@@ -2160,7 +2163,7 @@ class Env {
     const [x, y, z] = target;
 
     const check = (x: int, y: int, z: int) => {
-      const block = this.world.getBlock(x, y, z);
+      const block = this.helper.getBlock(x, y, z);
       return !this.registry.opaque[block];
     };
 
@@ -2212,7 +2215,7 @@ class Env {
     this.highlightSide = -1;
 
     const check = (x: int, y: int, z: int) => {
-      const block = this.world.getBlock(x, y, z);
+      const block = this.helper.getBlock(x, y, z);
       if (!this.registry.solid[block]) return true;
 
       let mask = 0;
@@ -2220,10 +2223,10 @@ class Env {
       Vec3.set(pos, x, y, z);
       for (let d = 0; d < 3; d++) {
         pos[d] += 1;
-        const b0 = this.world.getBlock(int(pos[0]), int(pos[1]), int(pos[2]));
+        const b0 = this.helper.getBlock(int(pos[0]), int(pos[1]), int(pos[2]));
         if (this.registry.opaque[b0]) mask |= (1 << (2 * d + 0));
         pos[d] -= 2;
-        const b1 = this.world.getBlock(int(pos[0]), int(pos[1]), int(pos[2]));
+        const b1 = this.helper.getBlock(int(pos[0]), int(pos[1]), int(pos[2]));
         if (this.registry.opaque[b1]) mask |= (1 << (2 * d + 1));
         pos[d] += 1;
       }
@@ -2394,9 +2397,11 @@ class WasmHelper {
 
   // Bindings to call JavaScript from C++.
 
+  instances: WasmHandle<Instance>;
   lights: WasmHandle<LightTexture>;
   meshes: WasmHandle<VoxelMesh>;
   renderer: Renderer | null = null;
+  block_to_instance: (InstancedMesh | null)[];
 
   constructor(module: WasmModule) {
     this.module = module;
@@ -2408,8 +2413,10 @@ class WasmHelper {
     this.getLightLevel = module.asm.getLightLevel;
     this.setPointLight = module.asm.setPointLight;
 
+    this.instances = new WasmHandle();
     this.lights = new WasmHandle();
     this.meshes = new WasmHandle();
+    this.block_to_instance = [];
   }
 };
 
@@ -2433,6 +2440,22 @@ const js_FreeLightTexture = (handle: int) => {
   nonnull(helper).lights.free(handle).dispose();
 };
 
+const js_AddInstancedMesh = (block: BlockId, x: int, y: int, z: int) => {
+  const h = nonnull(helper);
+  const instance = nonnull(h.block_to_instance[block]).addInstance();
+  instance.setPosition(x + 0.5, y, z + 0.5);
+  return h.instances.allocate(instance);
+};
+
+const js_FreeInstancedMesh = (handle: int): void => {
+  nonnull(helper).instances.free(handle).dispose();
+};
+
+const js_SetInstancedMeshLight = (handle: int, level: int) => {
+  const h = nonnull(helper);
+  h.instances.get(handle).setLight(lighting(level));
+};
+
 const js_AddVoxelMesh = (data: int, size: int, phase: int) => {
   const h = nonnull(helper);
   const r = nonnull(h.renderer);
@@ -2446,9 +2469,9 @@ const js_FreeVoxelMesh = (handle: int): void => {
   nonnull(helper).meshes.free(handle).dispose();
 };
 
-const js_SetVoxelMeshLight = (mesh: int, texture: int) => {
+const js_SetVoxelMeshLight = (handle: int, texture: int) => {
   const h = nonnull(helper);
-  h.meshes.get(mesh).setLight(h.lights.get(texture));
+  h.meshes.get(handle).setLight(h.lights.get(texture));
 };
 
 const js_SetVoxelMeshGeometry = (handle: int, data: int, size: int): void => {
@@ -2469,6 +2492,9 @@ window.onload = () => { loaded = true; checkReady(); };
 (window as any).beforeWasmCompile = (env: any) => {
   env.js_AddLightTexture  = js_AddLightTexture;
   env.js_FreeLightTexture = js_FreeLightTexture;
+  env.js_AddInstancedMesh      = js_AddInstancedMesh;
+  env.js_FreeInstancedMesh     = js_FreeInstancedMesh;
+  env.js_SetInstancedMeshLight = js_SetInstancedMeshLight;
   env.js_AddVoxelMesh  = js_AddVoxelMesh;
   env.js_FreeVoxelMesh = js_FreeVoxelMesh;
   env.js_SetVoxelMeshLight    = js_SetVoxelMeshLight;

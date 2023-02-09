@@ -397,6 +397,18 @@ function js_FreeLightTexture(handle) {
  throw new Error();
 }
 
+function js_AddInstancedMesh(block, x, y, z) {
+ throw new Error();
+}
+
+function js_FreeInstancedMesh(handle) {
+ throw new Error();
+}
+
+function js_SetInstancedMeshLight(handle, level) {
+ throw new Error();
+}
+
 function js_AddVoxelMesh(data, size, phase) {
  throw new Error();
 }
@@ -473,10 +485,13 @@ var wasmImports = {
  "abort": _abort,
  "emscripten_memcpy_big": _emscripten_memcpy_big,
  "emscripten_resize_heap": _emscripten_resize_heap,
+ "js_AddInstancedMesh": js_AddInstancedMesh,
  "js_AddLightTexture": js_AddLightTexture,
  "js_AddVoxelMesh": js_AddVoxelMesh,
+ "js_FreeInstancedMesh": js_FreeInstancedMesh,
  "js_FreeLightTexture": js_FreeLightTexture,
  "js_FreeVoxelMesh": js_FreeVoxelMesh,
+ "js_SetInstancedMeshLight": js_SetInstancedMeshLight,
  "js_SetVoxelMeshGeometry": js_SetVoxelMeshGeometry,
  "js_SetVoxelMeshLight": js_SetVoxelMeshLight,
  "js_SetVoxelMeshPosition": js_SetVoxelMeshPosition
@@ -570,7 +585,7 @@ var stackAlloc = function() {
 
 var ___start_em_js = Module["___start_em_js"] = 10436;
 
-var ___stop_em_js = Module["___stop_em_js"] = 10823;
+var ___stop_em_js = Module["___stop_em_js"] = 10971;
 
 var calledRun;
 

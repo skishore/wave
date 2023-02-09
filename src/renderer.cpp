@@ -14,6 +14,10 @@ namespace voxels {
 JS(int,  js_AddLightTexture,  (const uint8_t* data, int size));
 JS(int,  js_FreeLightTexture, (int handle));
 
+JS(int,  js_AddInstancedMesh,      (int block, int x, int y, int z));
+JS(void, js_FreeInstancedMesh,     (int handle));
+JS(int,  js_SetInstancedMeshLight, (int handle, int level));
+
 JS(int,  js_AddVoxelMesh,  (const uint32_t* data, int size, int phase));
 JS(void, js_FreeVoxelMesh, (int handle));
 JS(int,  js_SetVoxelMeshLight,    (int mesh, int texture));
@@ -29,6 +33,21 @@ LightTexture::LightTexture(const ChunkTensor3<uint8_t>& lights) {
 }
 
 LightTexture::~LightTexture() { js_FreeLightTexture(binding); }
+
+InstancedMesh::InstancedMesh(Block block, int x, int y, int z) {
+  binding = js_AddInstancedMesh(static_cast<int>(block), x, y, z);
+  lightLevel = -1;
+}
+
+InstancedMesh::~InstancedMesh() {
+  if (binding >= 0) js_FreeInstancedMesh(binding);
+}
+
+void InstancedMesh::setLight(int level) {
+  if (binding < 0 || level == lightLevel) return;
+  js_SetInstancedMeshLight(binding, level);
+  lightLevel = level;
+}
 
 VoxelMesh::VoxelMesh(const Quads& quads, int phase) {
   const auto data = reinterpret_cast<const uint32_t*>(quads.data());

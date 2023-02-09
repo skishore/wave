@@ -64,6 +64,7 @@ struct MaterialData {
 };
 
 struct BlockData {
+  bool mesh;
   bool opaque;
   bool solid;
   int8_t light;

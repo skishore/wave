@@ -36,7 +36,29 @@ struct HeightmapResult {
 
 static ChunkData data;
 
-static uint32_t g_noise2DSeed = 0;
+static constexpr uint32_t kSeed = 0;
+static uint32_t g_noise2DSeed = kSeed;
+
+const std::vector<uint16_t>& getRandomness() {
+  static std::vector<uint16_t> result;
+  if (result.empty()) {
+    constexpr size_t size = 1 << 20;
+    result.reserve(size);
+    srand(kSeed + 17);
+    for (auto i = 0; i < size; i++) {
+      result.push_back(static_cast<uint16_t>(rand()));
+    }
+  }
+  return result;
+}
+
+const uint16_t hash_point(int x, int z) {
+  const auto& randomness = getRandomness();
+  constexpr size_t bits = 10;
+  x &= (1 << bits) - 1;
+  z &= (1 << bits) - 1;
+  return randomness[(x << bits) | z];
+}
 
 auto MinetestNoise2D(double offset, double scale, double spread,
                      size_t octaves, double persistence, double lacunarity) {
@@ -174,8 +196,9 @@ int carveCaves(int x, int z, int limit, int height, ChunkData* data) {
     min = std::min(min, ay);
   }
 
-  // TODO(skishore): Add fungi here.
-
+  if (max < height && max < limit && (hash_point(x, z) & 63) == 4) {
+    data->decorate(Block::Fungi, min);
+  }
   return max;
 }
 
@@ -224,10 +247,12 @@ void loadChunk(int x, int z, ChunkData* data) {
     limit = std::min(limit, neighbor_height - 1);
   }
   const auto cave_height = carveCaves(x, z, limit, cache.height, data);
-  (void)cave_height;
 
-  // TODO(skishore): Add grass here.
-
+  if (cache.block == Block::Grass && cave_height < cache.height) {
+    const auto hash = hash_point(x, z) & 63;
+    if (hash < 2) data->decorate(Block::Bush, cache.height);
+    else if (hash < 4) data->decorate(Block::Rock, cache.height);
+  }
   data->commit();
 };
 

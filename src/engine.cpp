@@ -132,6 +132,7 @@ struct Chunk {
     world = w;
     neighbors = 0;
 
+    instances.clear();
     point_lights.clear();
     stage1_dirty.clear();
     stage1_edges.clear();
@@ -168,10 +169,13 @@ struct Chunk {
     assert(0 <= z && z < kChunkWidth);
     assert(0 <= y && y < kWorldHeight);
 
-    // TODO(skishore): Handle mesh blocks here.
     const auto index = voxels.index(x, y, z);
     const auto it = stage2_lights.find(index);
-    return it != stage2_lights.end() ? it->second : stage1_lights.data[index];
+    const auto base = it != stage2_lights.end()
+        ? it->second : stage1_lights.data[index];
+
+    const auto& data = getRegistry().getBlockUnsafe(voxels.data[index]);
+    return std::min(base + (data.mesh ? 1 : 0), kSunlightLevel);
   }
 
   bool hasMesh() const {
@@ -199,6 +203,7 @@ struct Chunk {
 
   void remeshChunk() {
     assert(needsRemesh());
+    remeshSprites();
     remeshTerrain();
     relightChunk();
     dirty = false;
@@ -210,12 +215,14 @@ struct Chunk {
     assert(0 <= y && y < kBuildHeight);
 
     const auto index = voxels.index(x, y, z);
-    if (voxels.data[index] == block) return;
-    voxels.data[index] = block;
+    const auto old_block = voxels.data[index];
+    if (old_block == block) return;
 
+    voxels.data[index] = block;
     stage1_dirty.insert(index);
     dirty = stage2_dirty = true;
     updateHeightmap(x, z, y, 1, block, index);
+    updateInstance(index, old_block, block);
     equilevels[y] = 0;
 
     constexpr auto M = kChunkMask;
@@ -263,6 +270,9 @@ struct Chunk {
   }
 
   void dropMeshes() {
+    for (auto& [index, instance] : instances) {
+      instance.mesh = std::nullopt;
+    }
     light = std::nullopt;
     solid = std::nullopt;
     water = std::nullopt;
@@ -593,6 +603,12 @@ struct Chunk {
     if (solid) solid->setLight(*light);
     if (water) water->setLight(*light);
 
+    for (auto& [index, instance] : instances) {
+      if (!instance.mesh) continue;
+      const auto base = stage1_lights.data[index];
+      instance.mesh->setLight(std::min(base + 1, kSunlightLevel));
+    }
+
     for (const auto& delta : kLightDeltas) {
       stage1_lights.data[delta.location] = static_cast<uint8_t>(delta.value);
     }
@@ -623,7 +639,10 @@ struct Chunk {
         const auto end = cur + size * decorations;
         for (; cur != end; cur += size) {
           const auto item = *reinterpret_cast<const ChunkItem*>(cur);
+          const auto index = voxels.index(x, item.index, z);
+          const auto old_block = voxels.data[index];
           setColumn(x, z, item.index, 1, item.block);
+          updateInstance(index, old_block, item.block);
           mismatches[item.index + 0]++;
           mismatches[item.index + 1]--;
         }
@@ -684,6 +703,23 @@ struct Chunk {
     assert(neighbors < kNumNeighbors);
     neighbors++;
     ready = checkReady();
+  }
+
+  void remeshSprites() {
+    static_assert(decltype(voxels)::stride[0] == 0x0100);
+    static_assert(decltype(voxels)::stride[1] == 0x0001);
+    static_assert(decltype(voxels)::stride[2] == 0x1000);
+
+    const auto bx = point.x << kChunkBits;
+    const auto bz = point.z << kChunkBits;
+
+    for (auto& [index, instance] : instances) {
+      if (instance.mesh) continue;
+      const auto x = (index >> 8 ) & 0xf;
+      const auto y = (index >> 0 ) & 0xff;
+      const auto z = (index >> 12) & 0xf;
+      instance.mesh.emplace(instance.block, x + bx, y, z + bz);
+    }
   }
 
   void remeshTerrain() {
@@ -833,6 +869,20 @@ struct Chunk {
     }
   }
 
+  void updateInstance(int index, Block old_block, Block new_block) {
+    const auto& registry = getRegistry();
+    const auto& old_data = registry.getBlockUnsafe(old_block);
+    const auto& new_data = registry.getBlockUnsafe(new_block);
+
+    if (new_data.mesh) {
+      auto& instance = instances[index];
+      instance.block = new_block;
+      instance.mesh = std::nullopt;
+    } else if (old_data.mesh) {
+      instances.erase(index);
+    }
+  }
+
   // Cellular automaton lighting is the most complex and expensive logic here.
   // The main problem here is to get lighting to work across multiple chunks.
   // We use the fact that the max light level is smaller than a chunk's width.
@@ -873,6 +923,12 @@ struct Chunk {
   std::optional<LightTexture> light;
   std::optional<VoxelMesh> solid;
   std::optional<VoxelMesh> water;
+
+  struct Instance {
+    Block block;
+    std::optional<InstancedMesh> mesh;
+  };
+  HashMap<int, Instance> instances;
 
   // Lighting; the stage 1 light array comes later.
   HashSet<int> stage1_dirty;
@@ -1155,8 +1211,9 @@ void setPointLight(int x, int y, int z, int level) {
 }
 
 WASM_EXPORT(registerBlock)
-void registerBlock(int block, bool opaque, bool solid, int light, int face0,
-                   int face1, int face2, int face3, int face4, int face5) {
+void registerBlock(
+    int block, bool mesh, bool opaque, bool solid, int light,
+    int face0, int face1, int face2, int face3, int face4, int face5) {
   using voxels::safe_cast;
   const auto material = [](int x) {
     return voxels::MaybeMaterial{safe_cast<uint8_t>(x)};
@@ -1164,7 +1221,7 @@ void registerBlock(int block, bool opaque, bool solid, int light, int face0,
 
   assert(world);
   world->mutableRegistry().addBlock(safe_cast<voxels::Block>(block), {
-    opaque, solid, safe_cast<int8_t>(light),
+    mesh, opaque, solid, safe_cast<int8_t>(light),
     {material(face0), material(face1), material(face2),
      material(face3), material(face4), material(face5)},
   });
