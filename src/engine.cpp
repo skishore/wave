@@ -37,7 +37,7 @@ constexpr LightSpread kLightSpread[6] = {
 struct LightDelta { int location; int value; };
 
 // Lighting cellular automaton buffers.
-static std::array<std::vector<int>, kSunlightLevel - 2> kLightBuffers;
+static NonCopyArray<std::vector<int>, kSunlightLevel - 2> kLightBuffers;
 static std::vector<LightDelta> kLightDeltas;
 static HashSet<int> kNextDirtyLights;
 
@@ -418,7 +418,7 @@ struct Chunk {
     const auto getIndex = [](Point delta) {
       return (delta.x + 1) | ((delta.z + 1) << 2);
     };
-    std::array<Chunk*, 16> zone;
+    NonCopyArray<Chunk*, 16> zone;
     for (const auto& delta : kZone) {
       const auto neighbor = getNeighbor(delta);
       zone[getIndex(delta)] = neighbor;
@@ -527,13 +527,13 @@ struct Chunk {
           const auto x = ((location >> 16) & 0x3) + (diff >> 8);
           const auto z = ((location >> 18) & 0x3);
           if (!(0 <= x && x <= 2)) return -1;
-          return int(((location & 0xffff) ^ mask) | (x << 16) | (z << 18));
+          return ((location & 0xffff) ^ mask) | (x << 16) | (z << 18);
         }
         case 0xf000: {
           const auto x = ((location >> 16) & 0x3);
           const auto z = ((location >> 18) & 0x3) + (diff >> 12);
           if (!(0 <= z && z <= 2)) return -1;
-          return int(((location & 0xffff) ^ mask) | (x << 16) | (z << 18));
+          return ((location & 0xffff) ^ mask) | (x << 16) | (z << 18);
         }
         default: assert(false);
       }
@@ -615,7 +615,7 @@ struct Chunk {
   }
 
   void load() {
-    std::array<int, kWorldHeight> mismatches;
+    NonCopyArray<int, kWorldHeight> mismatches;
     heightmap.data.fill(0);
     mismatches.fill(0);
 
@@ -662,7 +662,7 @@ struct Chunk {
   }
 
   void detectMismatches(const ChunkItem* base, const ChunkItem* test,
-                        std::array<int, kWorldHeight>& mismatches) {
+                        NonCopyArray<int, kWorldHeight>& mismatches) {
     auto matched = true;
     auto base_start = 0;
     auto test_start = 0;

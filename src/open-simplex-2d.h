@@ -16,7 +16,7 @@ struct Noise2D {
   double query(double x, double y) const;
 
  private:
-  std::array<uint8_t, 256> perm;
+  NonCopyArray<uint8_t, 256> perm;
 
   DISALLOW_COPY_AND_ASSIGN(Noise2D);
 };

@@ -36,7 +36,7 @@ struct ChunkData {
   int32_t height = 0;
   int32_t decorated = 0;
   std::vector<uint8_t> serialized;
-  std::array<Decoration, kWorldHeight> decorations;
+  NonCopyArray<Decoration, kWorldHeight> decorations;
 };
 
 struct ChunkDataRange {

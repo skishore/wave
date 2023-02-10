@@ -25,6 +25,13 @@ using HashSet = phmap::flat_hash_set<T>;
 template <typename K, typename V>
 using HashMap = phmap::flat_hash_map<K, V>;
 
+template <typename T, size_t N>
+struct NonCopyArray : std::array<T, N> {
+  NonCopyArray() = default;
+  constexpr static size_t Size = N;
+  DISALLOW_COPY_AND_ASSIGN(NonCopyArray);
+};
+
 //////////////////////////////////////////////////////////////////////////////
 
 static_assert(sizeof(int) == 4);
@@ -97,7 +104,7 @@ struct Tensor2 {
     return x + (z * X);
   }
 
-  std::array<T, X * Z> data;
+  NonCopyArray<T, X * Z> data;
   constexpr static size_t shape[2]  = {X, Z};
   constexpr static size_t stride[2] = {1, X};
 };
@@ -119,20 +126,20 @@ struct Tensor3 {
     return y + (x * Y) + (z * X * Y);
   }
 
-  std::array<T, X * Y * Z> data;
+  NonCopyArray<T, X * Y * Z> data;
   constexpr static size_t shape[3]  = {X, Y, Z};
   constexpr static size_t stride[3] = {Y, 1, X * Y};
 };
 
 template <typename T> using ChunkTensor1 =
-  std::array<T, kWorldHeight>;
+  NonCopyArray<T, kWorldHeight>;
 template <typename T> using ChunkTensor2 =
   Tensor2<T, kChunkWidth, kChunkWidth>;
 template <typename T> using ChunkTensor3 =
   Tensor3<T, kChunkWidth, kWorldHeight, kChunkWidth>;
 
 template <typename T> using MeshTensor1 =
-  std::array<T, kWorldHeight + 2>;
+  NonCopyArray<T, kWorldHeight + 2>;
 template <typename T> using MeshTensor2 =
   Tensor2<T, kChunkWidth + 2, kChunkWidth + 2>;
 template <typename T> using MeshTensor3 =

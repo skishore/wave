@@ -111,8 +111,8 @@ struct Registry {
   size_t numBlocks = 0;
   size_t numMaterials = 0;
 
-  std::array<BlockData, 256> blocks;
-  std::array<MaterialData, 256> materials;
+  NonCopyArray<BlockData, 256> blocks;
+  NonCopyArray<MaterialData, 256> materials;
 
   DISALLOW_COPY_AND_ASSIGN(Registry);
 };
@@ -125,16 +125,17 @@ struct Mesher {
  private:
   using Quad  = VoxelMesh::Quad;
   using Quads = VoxelMesh::Quads;
+  using Pos = std::array<int, 3>;
 
   void addQuad(Quads* quads, const MaterialData& material, int dir, int ao,
-               int wave, int d, int w, int h, const std::array<int, 3>& pos);
+               int wave, int d, int w, int h, const Pos& pos);
   void computeChunkGeometry(int y_min, int y_max);
 
   void patchLiquidSurfaceQuads(
-      Quads* quads, int ao, int w, int h, const std::array<int, 3>& pos);
+      Quads* quads, int ao, int w, int h, const Pos& pos);
   void splitLiquidSideQuads(
-      Quads* quads, const MaterialData& material, int dir, int ao, int wave,
-      int d, int w, int h, const std::array<int, 3>& pos);
+      Quads* quads, const MaterialData& material, int dir, int ao,
+      int wave, int d, int w, int h, const Pos& pos);
 
   bool getTriangleHint(int ao) const;
   int getFaceDir(Block block0, Block block1, int face) const;

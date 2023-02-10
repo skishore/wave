@@ -90,7 +90,7 @@ constexpr Precomputation kPrecomputation = ([]{
 Noise2D::Noise2D(uint32_t seed) {
   seed = shuffleSeed(shuffleSeed(shuffleSeed(seed)));
 
-  std::array<uint8_t, 256> source;
+  NonCopyArray<uint8_t, 256> source;
   for (auto i = 0; i < source.size(); i++) {
     source[i] = static_cast<uint8_t>(i);
   }

@@ -2034,8 +2034,6 @@ class Env {
     this.helper.initializeWorld(kChunkRadius);
 
     this.registry = new Registry(this.helper, this.renderer);
-    this.helper.registry = this.registry;
-
     this.world = new World(this.registry, this.renderer);
     this.highlight = this.renderer.addHighlightMesh();
     this.highlightPosition = Vec3.create();

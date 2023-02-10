@@ -17,7 +17,7 @@ namespace voxels {
 
 namespace {
 
-constexpr int pack_indices(std::array<int, 6> indices) {
+constexpr int pack_indices(const NonCopyArray<int, 6>& indices) {
   auto result = 0;
   for (auto i = 0; i < indices.size(); i++) {
     const auto x = indices[i];
@@ -27,9 +27,9 @@ constexpr int pack_indices(std::array<int, 6> indices) {
   return result;
 };
 
-constexpr std::array<int, 3> kWaveValues = {0b0110, 0b1111, 0b1100};
+constexpr NonCopyArray<int, 3> kWaveValues = {0b0110, 0b1111, 0b1100};
 
-constexpr std::array<int, 4> kIndexOffsets = {
+constexpr NonCopyArray<int, 4> kIndexOffsets = {
   pack_indices({0, 1, 2, 0, 2, 3}),
   pack_indices({1, 2, 3, 0, 1, 3}),
   pack_indices({0, 2, 1, 0, 3, 2}),
@@ -65,7 +65,7 @@ void Mesher::meshChunk() {
   using Voxels = decltype(voxels);
   using Equilevels = decltype(equilevels);
   static_assert(Voxels::stride[1] == 1);
-  static_assert(Voxels::shape[1] == std::tuple_size<Equilevels>::value);
+  static_assert(Voxels::shape[1] == Equilevels::Size);
 
   const auto skip_level = [&](int i) {
     const auto el0 = equilevels[i + 0];
@@ -95,7 +95,7 @@ void Mesher::meshChunk() {
 
 void Mesher::addQuad(
     Quads* quads, const MaterialData& material, int dir, int ao,
-    int wave, int d, int w, int h, const std::array<int, 3>& pos) {
+    int wave, int d, int w, int h, const Pos& pos) {
   static_assert(std::is_trivially_default_constructible_v<Quad>);
   auto& quad = quads->emplace_back();
 
@@ -130,12 +130,12 @@ void Mesher::addQuad(
 }
 
 void Mesher::computeChunkGeometry(int y_min, int y_max) {
-  std::array<int, 3> pos;
-  std::array<int, 3> stride{
+  Pos pos;
+  Pos stride{
     static_cast<int>(voxels.stride[0]),
     static_cast<int>(voxels.stride[1]),
     static_cast<int>(voxels.stride[2])};
-  std::array<int, 3> shape{
+  Pos shape{
     static_cast<int>(voxels.shape[0]),
     static_cast<int>(y_max - y_min),
     static_cast<int>(voxels.shape[2])};
@@ -341,7 +341,7 @@ void Mesher::computeChunkGeometry(int y_min, int y_max) {
 // consider (-x, +x, -z, +z), we should broadcast a different subset of the
 // input AO. But doing that is tricky and AO doesn't matter much here.
 void Mesher::patchLiquidSurfaceQuads(
-    Quads* quads, int ao, int w, int h, const std::array<int, 3>& pos) {
+    Quads* quads, int ao, int w, int h, const Pos& pos) {
   const auto base_x = pos[0];
   const auto base_y = pos[1];
   const auto base_z = pos[2];
@@ -360,7 +360,7 @@ void Mesher::patchLiquidSurfaceQuads(
     return above.opaque || above.faces[3] != kNoMaterial;
   };
 
-  std::array<int, 3> tmp = pos;
+  auto tmp = pos;
   const auto& material = registry.getMaterialUnsafe(assertMaterialUnsafe(id));
 
   for (auto face = 4; face < 6; face++) {
@@ -399,8 +399,8 @@ void Mesher::patchLiquidSurfaceQuads(
 // test may change along the width of the liquid quad, so we may end up
 // splitting one quad into multiple quads here.
 void Mesher::splitLiquidSideQuads(
-    Quads* quads, const MaterialData& material, int dir, int ao, int wave,
-    int d, int w, int h, const std::array<int, 3>& pos) {
+    Quads* quads, const MaterialData& material, int dir, int ao,
+    int wave, int d, int w, int h, const Pos& pos) {
   const auto base_x = pos[0];
   const auto base_y = pos[1];
   const auto base_z = pos[2];
@@ -409,7 +409,7 @@ void Mesher::splitLiquidSideQuads(
   const auto az = base_z + (d == 2 && dir > 0 ? 0 : 1);
   const auto ay = base_y + h + 1;
 
-  std::array<int, 3> tmp = pos;
+  auto tmp = pos;
 
   const auto test = [&](int i) {
     const auto above = d == 0 ? voxels.get(ax, ay, az + i)

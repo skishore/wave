@@ -212,7 +212,7 @@ void loadChunk(int x, int z, ChunkData* data) {
       {0, 1, -1, kExpandedWidth, -kExpandedWidth};
 
   static Point lastChunk = {max, max};
-  static std::array<HeightmapResult, kExpandedWidth * kExpandedWidth> raw;
+  static NonCopyArray<HeightmapResult, kExpandedWidth * kExpandedWidth> raw;
 
   const auto cx = (x & ~(kChunkWidth - 1)) / kChunkWidth;
   const auto cz = (z & ~(kChunkWidth - 1)) / kChunkWidth;
