@@ -1013,26 +1013,26 @@ class VoxelShader extends Shader {
   }
 };
 
-const kDefaultMask = new Int32Array(2);
-
 class VoxelMesh extends Mesh<VoxelShader> {
   private manager: VoxelManager;
   private geo: Geometry;
   private vao: WebGLVertexArrayObject | null = null;
   private quads: Buffer | null = null;
-  private mask: Int32Array = kDefaultMask;
   private light: LightTexture | null = null;
+  private mask: Int32Array;
 
   constructor(manager: VoxelManager, meshes: VoxelMesh[], geo: Geometry) {
     super(manager, meshes);
     this.manager = manager;
     this.geo = geo;
+    this.mask = new Int32Array(2);
   }
 
   dispose(): void {
     super.dispose();
     this.destroyBuffers();
-    this.mask = kDefaultMask;
+    this.mask[0] = 0;
+    this.mask[1] = 0;
   }
 
   draw(camera: Camera, planes: CullingPlane[]): boolean {
@@ -1074,8 +1074,9 @@ class VoxelMesh extends Mesh<VoxelShader> {
     Vec3.set(this.position, x, y, z);
   }
 
-  show(mask: Int32Array, shown: boolean): void {
-    this.mask = mask;
+  show(m0: int, m1: int, shown: boolean): void {
+    this.mask[0] = m0;
+    this.mask[1] = m1;
     if (shown === this.shown()) return;
     shown ? this.addToMeshes() : this.removeFromMeshes();
     assert(shown === this.shown());
@@ -2053,7 +2054,7 @@ interface IVoxelMesh extends IMesh {
   getGeometry: () => Geometry,
   setGeometry: (geo: Geometry) => void,
   setLight: (light: ILightTexture) => void,
-  show: (mask: Int32Array, shown: boolean) => void,
+  show: (m0: int, m1: int, shown: boolean) => void,
 };
 
 class Renderer {

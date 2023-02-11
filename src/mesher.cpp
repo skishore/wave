@@ -93,6 +93,26 @@ void Mesher::meshChunk() {
   }
 }
 
+void Mesher::meshFrontier(const HeightmapEntry* start, int n,
+                          Point pos, int scale, int index) {
+  solid_geo.clear();
+  water_geo.clear();
+
+  assert(n % 2 == 0);
+  const auto half = n >> 1;
+  const auto stride = Point{2, 2 * n};
+
+  for (auto k = 0; k < 4; k++) {
+    const auto x_offset = (k & 1) ? half : 0;
+    const auto z_offset = (k & 2) ? half : 0;
+    const Point sub = {pos.x + x_offset * scale, pos.z + z_offset * scale};
+    const auto mask = 4 * index + k;
+    const auto ptr = &start[x_offset + n * z_offset].fields[0];
+    computeFrontierGeometry(&solid_geo, ptr + 0, half, sub, stride, scale, mask, 1);
+    computeFrontierGeometry(&water_geo, ptr + 1, half, sub, stride, scale, mask, 0);
+  }
+}
+
 void Mesher::addQuad(
     Quads* quads, const MaterialData& material, int dir, int ao,
     int wave, int d, int w, int h, const Pos& pos) {
@@ -327,6 +347,125 @@ void Mesher::computeChunkGeometry(int y_min, int y_max) {
           }
         }
       }
+    }
+  }
+}
+
+void Mesher::computeFrontierGeometry(
+    Quads* quads, const HeightmapField* start, int n, Point pos,
+    Point stride, int scale, int mask, bool solid) {
+
+  const auto mask_8bits = static_cast<uint8_t>(mask);
+  assert(mask_8bits == mask);
+
+  const auto size = n + 2;
+  const auto area = size * size;
+  if (height_mask.size() < area) {
+    height_mask.resize(area, {Block::Air, 0});
+  }
+
+  for (auto z = 0; z < n; z++) {
+    auto source = &start[z * stride.z];
+    const auto target = (z + 1) * size + 1;
+    for (auto x = 0; x < n; x++, source += stride.x) {
+      height_mask[target + x] = *source;
+    }
+  }
+
+  // Use 1D greedy meshing to mesh each of the four horizontal faces.
+  for (auto k = solid ? 0 : 4; k < 4; k++) {
+    const auto d = k & 2 ? 2 : 0;
+    const auto dir = k & 1 ? -1 : 1;
+
+    const auto si = d == 0 ? 1 : size;
+    const auto sj = size + 1 - si;
+
+    const auto ao = d == 0 ? 0x82 : 0x0A;
+    const auto di = dir > 0 ? si : -si;
+
+    for (auto i = 0; i < n; i++) {
+      const auto ii = dir > 0 ? 1 : 0;
+      auto offset = (i + 1) * si + sj;
+      for (auto j = 0; j < n; j++, offset += sj) {
+        const auto [block, height] = height_mask[offset];
+        if (block == Block::Air) continue;
+
+        // We could use the material at the side of the block with:
+        //  const face = 2 * d + ((1 - dir) >> 1);
+        //
+        // But doing so muddles grass, etc. textures at a distance.
+        const auto id = registry.getBlockUnsafe(block).faces[2];
+        if (id == kNoMaterial) continue;
+
+        const auto neighbor_height = height_mask[offset + di].height;
+        if (neighbor_height >= height) continue;
+
+        auto w = 1;
+        const auto limit = n - j;
+        for (auto index = offset + sj; w < limit; w++, index += sj) {
+          const auto match = height_mask[index].block == block &&
+                             height_mask[index].height == height &&
+                             height_mask[index + di].height == neighbor_height;
+          if (!match) break;
+        }
+
+        const auto px = d == 0 ? (i + ii) * scale : j * scale;
+        const auto pz = d == 0 ? j * scale : (i + ii) * scale;
+        const auto wi = d == 0 ? height - neighbor_height : w * scale;
+        const auto hi = d == 0 ? w * scale : height - neighbor_height;
+
+        std::array<int, 3> tmp{pos.x + px, neighbor_height, pos.z + pz};
+        const auto& material = registry.getMaterialUnsafe(assertMaterial(id));
+        const auto wave = material.liquid ? 0b1111 : 0;
+        addQuad(quads, material, dir, ao, wave, d, wi, hi, tmp);
+        quads->back()[3] |= static_cast<uint32_t>(mask_8bits);
+
+        const auto extra = w - 1;
+        offset += extra * sj;
+        j += extra;
+      }
+    }
+  }
+
+  // Use 2D greedy meshing to mesh the heightmap's top faces. This step is
+  // second because we operate destructively on the height mask here.
+  for (auto z = 0; z < n; z++) {
+    auto prev = &height_mask[(z + 1) * size + 1];
+    for (auto x = 0; x < n; x++, prev++) {
+      if (prev->block == Block::Air) continue;
+      const auto id = registry.getBlockUnsafe(prev->block).faces[2];
+      if (id == kNoMaterial) continue;
+
+      const auto match = [&](const HeightmapField* next) {
+        return next->block == prev->block && next->height == prev->height;
+      };
+
+      auto lx = n - x, lz = n - z, w = 1, h = 1;
+      for (auto next = prev + size; w < lz; w++, next += size) {
+        if (!match(next)) break;
+      }
+      for (; h < lx; h++) {
+        auto next = prev + h;
+        for (auto i = 0; i < w; i++, next += size) {
+          if (!match(next)) goto OUTER;
+        }
+      }
+      OUTER:
+
+      std::array<int, 3> tmp{pos.x + x * scale, prev->height, pos.z + z * scale};
+      const auto& material = registry.getMaterialUnsafe(assertMaterial(id));
+      const auto wave = material.liquid ? 0b1111 : 0;
+      addQuad(quads, material, 1, 0, wave, 1, scale * w, scale * h, tmp);
+      quads->back()[3] |= static_cast<uint32_t>(mask_8bits);
+
+      for (auto wi = 0; wi < w; wi++) {
+        const auto target = &prev[wi * size];
+        for (auto hi = 0; hi < h; hi++) target[hi].block = Block::Air;
+      }
+
+      const auto extra = h - 1;
+      prev += extra;
+      x += extra;
     }
   }
 }

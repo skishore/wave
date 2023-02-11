@@ -417,11 +417,19 @@ function js_FreeVoxelMesh(handle) {
  throw new Error();
 }
 
-function js_SetVoxelMeshLight(mesh, texture) {
+function js_AddVoxelMeshGeometry(handle, data, size) {
  throw new Error();
 }
 
 function js_SetVoxelMeshGeometry(handle, data, size) {
+ throw new Error();
+}
+
+function js_SetVoxelMeshLight(handle, texture) {
+ throw new Error();
+}
+
+function js_SetVoxelMeshMask(handle, m0, m1, shown) {
  throw new Error();
 }
 
@@ -488,12 +496,14 @@ var wasmImports = {
  "js_AddInstancedMesh": js_AddInstancedMesh,
  "js_AddLightTexture": js_AddLightTexture,
  "js_AddVoxelMesh": js_AddVoxelMesh,
+ "js_AddVoxelMeshGeometry": js_AddVoxelMeshGeometry,
  "js_FreeInstancedMesh": js_FreeInstancedMesh,
  "js_FreeLightTexture": js_FreeLightTexture,
  "js_FreeVoxelMesh": js_FreeVoxelMesh,
  "js_SetInstancedMeshLight": js_SetInstancedMeshLight,
  "js_SetVoxelMeshGeometry": js_SetVoxelMeshGeometry,
  "js_SetVoxelMeshLight": js_SetVoxelMeshLight,
+ "js_SetVoxelMeshMask": js_SetVoxelMeshMask,
  "js_SetVoxelMeshPosition": js_SetVoxelMeshPosition
 };
 
@@ -583,9 +593,9 @@ var stackAlloc = function() {
  return (stackAlloc = Module["asm"]["stackAlloc"]).apply(null, arguments);
 };
 
-var ___start_em_js = Module["___start_em_js"] = 10436;
+var ___start_em_js = Module["___start_em_js"] = 10660;
 
-var ___stop_em_js = Module["___stop_em_js"] = 10971;
+var ___stop_em_js = Module["___stop_em_js"] = 11335;
 
 var calledRun;
 

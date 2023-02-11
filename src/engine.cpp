@@ -74,9 +74,10 @@ constexpr int minUpdatedNeighborLight(int next, int prev) {
 
 //////////////////////////////////////////////////////////////////////////////
 
-constexpr int kNumChunksToLoadPerFrame  = 1;
-constexpr int kNumChunksToMeshPerFrame  = 1;
-constexpr int kNumChunksToLightPerFrame = 4;
+constexpr int kNumChunksToLoadPerFrame    = 1;
+constexpr int kNumChunksToMeshPerFrame    = 1;
+constexpr int kNumChunksToLightPerFrame   = 4;
+constexpr int kNumLODChunksToMeshPerFrame = 4;
 
 // Require a layer of air blocks at the top of the world. Doing so simplifies
 // our data structures and shaders (for example, a height fits in a uint8_t).
@@ -203,6 +204,9 @@ struct Chunk {
 
   void remeshChunk() {
     assert(needsRemesh());
+    if (!hasMesh()) {
+      markFrontierDirty();
+    }
     remeshSprites();
     remeshTerrain();
     relightChunk();
@@ -264,12 +268,14 @@ struct Chunk {
   Mesher& getMesher() const;
   Chunk* getNeighbor(Point delta) const;
   const Registry& getRegistry() const;
+  void markFrontierDirty() const;
 
   bool checkReady() const {
     return neighbors == kNumNeighbors;
   }
 
   void dropMeshes() {
+    if (hasMesh()) markFrontierDirty();
     for (auto& [index, instance] : instances) {
       instance.mesh = std::nullopt;
     }
@@ -945,6 +951,8 @@ struct Chunk {
   DISALLOW_COPY_AND_ASSIGN(Chunk);
 };
 
+//////////////////////////////////////////////////////////////////////////////
+
 template <typename T>
 struct Circle {
   Circle(double radius) {
@@ -1026,13 +1034,14 @@ struct Circle {
     return result && result->point == p ? result : nullptr;
   }
 
-  template <typename U>
-  void set(Point p, const U& context) {
+  template <typename ...Args>
+  T* set(Point p, const Args&... args) {
     auto& result = lookup[getIndex(p)];
     assert(result == nullptr);
     assert(used < total);
     result = unused[used++];
-    result->create(p, context);
+    result->create(p, args...);
+    return result;
   }
 
  private:
@@ -1046,15 +1055,261 @@ struct Circle {
   int shift = 0;
   int total = 0;
   int numDeltas = 0;
-  std::unique_ptr<T[]> storage;     // size: total
-  std::unique_ptr<T*[]> unused;     // size: total
+  std::unique_ptr<T[]> storage;    // size: total
+  std::unique_ptr<T*[]> unused;    // size: total
   std::unique_ptr<Point[]> points; // size: total
-  std::unique_ptr<int[]> deltas;    // size: numDeltas
-  std::unique_ptr<T*[]> lookup;     // size: 1 << (2 * shift)
+  std::unique_ptr<int[]> deltas;   // size: numDeltas
+  std::unique_ptr<T*[]> lookup;    // size: 1 << (2 * shift)
 };
 
+//////////////////////////////////////////////////////////////////////////////
+
+constexpr size_t kMultiMeshBits = 2;
+constexpr size_t kMultiMeshSide = 1 << kMultiMeshBits;
+constexpr size_t kMultiMeshArea = kMultiMeshSide * kMultiMeshSide;
+constexpr size_t kLODSingleMask = (1 << 4) - 1;
+
+struct Frontier;
+
+struct LODMultiMesh {
+  LODMultiMesh() { states.fill({false, false}); }
+
+  void disable(int index) {
+    if (!states[index].enabled) return;
+
+    assert(numEnabled > 0);
+    setMask(index, kLODSingleMask);
+    states[index].enabled = false;
+    if ((--numEnabled) > 0) return;
+
+    for (auto& state : states) state.meshed = false;
+    solid = std::nullopt;
+    water = std::nullopt;
+    mask = -1;
+  }
+
+  bool hasMesh(int index) {
+    return states[index].meshed;
+  }
+
+  void show(int index, int mask_value) {
+    assert(states[index].meshed);
+    setMask(index, mask_value);
+    if (states[index].enabled) return;
+
+    assert(numEnabled < kMultiMeshArea);
+    states[index].enabled = true;
+    numEnabled++;
+  }
+
+ private:
+  friend struct Frontier;
+
+  struct State { bool meshed; bool enabled; };
+
+  void setMask(int index, int mask_value) {
+    const auto shift = index << 2;
+    mask &= ~(static_cast<uint64_t>(kLODSingleMask) << shift);
+    mask |= static_cast<uint64_t>(mask_value) << shift;
+
+    const auto m0 = static_cast<int32_t>(mask);
+    const auto m1 = static_cast<int32_t>(mask >> 32);
+    const auto shown = mask != -1;
+    if (solid) solid->setMask(m0, m1, shown);
+    if (water) water->setMask(m0, m1, shown);
+  }
+
+  std::optional<VoxelMesh> solid;
+  std::optional<VoxelMesh> water;
+  std::array<State, kMultiMeshArea> states;
+  uint64_t mask = -1;
+  int numEnabled = 0;
+
+  DISALLOW_COPY_AND_ASSIGN(LODMultiMesh);
+};
+
+struct FrontierChunk {
+  FrontierChunk() = default;
+
+  void create(Point p, int l, LODMultiMesh* m, Frontier* f) {
+    assert(f != nullptr);
+
+    point = p;
+    level = l;
+    mesh = m;
+    frontier = f;
+
+    constexpr int mask = kMultiMeshSide - 1;
+    index = (p.x & mask) | ((p.z & mask) << kMultiMeshBits);
+  }
+
+  void destroy();
+
+  bool hasMesh() { return mesh->hasMesh(index); }
+
+  void setMask(int mask) { mesh->show(index, mask); }
+
+ private:
+  friend struct Frontier;
+  template <typename T> friend struct Circle;
+
+  Point point;
+  int level;
+  int index;
+  LODMultiMesh* mesh;
+  Frontier* frontier;
+
+  DISALLOW_COPY_AND_ASSIGN(FrontierChunk);
+};
+
+struct Frontier {
+  Frontier(World* w, double chunkRadius, int frontierRadius, int numLevels) {
+    assert(w != nullptr);
+    world = w;
+    for (auto i = 0; i < numLevels; i++) {
+      chunkRadius = (chunkRadius + frontierRadius) / 2;
+      levels.emplace_back(chunkRadius);
+    }
+  }
+
+  void markDirty(int level) {
+    if (level < levels.size()) levels[level].dirty = true;
+  }
+
+  void recenter(Point p) {
+    for (auto& level : levels) {
+      p.x >>= 1;
+      p.z >>= 1;
+      level.chunks.recenter(p);
+    }
+  }
+
+  void remeshFrontier() {
+    const size_t size = levels.size();
+    for (auto l = 0; l < size; l++) computeLODAtLevel(l);
+  }
+
+ private:
+  struct Level {
+    Level(double radius) : chunks(radius) {}
+    Circle<FrontierChunk> chunks;
+    bool dirty = true;
+  };
+
+  Mesher& getMesher() const;
+  Chunk* getWorldChunk(Point p) const;
+
+  LODMultiMesh* getOrCreateMultiMesh(Point p, int l) {
+    const auto shift = 12;
+    const auto mask = (1 << shift) - 1;
+    const auto base = (p.x & mask) | ((p.z & mask) << shift);
+    const auto key = base * static_cast<int>(levels.size()) + l;
+
+    auto& result = meshes[key];
+    if (!result) result = std::make_unique<LODMultiMesh>();
+    return result.get();
+  }
+
+  FrontierChunk* createFrontierChunk(Point p, int l, Level& level) {
+    const auto bits = kMultiMeshBits;
+    const auto mesh = getOrCreateMultiMesh({p.x >> bits, p.z >> bits}, l);
+    const auto result = level.chunks.set(p, l, mesh, this);
+    // A FrontierChunk's mesh is just a fragment of data in its LODMultiMesh.
+    // That means that we may already have a mesh when we construct the chunk,
+    // if we previously disposed it without discarding data in the multi-mesh.
+    // We count this case as meshing a chunk and mark l + 1 dirty.
+    if (result->hasMesh()) markDirty(l + 1);
+    return result;
+  }
+
+  void createLODMeshes(FrontierChunk* chunk) {
+    const auto level = chunk->level;
+    const auto cx = chunk->point.x, cz = chunk->point.z;
+
+    // The (x, z) pos of the base of this chunk in world coordinates.
+    const auto shift = kChunkBits + level;
+    const auto pos = Point{cx << (shift + 1), cz << (shift + 1)};
+
+    // The (x, z) pos of this chunk's multimesh, in world coordinates.
+    //
+    // Note that we offset the multimesh, so that quad coordinates relative
+    // this this position can be positive or negative, and are centered on 0.
+    const auto multi = static_cast<int>(kMultiMeshSide);
+    const auto mesh_pos = Point{(2 * (cx & ~(multi - 1)) + multi) << shift,
+                                (2 * (cz & ~(multi - 1)) + multi) << shift};
+
+    auto& mesher = getMesher();
+    const auto [start, end] = loadHeightmap(cx, cz, level);
+    static_assert(sizeof(start[0]) == sizeof(Mesher::HeightmapEntry));
+    assert((end - start) == kChunkWidth * kChunkWidth);
+    mesher.meshFrontier(reinterpret_cast<const Mesher::HeightmapEntry*>(start),
+                        kChunkWidth, pos - mesh_pos, 2 << level, chunk->index);
+
+    const auto mesh = [&](auto& mesh, const auto& quads, int phase) {
+      if (quads.empty()) return;
+      mesh ? mesh->appendGeometry(quads) : void(mesh.emplace(quads, phase));
+      mesh->setPosition(mesh_pos.x, 0, mesh_pos.z);
+    };
+    mesh(chunk->mesh->solid, mesher.solid_geo, 0);
+    mesh(chunk->mesh->water, mesher.water_geo, 1);
+    chunk->mesh->states[chunk->index].meshed = true;
+  }
+
+  void computeLODAtLevel(int l) {
+    auto& level = levels[l];
+    if (!level.dirty) return;
+
+    const auto meshed = [&](Point p) {
+      if (l > 0) {
+        const auto chunk = levels[l - 1].chunks.get(p);
+        return chunk && chunk->hasMesh();
+      } else {
+        const auto chunk = getWorldChunk(p);
+        return chunk && chunk->hasMesh();
+      }
+    };
+
+    auto counter = 0;
+    level.dirty = false;
+    level.chunks.each([&](Point p) {
+      auto mask = 0;
+      for (auto i = 0; i < 4; i++) {
+        const auto dx = (p.x << 1) | ((i >> 0) & 1);
+        const auto dz = (p.z << 1) | ((i >> 1) & 1);
+        if (meshed({dx, dz})) mask |= (1 << i);
+      }
+
+      const auto shown = mask != 0xf;
+      const auto extra = counter < kNumLODChunksToMeshPerFrame;
+      const auto create = shown && (extra || mask);
+      if (shown && !create) level.dirty = true;
+
+      const auto existing = level.chunks.get(p);
+      if (!(existing || create)) return false;
+
+      const auto lod = existing ? existing : createFrontierChunk(p, l, level);
+      if (shown && !lod->hasMesh()) {
+        createLODMeshes(lod);
+        markDirty(l + 1);
+        counter++;
+      }
+      lod->setMask(mask);
+      return false;
+    });
+  }
+
+  World* world;
+  std::vector<Level> levels;
+  HashMap<int, std::unique_ptr<LODMultiMesh>> meshes;
+};
+
+//////////////////////////////////////////////////////////////////////////////
+
 struct World {
-  World(double radius) : chunks(radius), mesher(registry) {}
+  World(double chunkRadius, int frontierRadius, int numLevels)
+    : chunks(chunkRadius)
+    , frontier(this, chunkRadius, frontierRadius, numLevels)
+    , mesher(registry) {}
 
   Block getBlock(int x, int y, int z) {
     if (y < 0) return Block::Bedrock;
@@ -1104,6 +1359,7 @@ struct World {
   void recenter(Point p) {
     const auto c = Point{p.x >> kChunkBits, p.z >> kChunkBits};
     chunks.recenter(c);
+    frontier.recenter(c);
 
     auto loaded = 0;
     chunks.each([&](Point point) {
@@ -1134,19 +1390,24 @@ struct World {
       }
       return false;
     });
+    frontier.remeshFrontier();
   }
 
   Registry& mutableRegistry() { return registry; };
 
  private:
   friend struct Chunk;
+  friend struct Frontier;
 
   Circle<Chunk> chunks;
+  Frontier frontier;
   Registry registry;
   Mesher mesher;
 
   DISALLOW_COPY_AND_ASSIGN(World);
 };
+
+//////////////////////////////////////////////////////////////////////////////
 
 Mesher& Chunk::getMesher() const {
   return world->mesher;
@@ -1160,6 +1421,23 @@ const Registry& Chunk::getRegistry() const {
   return world->registry;
 }
 
+void Chunk::markFrontierDirty() const {
+  world->frontier.markDirty(0);
+}
+
+void FrontierChunk::destroy() {
+  if (hasMesh()) frontier->markDirty(level + 1);
+  mesh->disable(index);
+}
+
+Mesher& Frontier::getMesher() const {
+  return world->mesher;
+}
+
+Chunk* Frontier::getWorldChunk(Point p) const {
+  return world->chunks.get(p);
+}
+
 //////////////////////////////////////////////////////////////////////////////
 
 } // namespace voxels
@@ -1169,9 +1447,10 @@ const Registry& Chunk::getRegistry() const {
 std::optional<voxels::World> world;
 
 WASM_EXPORT(initializeWorld)
-void initializeWorld(double radius) {
+void initializeWorld(int chunkRadius, int frontierRadius, int frontierLevels) {
   assert(!world);
-  world.emplace(radius + 0.5);
+  const double adjusted = static_cast<double>(chunkRadius) + 0.5;
+  world.emplace(adjusted, frontierRadius, frontierLevels);
 }
 
 WASM_EXPORT(recenterWorld)

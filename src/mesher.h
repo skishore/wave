@@ -118,9 +118,14 @@ struct Registry {
 };
 
 struct Mesher {
+  struct HeightmapField { Block block; uint8_t height; };
+  struct HeightmapEntry { std::array<HeightmapField, 2> fields; };
+
   Mesher(const Registry& r);
 
   void meshChunk();
+  void meshFrontier(const HeightmapEntry* start, int n,
+                    Point pos, int scale, int index);
 
  private:
   using Quad  = VoxelMesh::Quad;
@@ -130,6 +135,10 @@ struct Mesher {
   void addQuad(Quads* quads, const MaterialData& material, int dir, int ao,
                int wave, int d, int w, int h, const Pos& pos);
   void computeChunkGeometry(int y_min, int y_max);
+
+  void computeFrontierGeometry(
+      Quads* quads, const HeightmapField* start, int n, Point pos,
+      Point stride, int scale, int mask, bool solid);
 
   void patchLiquidSurfaceQuads(
       Quads* quads, int ao, int w, int h, const Pos& pos);
@@ -155,6 +164,7 @@ struct Mesher {
   const Registry& registry;
   std::vector<int> mask_data;
   std::vector<int> mask_union;
+  std::vector<HeightmapField> height_mask;
 
   DISALLOW_COPY_AND_ASSIGN(Mesher);
 };

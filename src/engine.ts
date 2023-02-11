@@ -680,7 +680,7 @@ const kNumLODChunksToMeshPerFrame = 1;
 
 const kFrontierLOD = 2;
 const kFrontierRadius = 8;
-const kFrontierLevels = 0;
+const kFrontierLevels = 6;
 
 // Enable debug assertions for the equi-levels optimization.
 const kCheckEquilevels = false;
@@ -1577,7 +1577,6 @@ class LODMultiMesh {
   meshed: boolean[];
 
   private mask: Int32Array;
-  private visible: int = 0;
   private enabled: boolean[];
 
   constructor() {
@@ -1620,9 +1619,11 @@ class LODMultiMesh {
     this.mask[mask_index] &= ~(kLODSingleMask << mask_shift);
     this.mask[mask_index] |= mask << mask_shift;
 
-    const shown = (this.mask[0] & this.mask[1]) !== -1;
-    this.solid?.show(this.mask, shown);
-    this.water?.show(this.mask, shown);
+    const m0 = int(this.mask[0]);
+    const m1 = int(this.mask[1]);
+    const shown = (m0 & m1) !== -1;
+    this.solid?.show(m0, m1, shown);
+    this.water?.show(m0, m1, shown);
   }
 };
 
@@ -1672,7 +1673,7 @@ class Frontier {
     this.dirty = [];
     this.levels = [];
     let radius = (kChunkRadius | 0) + 0.5;
-    for (let i = 0; i < kFrontierLevels; i++) {
+    for (let i = 0; i < 0; i++) {
       radius = (radius + kFrontierRadius) / 2;
       this.levels.push(new Circle(radius));
       this.dirty.push(true);
@@ -1749,7 +1750,7 @@ class Frontier {
         this.markDirty(int(l + 1));
         counter++;
       }
-      lod.mesh.show(lod.mesh.index(lod), mask);
+      lod.mesh.show(lod.index, mask);
       return false;
     });
     this.dirty[l] = skipped;
@@ -1814,7 +1815,7 @@ class Frontier {
       const n = int(side + 2);
       const px = int(x + dx - mx - lod);
       const pz = int(z + dz - mz - lod);
-      const mask = int(k + 4 * mesh.index(chunk));
+      const mask = int(k + 4 * chunk.index);
       mesh.solid = this.world.mesher.meshFrontier(
           solid_heightmap, mask, px, pz, n, n, lod, mesh.solid, true);
       mesh.water = this.world.mesher.meshFrontier(
@@ -1823,7 +1824,7 @@ class Frontier {
 
     mesh.solid?.setPosition(mx, 0, mz);
     mesh.water?.setPosition(mx, 0, mz);
-    mesh.meshed[mesh.index(chunk)] = true;
+    mesh.meshed[chunk.index] = true;
   }
 
   private createFrontierChunk(cx: int, cz: int, level: int): FrontierChunk {
@@ -2031,7 +2032,7 @@ class Env {
 
     this.helper = nonnull(helper);
     this.helper.renderer = this.renderer;
-    this.helper.initializeWorld(kChunkRadius);
+    this.helper.initializeWorld(kChunkRadius, kFrontierRadius, kFrontierLevels);
 
     this.registry = new Registry(this.helper, this.renderer);
     this.world = new World(this.registry, this.renderer);
@@ -2333,7 +2334,7 @@ interface WasmModule {
     createNoise2D: (seed: int) => WasmNoise2D,
     queryNoise2D: (noise: WasmNoise2D, x: number, y: number) => number,
 
-    initializeWorld: (radius: number) => void,
+    initializeWorld: (chunkRadius: int, frontierRadius: int, frontierLevels: int) => void;
     recenterWorld: (x: int, z: int) => void,
     remeshWorld: () => void,
 
@@ -2384,7 +2385,7 @@ class WasmHelper {
 
   // Bindings to call C++ from JavaScript.
 
-  initializeWorld: (radius: number) => void;
+  initializeWorld: (chunkRadius: int, frontierRadius: int, frontierLevels: int) => void;
   recenterWorld: (x: int, z: int) => void;
   remeshWorld: () => void;
 
@@ -2467,9 +2468,19 @@ const js_FreeVoxelMesh = (handle: int): void => {
   nonnull(helper).meshes.free(handle).dispose();
 };
 
-const js_SetVoxelMeshLight = (handle: int, texture: int) => {
+const js_AddVoxelMeshGeometry = (handle: int, data: int, size: int): void => {
   const h = nonnull(helper);
-  h.meshes.get(handle).setLight(h.lights.get(texture));
+  const mesh = h.meshes.get(handle);
+  const geo = mesh.getGeometry();
+  const old_num_quads = geo.num_quads;
+
+  const offset = data >> 2;
+  const buffer = h.module.HEAP32.subarray(offset, offset + size);
+  geo.allocateQuads(int(old_num_quads + (size / Geometry.StrideInInt32)));
+  geo.quads.set(buffer, old_num_quads * Geometry.StrideInInt32);
+  geo.dirty = true;
+
+  mesh.setGeometry(geo);
 };
 
 const js_SetVoxelMeshGeometry = (handle: int, data: int, size: int): void => {
@@ -2478,6 +2489,16 @@ const js_SetVoxelMeshGeometry = (handle: int, data: int, size: int): void => {
   const buffer = h.module.HEAP32.slice(offset, offset + size);
   const geo = new Geometry(buffer, int(size / Geometry.StrideInInt32));
   h.meshes.get(handle).setGeometry(geo);
+};
+
+const js_SetVoxelMeshLight = (handle: int, texture: int) => {
+  const h = nonnull(helper);
+  h.meshes.get(handle).setLight(h.lights.get(texture));
+};
+
+const js_SetVoxelMeshMask = (handle: int, m0: int, m1: int, shown: int) => {
+  const h = nonnull(helper);
+  h.meshes.get(handle).show(m0, m1, !!shown);
 };
 
 const js_SetVoxelMeshPosition = (handle: int, x: int, y: int, z: int): void => {
@@ -2495,8 +2516,10 @@ window.onload = () => { loaded = true; checkReady(); };
   env.js_SetInstancedMeshLight = js_SetInstancedMeshLight;
   env.js_AddVoxelMesh  = js_AddVoxelMesh;
   env.js_FreeVoxelMesh = js_FreeVoxelMesh;
-  env.js_SetVoxelMeshLight    = js_SetVoxelMeshLight;
+  env.js_AddVoxelMeshGeometry = js_AddVoxelMeshGeometry;
   env.js_SetVoxelMeshGeometry = js_SetVoxelMeshGeometry;
+  env.js_SetVoxelMeshLight    = js_SetVoxelMeshLight;
+  env.js_SetVoxelMeshMask     = js_SetVoxelMeshMask;
   env.js_SetVoxelMeshPosition = js_SetVoxelMeshPosition;
 };
 (window as any).onWasmCompile =

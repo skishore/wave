@@ -20,8 +20,10 @@ JS(int,  js_SetInstancedMeshLight, (int handle, int level));
 
 JS(int,  js_AddVoxelMesh,  (const uint32_t* data, int size, int phase));
 JS(void, js_FreeVoxelMesh, (int handle));
-JS(int,  js_SetVoxelMeshLight,    (int mesh, int texture));
+JS(int,  js_AddVoxelMeshGeometry, (int handle, const uint32_t* data, int size));
 JS(int,  js_SetVoxelMeshGeometry, (int handle, const uint32_t* data, int size));
+JS(int,  js_SetVoxelMeshLight,    (int handle, int texture));
+JS(int,  js_SetVoxelMeshMask,     (int handle, int m0, int m1, bool shown));
 JS(int,  js_SetVoxelMeshPosition, (int handle, int x, int y, int z));
 
 #undef JS
@@ -57,14 +59,24 @@ VoxelMesh::VoxelMesh(const Quads& quads, int phase) {
 
 VoxelMesh::~VoxelMesh() { js_FreeVoxelMesh(binding); }
 
-void VoxelMesh::setLight(const LightTexture& texture) {
-  js_SetVoxelMeshLight(binding, texture.binding);
+void VoxelMesh::appendGeometry(const Quads& quads) {
+  const auto data = reinterpret_cast<const uint32_t*>(quads.data());
+  const auto size = quads.size() * sizeof(Quad) / sizeof(uint32_t);
+  js_AddVoxelMeshGeometry(binding, data, size);
 }
 
 void VoxelMesh::setGeometry(const Quads& quads) {
   const auto data = reinterpret_cast<const uint32_t*>(quads.data());
   const auto size = quads.size() * sizeof(Quad) / sizeof(uint32_t);
   js_SetVoxelMeshGeometry(binding, data, size);
+}
+
+void VoxelMesh::setLight(const LightTexture& texture) {
+  js_SetVoxelMeshLight(binding, texture.binding);
+}
+
+void VoxelMesh::setMask(int m0, int m1, bool shown) {
+  js_SetVoxelMeshMask(binding, m0, m1, shown);
 }
 
 void VoxelMesh::setPosition(int x, int y, int z) {

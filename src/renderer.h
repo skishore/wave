@@ -55,8 +55,10 @@ struct VoxelMesh {
   VoxelMesh(const Quads& quads, int phase);
   ~VoxelMesh();
 
+  void appendGeometry(const Quads& quads);
   void setLight(const LightTexture& light);
   void setGeometry(const Quads& quads);
+  void setMask(int m0, int m1, bool shown);
   void setPosition(int x, int y, int z);
 
  private:

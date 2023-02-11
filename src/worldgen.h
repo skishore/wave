@@ -20,8 +20,8 @@ struct ChunkData {
   size_t size() const { return serialized.size(); }
 
   void commit();
-  void decorate(Block block, int32_t height);
-  void push(Block block, int32_t limit);
+  void decorate(Block block, int height);
+  void push(Block block, int limit);
   void reset();
 
  private:
@@ -33,8 +33,8 @@ struct ChunkData {
 
   void clearDecoration(Decoration& decoration);
 
-  int32_t height = 0;
-  int32_t decorated = 0;
+  int height = 0;
+  int decorated = 0;
   std::vector<uint8_t> serialized;
   NonCopyArray<Decoration, kWorldHeight> decorations;
 };
@@ -43,7 +43,13 @@ struct ChunkDataRange {
   const uint8_t* start;
   const uint8_t* end;
 };
-ChunkDataRange loadChunkData(int32_t cx, int32_t cz);
+ChunkDataRange loadChunkData(int cx, int cz);
+
+struct HeightmapRange {
+  const uint32_t* start;
+  const uint32_t* end;
+};
+HeightmapRange loadHeightmap(int cx, int cz, int level);
 
 //////////////////////////////////////////////////////////////////////////////
 

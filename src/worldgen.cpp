@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <vector>
 
 #include "base.h"
@@ -34,7 +35,8 @@ struct HeightmapResult {
   int snow_depth;
 };
 
-static ChunkData data;
+static ChunkData chunkData;
+static std::vector<uint32_t> heightmapData;
 
 static constexpr uint32_t kSeed = 0;
 static uint32_t g_noise2DSeed = kSeed;
@@ -117,7 +119,7 @@ HeightmapResult* heightmap(int x, int z) {
   const auto base = sqrt(x * x + z * z) / kIslandRadius;
   const auto falloff = 16 * base * base;
   if (falloff >= kSeaLevel) {
-    kHeightmapResult.block = Block::Air;
+    kHeightmapResult.block = Block::Bedrock;
     kHeightmapResult.height = 0;
     kHeightmapResult.snow_depth = 0;
     return &kHeightmapResult;
@@ -254,7 +256,26 @@ void loadChunk(int x, int z, ChunkData* data) {
     else if (hash < 4) data->decorate(Block::Rock, cache.height);
   }
   data->commit();
-};
+}
+
+uint32_t packHeightmapData(int x, int z) {
+  static_assert(sizeof(Block) == 1);
+  static_assert(static_cast<uint32_t>(Block::Air) == 0);
+
+  const auto result = heightmap(x, z);
+  const Block solid_block = result->block;
+  const uint8_t solid_height =
+      static_cast<uint8_t>(std::clamp(result->height, 0x00, 0xff));
+
+  if (solid_height >= kSeaLevel) {
+    return (static_cast<uint32_t>(solid_block)  << 0) |
+           (static_cast<uint32_t>(solid_height) << 8);
+  }
+  return (static_cast<uint32_t>(solid_block)  << 0 ) |
+         (static_cast<uint32_t>(solid_height) << 8 ) |
+         (static_cast<uint32_t>(Block::Water) << 16) |
+         (static_cast<uint32_t>(kSeaLevel)    << 24);
+}
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -310,13 +331,27 @@ void ChunkData::clearDecoration(Decoration& decoration) {
 }
 
 ChunkDataRange loadChunkData(int cx, int cz) {
-  data.reset();
+  chunkData.reset();
+  const auto bx = cx << kChunkBits, bz = cz << kChunkBits;
   for (auto j = 0; j < kChunkWidth; j++) {
     for (auto i = 0; i < kChunkWidth; i++) {
-      loadChunk(i + cx * kChunkWidth, j + cz * kChunkWidth, &data);
+      loadChunk(i + bx, j + bz, &chunkData);
     }
   }
-  return {data.data(), data.data() + data.size()};
+  return {chunkData.data(), chunkData.data() + chunkData.size()};
+}
+
+HeightmapRange loadHeightmap(int cx, int cz, int level) {
+  heightmapData.clear();
+  const auto bx = cx << kChunkBits, bz = cz << kChunkBits;
+  for (auto j = 0; j < kChunkWidth; j++) {
+    for (auto i = 0; i < kChunkWidth; i++) {
+      const auto ax = (2 * (i + bx) + 1) << level;
+      const auto az = (2 * (j + bz) + 1) << level;
+      heightmapData.push_back(packHeightmapData(ax, az));
+    }
+  }
+  return {heightmapData.data(), heightmapData.data() + heightmapData.size()};
 }
 
 //////////////////////////////////////////////////////////////////////////////
