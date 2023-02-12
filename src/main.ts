@@ -271,9 +271,11 @@ const runPhysics = (env: TypedEnv, dt: number, state: PhysicsState) => {
   const x = int(Math.floor((min[0] + max[0]) / 2));
   const y = int(Math.floor(min[1]));
   const z = int(Math.floor((min[2] + max[2]) / 2));
+
   const block = env.getBlock(x, y, z);
-  state.inGrass = env.registry.getBlockMesh(block) !== null;
-  state.inFluid = block !== kEmptyBlock && !state.inGrass;
+  const mesh = env.registry.getBlockMesh(block);
+  state.inFluid = block !== kEmptyBlock && mesh === null;
+  state.inGrass = block === nonnull(env.blocks).bush;
 
   const drag = state.inFluid ? 2 : 0;
   const left = Math.max(1 - drag * dt, 0);
