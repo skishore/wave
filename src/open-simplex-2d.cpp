@@ -156,15 +156,3 @@ double Noise2D::query(double x, double y) const {
 //////////////////////////////////////////////////////////////////////////////
 
 } // namespace voxels
-
-//////////////////////////////////////////////////////////////////////////////
-
-WASM_EXPORT(createNoise2D)
-voxels::Noise2D* createNoise2D(int seed) {
-  return new voxels::Noise2D(static_cast<uint32_t>(seed));
-}
-
-WASM_EXPORT(queryNoise2D)
-double queryNoise2D(const voxels::Noise2D* noise, double x, double y) {
-  return noise->query(x, y);
-}

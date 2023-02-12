@@ -330,6 +330,12 @@ void ChunkData::clearDecoration(Decoration& decoration) {
   decoration.decorated = false;
 }
 
+//////////////////////////////////////////////////////////////////////////////
+
+int getBaseHeight(int x, int z) {
+  return heightmap(x, z)->height;
+}
+
 ChunkDataRange loadChunkData(int cx, int cz) {
   chunkData.reset();
   const auto bx = cx << kChunkBits, bz = cz << kChunkBits;
@@ -357,20 +363,3 @@ HeightmapRange loadHeightmap(int cx, int cz, int level) {
 //////////////////////////////////////////////////////////////////////////////
 
 } // namespace voxels
-
-//////////////////////////////////////////////////////////////////////////////
-
-WASM_EXPORT(noise)
-double noise(int x, int y) {
-  return voxels::mgv7_np_terrain_cliff(x, y);
-}
-
-WASM_EXPORT(heightmap)
-voxels::HeightmapResult* heightmap(int x, int y) {
-  return voxels::heightmap(x, y);
-}
-
-WASM_EXPORT(loadChunk)
-const uint8_t* loadChunk(int cx, int cz) {
-  return voxels::loadChunkData(cx, cz).start;
-}

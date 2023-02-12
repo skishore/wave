@@ -39,6 +39,8 @@ struct ChunkData {
   NonCopyArray<Decoration, kWorldHeight> decorations;
 };
 
+int getBaseHeight(int x, int z);
+
 struct ChunkDataRange {
   const uint8_t* start;
   const uint8_t* end;

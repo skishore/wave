@@ -1465,6 +1465,11 @@ void remeshWorld() {
   world->remesh();
 }
 
+WASM_EXPORT(getBaseHeight)
+int getBaseHeight(int x, int z) {
+  return voxels::getBaseHeight(x, z);
+}
+
 WASM_EXPORT(getBlock)
 int getBlock(int x, int y, int z) {
   assert(world);

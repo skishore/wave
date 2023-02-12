@@ -1,12 +1,11 @@
 import {assert, int, nonnull, Color, Vec3} from './base.js';
-import {BlockId, Column, Env, init} from './engine.js';
+import {BlockId, Env, init} from './engine.js';
 import {kEmptyBlock, kNoMaterial, kWorldHeight} from './engine.js';
 import {Component, ComponentState, ComponentStore} from './ecs.js';
 import {EntityId, kNoEntity} from './ecs.js';
 import {AStar, Check, PathNode, Point as AStarPoint} from './pathing.js';
 import {SpriteMesh, ShadowMesh, Texture} from './renderer.js';
 import {sweep} from './sweep.js';
-import {Blocks, getHeight, loadChunk, loadFrontier} from './worldgen.js';
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -24,6 +23,20 @@ const kWaterDisplacements = [
 
 type Point = [int, int, int];
 type Position = [number, number, number];
+
+interface Blocks {
+  bedrock: BlockId,
+  bush:    BlockId,
+  dirt:    BlockId,
+  fungi:   BlockId,
+  grass:   BlockId,
+  rock:    BlockId,
+  sand:    BlockId,
+  snow:    BlockId,
+  stone:   BlockId,
+  trunk:   BlockId,
+  water:   BlockId,
+};
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -1079,7 +1092,7 @@ const CameraTarget = (env: TypedEnv): Component => ({
 
 // Putting it all together:
 
-const safeHeight = (position: PositionState): number => {
+const safeHeight = (env: Env, position: PositionState): number => {
   const radius = 0.5 * (position.w + 1);
   const ax = Math.floor(position.x - radius);
   const az = Math.floor(position.z - radius);
@@ -1089,7 +1102,7 @@ const safeHeight = (position: PositionState): number => {
   let height = 0;
   for (let x = int(ax); x <= bx; x++) {
     for (let z = int(az); z <= bz; z++) {
-      height = Math.max(height, getHeight(x, z));
+      height = Math.max(height, env.getBaseHeight(x, z));
     }
   }
   return height + 0.5 * (position.h + 1);
@@ -1105,7 +1118,7 @@ const addEntity = (env: TypedEnv, image: string, size: number,
   position.z = z + 0.5;
   position.w = w;
   position.h = h;
-  position.y = safeHeight(position);
+  position.y = safeHeight(env, position);
 
   const movement = env.movement.add(entity);
   movement.maxSpeed = maxSpeed;
@@ -1188,9 +1201,6 @@ const main = () => {
   };
 
   env.blocks = blocks;
-  const loadChunkFn = loadChunk(blocks);
-  const loadFrontierFn = loadFrontier(blocks);
-  env.setLoader(blocks.bedrock, loadChunkFn, loadFrontierFn);
   env.refresh();
 };
 

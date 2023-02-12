@@ -525,6 +525,10 @@ var _remeshWorld = Module["_remeshWorld"] = function() {
  return (_remeshWorld = Module["_remeshWorld"] = Module["asm"]["remeshWorld"]).apply(null, arguments);
 };
 
+var _getBaseHeight = Module["_getBaseHeight"] = function() {
+ return (_getBaseHeight = Module["_getBaseHeight"] = Module["asm"]["getBaseHeight"]).apply(null, arguments);
+};
+
 var _getBlock = Module["_getBlock"] = function() {
  return (_getBlock = Module["_getBlock"] = Module["asm"]["getBlock"]).apply(null, arguments);
 };
@@ -547,26 +551,6 @@ var _registerBlock = Module["_registerBlock"] = function() {
 
 var _registerMaterial = Module["_registerMaterial"] = function() {
  return (_registerMaterial = Module["_registerMaterial"] = Module["asm"]["registerMaterial"]).apply(null, arguments);
-};
-
-var _createNoise2D = Module["_createNoise2D"] = function() {
- return (_createNoise2D = Module["_createNoise2D"] = Module["asm"]["createNoise2D"]).apply(null, arguments);
-};
-
-var _queryNoise2D = Module["_queryNoise2D"] = function() {
- return (_queryNoise2D = Module["_queryNoise2D"] = Module["asm"]["queryNoise2D"]).apply(null, arguments);
-};
-
-var _noise = Module["_noise"] = function() {
- return (_noise = Module["_noise"] = Module["asm"]["noise"]).apply(null, arguments);
-};
-
-var _heightmap = Module["_heightmap"] = function() {
- return (_heightmap = Module["_heightmap"] = Module["asm"]["heightmap"]).apply(null, arguments);
-};
-
-var _loadChunk = Module["_loadChunk"] = function() {
- return (_loadChunk = Module["_loadChunk"] = Module["asm"]["loadChunk"]).apply(null, arguments);
 };
 
 var ___errno_location = function() {
