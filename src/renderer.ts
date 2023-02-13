@@ -768,7 +768,8 @@ class TextureAllocator {
   }
 
   alloc(data: Uint8Array): WebGLTexture {
-    assert(data.length === 256 * 16 * 16);
+    const h = 256, w = 18;
+    assert(data.length === h * w * w);
 
     const gl = this.gl;
     const id = gl.TEXTURE_3D;
@@ -779,12 +780,12 @@ class TextureAllocator {
     if (this.freeList.length > 0) {
       const texture = this.freeList.pop()!;
       gl.bindTexture(id, texture);
-      gl.texSubImage3D(id, 0, 0, 0, 0, 256, 16, 16, format, type, data, 0);
+      gl.texSubImage3D(id, 0, 0, 0, 0, h, w, w, format, type, data, 0);
       return texture;
     } else {
       const texture = nonnull(gl.createTexture());
       gl.bindTexture(id, texture);
-      gl.texImage3D(id, 0, format, 256, 16, 16, 0, format, type, data);
+      gl.texImage3D(id, 0, format, h, w, w, 0, format, type, data);
       gl.texParameteri(id, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
       gl.texParameteri(id, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
       gl.texParameteri(id, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE);
@@ -898,6 +899,7 @@ const kVoxelShader = `
   out vec3 v_uvw;
   out float v_ao;
   out float v_move;
+  flat out int v_dim;
 
   int unpackI2(uint packed, int index) {
     return (int(packed) >> (2 * index)) & 3;
@@ -933,6 +935,7 @@ const kVoxelShader = `
     pos[1] -= wave * u_wave;
     gl_Position = u_transform * vec4(pos, 1.0);
 
+    v_dim = dim;
     v_pos = pos;
     v_pos[dim] += 0.5 * dir;
 
@@ -949,22 +952,71 @@ const kVoxelShader = `
   uniform int u_hasLight;
   uniform sampler2DArray u_texture;
   uniform sampler3D u_light;
+
   in vec3 v_pos;
   in vec3 v_uvw;
   in float v_ao;
   in float v_move;
+  flat in int v_dim;
+
   out vec4 o_color;
 
+  float getLightTexel(ivec3 pos) {
+    if (pos[0] < 0) return 0.0;
+    if (pos[0] >= 0xff) return 15.0;
+    return round(256.0 * texelFetch(u_light, pos, 0)[0]);
+  }
+
+  float getLightLevel() {
+    if (u_hasLight != 1) return 15.0;
+
+    int u = (v_dim + 1) % 3;
+    int v = (v_dim + 2) % 3;
+    int bu = u == 2 ? u : 1 - u;
+    int bv = v == 2 ? v : 1 - v;
+    vec3 pos = v_pos;
+    pos[u] -= 0.5;
+    pos[v] -= 0.5;
+
+    ivec3 base = ivec3(clamp(int(floor(pos[1])) + 0, 0, 0xff),
+                       clamp(int(floor(pos[0])) + 1, 0, 0x11),
+                       clamp(int(floor(pos[2])) + 1, 0, 0x11));
+    ivec3 b0 = base, b1 = base, b2 = base, b3 = base;
+    b1[bu] += 1; b2[bv] += 1; b3[bu] += 1; b3[bv] += 1;
+
+    float c0 = getLightTexel(b0);
+    float c1 = getLightTexel(b1);
+    float c2 = getLightTexel(b2);
+    float c3 = getLightTexel(b3);
+
+    for (int i = 0; i < 2; i++) {
+      c0 = max(c0, max(c1 - 1.0, c2 - 1.0));
+      c1 = max(c1, max(c0 - 1.0, c3 - 1.0));
+      c3 = max(c3, max(c2 - 1.0, c1 - 1.0));
+      c2 = max(c2, max(c0 - 1.0, c3 - 1.0));
+    }
+
+    float du = pos[u] - floor(pos[u]);
+    float dv = pos[v] - floor(pos[v]);
+    float fu = 1.0 - du;
+    float fv = 1.0 - dv;
+
+    return fu * (fv * c0 + dv * c2) + du * (fv * c1 + dv * c3);
+
+    // The simpler "hard-lighting" implementation:
+    //ivec3 texel = ivec3(clamp(int(v_pos[1]), 0, 0xff),
+    //                    clamp(int(v_pos[0]), 0, 0xf) + 1,
+    //                    clamp(int(v_pos[2]), 0, 0xf) + 1);
+    //return 256.0 * texelFetch(u_light, texel, 0)[0];
+  }
+
   void main() {
-    bool hasLight = u_hasLight == 1 && v_pos[1] <= 255.0;
-    ivec3 texel = ivec3(clamp(int(v_pos[1]), 0, 0xff),
-                        clamp(int(v_pos[0]), 0, 0xf),
-                        clamp(int(v_pos[2]), 0, 0xf));
-    float level = hasLight ? 256.0 * texelFetch(u_light, texel, 0)[0] : 15.0;
+    float level = getLightLevel();
     float light = pow(0.8, 15.0 - level);
 
     float depth = u_fogDepth * gl_FragCoord.w;
     float fog = clamp(exp2(-depth * depth), 0.0, 1.0);
+
     vec3 index = v_uvw + vec3(v_move, v_move, 0.0);
     vec4 color = vec4(vec3(light * v_ao), 1.0) * texture(u_texture, index);
     o_color = mix(color, vec4(u_fogColor, color[3]), fog);

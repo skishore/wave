@@ -577,9 +577,9 @@ var stackAlloc = function() {
  return (stackAlloc = Module["asm"]["stackAlloc"]).apply(null, arguments);
 };
 
-var ___start_em_js = Module["___start_em_js"] = 10660;
+var ___start_em_js = Module["___start_em_js"] = 10804;
 
-var ___stop_em_js = Module["___stop_em_js"] = 11335;
+var ___stop_em_js = Module["___stop_em_js"] = 11479;
 
 var calledRun;
 

@@ -13,7 +13,7 @@ namespace voxels {
 //////////////////////////////////////////////////////////////////////////////
 
 struct LightTexture {
-  LightTexture(const ChunkTensor3<uint8_t>& lights);
+  LightTexture(const LightTensor3<uint8_t>& lights);
   ~LightTexture();
 
  private:

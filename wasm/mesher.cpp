@@ -248,25 +248,16 @@ void Mesher::computeChunkGeometry(int y_min, int y_max) {
       // all directions. In the y direction, this border is synthetic, but
       // in the x and z direction, the border cells come from other chunks.
       //
-      // To avoid meshing a block face twice, we mesh a face the face faces
-      // into our chunk. This check applies in the x and z directions.
-      //
-      // We should actually mesh the face that faces out of the chunk. An
-      // LOD mesh, by necessity, has solid walls facing out on all sides,
-      // because it must work next to an arbitrary LOD or chunk mesh. By
-      // meshing faces facing into chunk meshes, we cause z-fighting at the
-      // boundary between chunk meshes and LOD meshes.
-      //
-      // But we don't yet have a 1-cell border in our lighting textures,
-      // so we'll stick with this approach until we do smooth lighting.
+      // To avoid meshing a block face twice, we only mesh faces that face
+      // out of our chunk. This check applies in the x and z directions.
       if (d != 1) {
         if (id == 0) {
           for (auto i = 0; i < area; i++) {
-            if ((mask_data[i] & 0x100) == 0) mask_data[i] = 0;
+            if ((mask_data[i] & 0x100) != 0) mask_data[i] = 0;
           }
         } else if (id == ld - 1) {
           for (auto i = 0; i < area; i++) {
-            if ((mask_data[i] & 0x100) != 0) mask_data[i] = 0;
+            if ((mask_data[i] & 0x100) == 0) mask_data[i] = 0;
           }
         }
       }

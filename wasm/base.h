@@ -145,6 +145,9 @@ template <typename T> using MeshTensor2 =
 template <typename T> using MeshTensor3 =
   Tensor3<T, kChunkWidth + 2, kWorldHeight + 2, kChunkWidth + 2>;
 
+template <typename T> using LightTensor3 =
+  Tensor3<T, kChunkWidth + 2, kWorldHeight, kChunkWidth + 2>;
+
 //////////////////////////////////////////////////////////////////////////////
 
 } // namespace voxels

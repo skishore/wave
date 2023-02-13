@@ -309,8 +309,8 @@ void ChunkData::decorate(Block block, int height) {
 }
 
 void ChunkData::push(Block block, int limit) {
-  if (limit <= height) return;
   limit = std::min(limit, kWorldHeight - 1);
+  if (limit <= height) return;
   serialized.push_back(static_cast<uint8_t>(block));
   serialized.push_back(static_cast<uint8_t>(limit));
   height = limit;

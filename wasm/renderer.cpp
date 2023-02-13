@@ -30,7 +30,7 @@ JS(int,  js_SetVoxelMeshPosition, (int handle, int x, int y, int z));
 
 //////////////////////////////////////////////////////////////////////////////
 
-LightTexture::LightTexture(const ChunkTensor3<uint8_t>& lights) {
+LightTexture::LightTexture(const LightTensor3<uint8_t>& lights) {
   binding = js_AddLightTexture(lights.data.data(), lights.data.size());
 }
 
