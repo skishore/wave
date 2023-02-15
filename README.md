@@ -1,10 +1,10 @@
-# WebGL2 Voxel Engine
+# WAVE: WebAssembly Voxel Engine
 
-Another experimental voxel engine.
-
-This engine is a rewrite of [noa-engine](https://github.com/fenomas/noa),
-with more features, better performance, and with a code style that I prefer,
-but with the same basic structure.
+This engine started out as a rewrite of [noa-engine](https://github.com/fenomas/noa).
+It is now implemented in WebAssembly for a significant speedup. It also has
+new features, including out-of-the-box support for:
+  - Rendering faraway terrain with a level-of-detail system
+  - Smooth, dynamic lighting based on cellular automata
 
 ## [Check out the demo!](https://www.skishore.me/voxels)
 
@@ -49,6 +49,9 @@ organize your project, you can copy the bits you need into it. There's not too
 much code here. It has a permissive license.
 
 ## Additional features
+
+The biggest new feature is dynamic lighting. I haven't had time to write up
+how the lighting works yet.
 
 Level-of-detail, or LOD, is the basic mechanism by which games render a world
 that seems to disappear into the horizon. The idea is to represent the world's
