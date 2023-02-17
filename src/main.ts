@@ -1158,12 +1158,12 @@ const main = () => {
   const white: Color = [1, 1, 1, 1];
   const texture = (x: int, y: int, alphaTest: boolean = false,
                    color: Color = white, sparkle: boolean = false): Texture => {
-    const url = 'images/frlg-only.png';
+    const url = 'images/frlg.png';
     return {alphaTest, color, sparkle, url, x, y, w: 16, h: 16};
   };
 
   const block = (x: int, y: int) => {
-    const url = 'images/frlg-only.png';
+    const url = 'images/frlg.png';
     const frame = int(x + 16 * y);
     return env.renderer.addInstancedMesh(frame, {url, x: 16, y: 16});
   };
