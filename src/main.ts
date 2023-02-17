@@ -465,8 +465,8 @@ const generateParticles =
 
     const mesh = env.meshes.add(particle);
     const sprite = {url: texture.url, x: texture.w, y: texture.h};
-    mesh.mesh = env.renderer.addSpriteMesh(size, sprite);
-    mesh.mesh.setFrame(int(texture.x + texture.y * texture.w));
+    mesh.mesh = env.renderer.addSpriteMesh(size / texture.w, sprite);
+    mesh.mesh.frame = int(texture.x + texture.y * texture.w);
 
     const epsilon = 0.01;
     const s = Math.floor(16 * (1 - size) * Math.random()) / 16;
@@ -631,7 +631,7 @@ const runInputs = (env: TypedEnv, state: InputState) => {
       const option_a = fb > 0 ? 0 : fb < 0 ? 2 : -1;
       const option_b = lr > 0 ? 3 : lr < 0 ? 1 : -1;
       if (row !== option_a && row !== option_b) {
-        mesh.row = Math.max(option_a, option_b);
+        mesh.row = int(Math.max(option_a, option_b));
       }
     }
   }
@@ -903,10 +903,12 @@ interface MeshState {
   index: int,
   mesh: SpriteMesh | null,
   heading: number | null,
-  columns: number,
-  column: number,
+  col: int,
+  row: int,
+  cols: int,
+  rows: int,
   frame: number,
-  row: number,
+  offset: number,
 };
 
 const Meshes = (env: TypedEnv): Component<MeshState> => ({
@@ -915,10 +917,12 @@ const Meshes = (env: TypedEnv): Component<MeshState> => ({
     index: 0,
     mesh: null,
     heading: null,
-    columns: 0,
-    column: 0,
-    frame: 0,
+    col: 0,
     row: 0,
+    cols: 0,
+    rows: 0,
+    frame: 0,
+    offset: 0,
   }),
   onRemove: (state: MeshState) => state.mesh?.dispose(),
   onRender: (dt: number, states: MeshState[]) => {
@@ -931,37 +935,48 @@ const Meshes = (env: TypedEnv): Component<MeshState> => ({
     });
 
     for (const state of states) {
-      if (!state.mesh) continue;
-      const {x, y, z, h} = env.position.getX(state.id);
+      const {mesh, offset} = state;
+      if (!mesh) continue;
+
+      const {x, y, z, h, w} = env.position.getX(state.id);
       const light = env.getLight(
           int(Math.floor(x)), int(Math.floor(y)), int(Math.floor(z)));
-      state.mesh.setPosition(x, y - h / 2, z);
-      state.mesh.setLight(light);
-      state.mesh.setHeight(h);
+      mesh.setPosition(x, y - h / 2 - offset, z);
+      mesh.height = h + 2 * offset;
+      mesh.light = light;
 
       if (state.heading !== null) {
         const camera_heading = Math.atan2(x - cx, z - cz);
         const delta = state.heading - camera_heading;
-        state.row = Math.floor(8.5 - 2 * delta / Math.PI) & 3;
-        state.mesh.setFrame(int(state.column + state.row * state.columns));
+        state.row = int(Math.floor(20.5 - 8 * delta / (2 * Math.PI)) & 7);
+        mesh.frame = int(state.col + state.row * state.cols);
       }
     }
   },
   onUpdate: (dt: number, states: MeshState[]) => {
+    const lookup: int[][] = [
+      [0, 0, 0, 0],
+      [0, 0, 1, 1],
+      [0, 1, 0, 2],
+    ];
+
     for (const state of states) {
-      if (!state.mesh || !state.columns) return;
+      if (!state.mesh || !state.cols) return;
       const body = env.physics.get(state.id);
       if (!body) return;
 
-      state.column = (() => {
+      const index = state.cols - 1;
+      const count = index < lookup.length ? lookup[index].length : state.cols;
+
+      const frame = ((): int => {
         if (body.resting[1] >= 0) return 1;
         const distance = dt * Vec3.length(body.vel);
-        state.frame = distance ? (state.frame + 0.75 * distance) % 4 : 0;
-        if (!distance) return 0;
-        const value = Math.floor(state.frame);
-        return value & 1 ? 0 : (value + 2) >> 1;
+        if (!distance) return state.frame = 0;
+        state.frame = (state.frame + 0.1875 * count * distance) % count;
+        return int(Math.floor(state.frame));
       })();
-      state.mesh.setFrame(int(state.column + state.row * state.columns));
+      state.col = index < lookup.length ? lookup[index][frame] : frame;
+      state.mesh.frame = int(state.col + state.row * state.cols);
     }
   },
 });
@@ -1111,8 +1126,7 @@ const safeHeight = (env: Env, position: PositionState): number => {
   return height + 0.5 * (position.h + 1);
 };
 
-const addEntity = (env: TypedEnv, image: string, size: number,
-                   x: number, z: number, h: number, w: number,
+const addEntity = (env: TypedEnv, x: number, z: number, h: number, w: number,
                    maxSpeed: number, moveForceFactor: number,
                    jumpForce: number, jumpImpulse: number): EntityId => {
   const entity = env.entities.addEntity();
@@ -1129,15 +1143,6 @@ const addEntity = (env: TypedEnv, image: string, size: number,
   movement.jumpForce = jumpForce;
   movement.jumpImpulse = jumpImpulse;
 
-  const mesh = env.meshes.add(entity);
-  const sprite = {url: `images/${image}.png`, x: int(32), y: int(32)};
-  mesh.mesh = env.renderer.addSpriteMesh(size, sprite);
-  mesh.columns = 3;
-
-  if (image !== 'player') {
-    env.lights.add(entity).level = 14;
-  }
-
   env.physics.add(entity);
   env.shadow.add(entity);
   return entity;
@@ -1146,14 +1151,28 @@ const addEntity = (env: TypedEnv, image: string, size: number,
 const main = () => {
   const env = new TypedEnv('container');
 
-  const size = 1.5;
-  const [x, z] = [1, 1];
-  const player = addEntity(env, 'player', size, x, z, 1.5, 0.75, 8, 4, 10, 7.5);
+  const [x, z] = [-2, 2];
+  const player_height = 1.5;
+  const player_sprite = {url: `images/player.png`, x: int(32), y: int(32)};
+  const player = addEntity(env, x, z, player_height, 0.75, 8, 4, 10, 7.5);
+  const scale = player_height / player_sprite.y;
+  const player_mesh = env.meshes.add(player);
+  player_mesh.mesh = env.renderer.addSpriteMesh(scale, player_sprite);
+  player_mesh.cols = 3;
+  player_mesh.rows = 4;
   env.inputs.add(player);
   env.target.add(player);
 
-  const follower = addEntity(env, 'follower', size, x, z, 0.75, 0.75, 12, 8, 15, 10);
-  env.meshes.getX(follower).heading = 0;
+  const [cy, sx, sy] = [int(32), int(40), int(56)];
+  const follower = addEntity(env, x, z, 0.75, 0.75, 12, 8, 15, 10);
+  const follower_mesh = env.meshes.add(follower);
+  const follower_sprite = {url: `images/0024.png`, x: sx, y: sy};
+  follower_mesh.mesh = env.renderer.addSpriteMesh(scale, follower_sprite);
+  follower_mesh.cols = 6;
+  follower_mesh.rows = 8;
+  follower_mesh.heading = 0;
+  follower_mesh.offset = scale * (sy - cy);
+  env.lights.add(follower).level = 15;
   env.pathing.add(follower);
 
   const white: Color = [1, 1, 1, 1];

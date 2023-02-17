@@ -1547,8 +1547,8 @@ class InstancedManager implements MeshManager<InstancedShader> {
 const kUnitSquarePos = Float32Array.from([0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1]);
 
 const kSpriteShader = `
-  uniform float u_size;
   uniform float u_height;
+  uniform vec2 u_size;
   uniform vec4 u_stuv;
   uniform vec4 u_billboard;
   uniform mat4 u_transform;
@@ -1563,7 +1563,7 @@ const kSpriteShader = `
     v_uv = vec2(u, v);
 
     float y = 0.5 * u_height;
-    vec3 v0 = vec3(u_size * (w - 0.5), u_size * h, 0.0);
+    vec3 v0 = vec3(u_size[0] * (w - 0.5), u_size[1] * h, 0.0);
     vec3 v1 = vec3(v0[0],
                    (v0[1] - y) * u_billboard[2] + y,
                    (v0[1] - y) * u_billboard[3]);
@@ -1608,23 +1608,23 @@ class SpriteShader extends Shader {
 };
 
 class SpriteMesh extends Mesh<SpriteShader> {
+  frame: int = 1;
+  light: number = 0;
+  height: number;
   enabled = true;
-  private frame: int;
-  private light: number;
   private manager: SpriteManager;
-  private size: number;
-  private height: number;
+  private size: Float32Array;
   private stuv: Float32Array;
   private texture: WebGLTexture;
 
   constructor(manager: SpriteManager, meshes: SpriteMesh[],
-              size: number, sprite: Sprite) {
+              scale: number, sprite: Sprite) {
     super(manager, meshes);
-    this.frame = 0;
-    this.light = 1;
+    const width  = scale * sprite.x;
+    const height = scale * sprite.y;
     this.manager = manager;
-    this.size = size;
-    this.height = size;
+    this.height = height;
+    this.size = new Float32Array([width, height]);
     this.stuv = new Float32Array(4);
     this.stuv[2] = 1; this.stuv[3] = 1;
     this.texture = manager.atlas.addSprite(sprite);
@@ -1632,14 +1632,14 @@ class SpriteMesh extends Mesh<SpriteShader> {
 
   draw(camera: Camera, planes: CullingPlane[]): boolean {
     if (!this.enabled) return false;
-    const bounds = this.manager.getBounds(this.size);
+    const bounds = this.manager.getBounds(this.size[0], this.size[1]);
     if (this.cull(bounds, camera, planes)) return false;
 
-    const transform = camera.getTransformFor(this.position);
+    const {gl, position, shader} = this;
+    const transform = camera.getTransformFor(position);
 
-    const {gl, shader} = this;
     gl.bindTexture(TEXTURE_2D_ARRAY, this.texture);
-    gl.uniform1f(shader.u_size, this.size);
+    gl.uniform2fv(shader.u_size, this.size);
     gl.uniform4fv(shader.u_stuv, this.stuv);
     gl.uniform1f(shader.u_light, this.light);
     gl.uniform1f(shader.u_frame, this.frame);
@@ -1647,18 +1647,6 @@ class SpriteMesh extends Mesh<SpriteShader> {
     gl.uniformMatrix4fv(shader.u_transform, false, transform);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
     return true;
-  }
-
-  setFrame(frame: int): void {
-    this.frame = frame;
-  }
-
-  setHeight(height: number): void {
-    this.height = height;
-  }
-
-  setLight(light: number): void {
-    this.light = light;
   }
 
   setPosition(x: number, y: number, z: number): void {
@@ -1691,18 +1679,18 @@ class SpriteManager implements MeshManager<SpriteShader> {
     this.meshes = [];
   }
 
-  addMesh(size: number, sprite: Sprite): SpriteMesh {
-    return new SpriteMesh(this, this.meshes, size, sprite);
+  addMesh(scale: number, sprite: Sprite): SpriteMesh {
+    return new SpriteMesh(this, this.meshes, scale, sprite);
   }
 
-  getBounds(size: number): Float64Array {
+  getBounds(width: number, height: number): Float64Array {
     const result = this.bounds;
-    const half_size = 0.5 * size;
+    const half_width = 0.5 * width;
     for (let i = 0; i < 8; i++) {
       const offset = 3 * i;
-      result[offset + 0] = (i & 1) ? half_size : -half_size;
-      result[offset + 1] = (i & 2) ? size : 0;
-      result[offset + 2] = (i & 4) ? half_size : -half_size;
+      result[offset + 0] = (i & 1) ? half_width : -half_width;
+      result[offset + 1] = (i & 2) ? height : 0;
+      result[offset + 2] = (i & 4) ? half_width : -half_width;
     }
     return result;
   }
@@ -2095,10 +2083,10 @@ interface IShadowMesh extends IMesh {
 };
 
 interface ISpriteMesh extends IMesh {
-  enabled: boolean,
-  setFrame: (frame: int) => void,
-  setLight: (light: number) => void,
-  setHeight: (height: number) => void,
+  frame: int;
+  light: number;
+  height: number;
+  enabled: boolean;
   setSTUV: (s: number, t: number, u: number, v: number) => void,
 };
 
@@ -2185,8 +2173,8 @@ class Renderer {
     return this.shadow_manager.addMesh();
   }
 
-  addSpriteMesh(size: number, sprite: Sprite): ISpriteMesh {
-    return this.sprite_manager.addMesh(size, sprite);
+  addSpriteMesh(scale: number, sprite: Sprite): ISpriteMesh {
+    return this.sprite_manager.addMesh(scale, sprite);
   }
 
   addVoxelMesh(geo: Geometry, phase: int): IVoxelMesh {

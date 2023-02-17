@@ -1,20 +1,37 @@
-import {assert, int, nonnull, only} from './base';
+type IntLiteral = -1 | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 60;
+type int = number & ({__type__: 'int'} | IntLiteral);
+
+const int = (x: number): int => (x | 0) as int;
+
+const assert = (x: boolean, message?: () => string) => {
+  if (x) return;
+  throw new Error(message ? message() : 'Assertion failed!');
+};
+
+const nonnull = <T>(x: T | null, message?: () => string): T => {
+  if (x !== null) return x;
+  throw new Error(message ? message() : 'Unexpected null!');
+};
+
+const only = <T>(xs: T[]): T => {
+  assert(xs.length === 1);
+  return xs[0];
+};
 
 //////////////////////////////////////////////////////////////////////////////
 
-declare const console: any;
 declare const require: any;
 
 interface Point { x: int, y: int };
 interface Bound { min: Point, max: Point };
 
-interface AnimData {
+type AnimData = {
   name: string,
   width: int,
   height: int,
 };
 
-interface ImageData {
+type PNGData = {
   width: int,
   height: int,
   channels: int,
@@ -29,7 +46,7 @@ const showFrame = (frame: Point): string => {
   return `Frame (${frame.y}, ${frame.x})`;
 };
 
-const findBounds = (anim: AnimData, frame: Point, sprite: ImageData): Bound => {
+const findBounds = (anim: AnimData, frame: Point, sprite: PNGData): Bound => {
   const result = {
     min: {x: anim.width, y: anim.height},
     max: {x: int(0), y: int(0)},
@@ -48,7 +65,7 @@ const findBounds = (anim: AnimData, frame: Point, sprite: ImageData): Bound => {
   return result;
 };
 
-const findOrigin = (anim: AnimData, frame: Point, shadow: ImageData): Point => {
+const findOrigin = (anim: AnimData, frame: Point, shadow: PNGData): Point => {
   const result: Point[] = [];
   for (let x = 0; x < anim.width; x++) {
     for (let y = 0; y < anim.height; y++) {
@@ -69,7 +86,7 @@ const findOrigin = (anim: AnimData, frame: Point, shadow: ImageData): Point => {
   return only(result);
 };
 
-const main = (anim: AnimData, sprite: ImageData, shadow: ImageData) => {
+const main = (anim: AnimData, sprite: PNGData, shadow: PNGData) => {
   assert(sprite.channels === 4);
   assert(shadow.channels === 4);
   assert(sprite.width % anim.width === 0);
@@ -79,6 +96,7 @@ const main = (anim: AnimData, sprite: ImageData, shadow: ImageData) => {
 
   const rows = sprite.height / anim.height;
   const cols = sprite.width / anim.width;
+  console.log(`Size: (${anim.width}, ${anim.height})`);
   for (let row = 0; row < rows; row++) {
     for (let col = 0; col < cols; col++) {
       const frame = {x: int(col), y: int(row)};
@@ -124,28 +142,29 @@ const parseXML = (filename: string): AnimData[] => {
   return result;
 };
 
-const parsePNG = (filename: string): Promise<ImageData> => {
+const parsePNG = (filename: string): Promise<PNGData> => {
   return new Promise((resolve, reject) => {
-    pngparse.parseFile(filename, (error: Error, data: ImageData) => {
+    pngparse.parseFile(filename, (error: Error, data: PNGData) => {
       error ? reject(error) : resolve(data);
     });
   });
 };
 
-const load = async (root: string) => {
+const load = async (root: string, type: string) => {
   const anims = parseXML(`${root}/AnimData.xml`);
-  const walk = only(anims.filter(x => x.name === 'Walk'));
-  const name = `${root}/Walk-Anim.png`;
+  const walk = only(anims.filter(x => x.name === type));
+  const name = `${root}/${type}-Anim.png`;
 
   const images = await Promise.all([
-    parsePNG(`${root}/Walk-Anim.png`),
-    parsePNG(`${root}/Walk-Shadow.png`),
+    parsePNG(`${root}/${type}-Anim.png`),
+    parsePNG(`${root}/${type}-Shadow.png`),
   ]);
   main(walk, images[0], images[1]);
 };
 
-load('../SpriteCollab/sprite/0007');
+interface Process { argv: string[] };
+declare const process: Process;
 
-//////////////////////////////////////////////////////////////////////////////
-
-export {};
+let index = `${parseInt(process.argv[2], 10)}`;
+while (index.length < 4) index = `0${index}`;
+load(`../Examples/SpriteCollab/sprite/${index}`, process.argv[3]);
