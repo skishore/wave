@@ -1155,23 +1155,24 @@ const main = () => {
   const player_height = 1.5;
   const player_sprite = {url: `images/player.png`, x: int(32), y: int(32)};
   const player = addEntity(env, x, z, player_height, 0.75, 8, 4, 10, 7.5);
-  const scale = player_height / player_sprite.y;
+  const player_scale = player_height / player_sprite.y;
   const player_mesh = env.meshes.add(player);
-  player_mesh.mesh = env.renderer.addSpriteMesh(scale, player_sprite);
+  player_mesh.mesh = env.renderer.addSpriteMesh(player_scale, player_sprite);
   player_mesh.cols = 3;
   player_mesh.rows = 4;
   env.inputs.add(player);
   env.target.add(player);
 
-  const [cy, sx, sy] = [int(32), int(40), int(56)];
+  const [cy, sx, sy] = [int(24), int(32), int(40)];
   const follower = addEntity(env, x, z, 0.75, 0.75, 12, 8, 15, 10);
+  const follower_scale = player_scale * 0.8;
   const follower_mesh = env.meshes.add(follower);
-  const follower_sprite = {url: `images/0024.png`, x: sx, y: sy};
-  follower_mesh.mesh = env.renderer.addSpriteMesh(scale, follower_sprite);
-  follower_mesh.cols = 6;
+  const follower_sprite = {url: `images/0025.png`, x: sx, y: sy};
+  follower_mesh.mesh = env.renderer.addSpriteMesh(follower_scale, follower_sprite);
+  follower_mesh.cols = 4;
   follower_mesh.rows = 8;
   follower_mesh.heading = 0;
-  follower_mesh.offset = scale * (sy - cy);
+  follower_mesh.offset = follower_scale * (sy - cy);
   env.lights.add(follower).level = 15;
   env.pathing.add(follower);
 
