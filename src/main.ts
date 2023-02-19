@@ -494,7 +494,8 @@ const modifyBlock = (env: TypedEnv, x: int, y: int, z: int,
     setTimeout(() => flowWater(env, water, [[x, y, z]]), kWaterDelay);
   }
 
-  if (old_block !== kEmptyBlock && old_block !== new_block) {
+  if (old_block !== kEmptyBlock && old_block !== new_block &&
+      !(env.blocks && old_block === env.blocks.water)) {
     generateParticles(env, old_block, x, y, z, side);
   }
 };
