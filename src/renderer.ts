@@ -119,10 +119,8 @@ class Camera {
     return planes;
   }
 
-  getTransform(): Mat4 {
-    Mat4.view(this.view, this.position, this.direction);
-    Mat4.multiply(this.transform, this.projection, this.view);
-    return this.transform;
+  getMinZ(): number {
+    return this.minZ;
   }
 
   getTransformFor(offset: Vec3): Mat4 {
@@ -1240,6 +1238,8 @@ class VoxelManager implements MeshManager<VoxelShader> {
 
 //////////////////////////////////////////////////////////////////////////////
 
+const kPerspectiveTrick = 0.25;
+
 class Instance {
   constructor(public mesh: InstancedMesh, public index: int) {}
   dispose(): void {
@@ -1254,6 +1254,7 @@ class Instance {
 };
 
 const kInstancedShader = `
+  uniform float u_minZ;
   uniform vec3 u_origin;
   uniform vec4 u_billboard;
   uniform mat4 u_transform;
@@ -1279,6 +1280,10 @@ const kInstancedShader = `
                    v1[1],
                    v1[0] * u_billboard[1] + v1[2] * u_billboard[0]);
     gl_Position = u_transform * vec4(v2 + (a_pos - u_origin), 1.0);
+
+    float z = gl_Position[3];
+    const float k = -${kPerspectiveTrick};
+    gl_Position[2] += 2.0 * u_minZ * k / (z + k);
   }
 #split
   uniform vec3 u_fogColor;
@@ -1306,6 +1311,7 @@ class InstancedShader extends Shader {
   u_origin:    WebGLUniformLocation | null;
   u_billboard: WebGLUniformLocation | null;
   u_transform: WebGLUniformLocation | null;
+  u_minZ:      WebGLUniformLocation | null;
 
   a_pos:   number | null;
   a_light: number | null;
@@ -1319,6 +1325,7 @@ class InstancedShader extends Shader {
     this.u_origin    = this.getUniformLocation('u_origin');
     this.u_billboard = this.getUniformLocation('u_billboard');
     this.u_transform = this.getUniformLocation('u_transform');
+    this.u_minZ      = this.getUniformLocation('u_minZ');
 
     this.a_pos   = this.getAttribLocation('a_pos');
     this.a_light = this.getAttribLocation('a_light');
@@ -1530,6 +1537,7 @@ class InstancedManager implements MeshManager<InstancedShader> {
     gl.uniform4fv(shader.u_billboard, billboard);
     gl.uniform3fv(shader.u_fogColor, fog_color);
     gl.uniform1f(shader.u_fogDepth, fog_depth);
+    gl.uniform1f(shader.u_minZ, camera.getMinZ());
     gl.uniformMatrix4fv(shader.u_transform, false, transform);
     gl.activeTexture(gl.TEXTURE0);
 
@@ -1548,6 +1556,7 @@ const kUnitSquarePos = Float32Array.from([0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1]);
 
 const kSpriteShader = `
   uniform float u_height;
+  uniform float u_minZ;
   uniform vec2 u_size;
   uniform vec4 u_stuv;
   uniform vec4 u_billboard;
@@ -1571,6 +1580,10 @@ const kSpriteShader = `
                    v1[1],
                    v1[0] * u_billboard[1] + v1[2] * u_billboard[0]);
     gl_Position = u_transform * vec4(v2, 1.0);
+
+    float z = gl_Position[3];
+    const float k = -${kPerspectiveTrick};
+    gl_Position[2] += 2.0 * u_minZ * k / (z + k);
   }
 #split
   uniform float u_frame;
@@ -1594,6 +1607,7 @@ class SpriteShader extends Shader {
   u_frame:     WebGLUniformLocation | null;
   u_light:     WebGLUniformLocation | null;
   u_height:    WebGLUniformLocation | null;
+  u_minZ:      WebGLUniformLocation | null;
 
   constructor(gl: WebGL2RenderingContext) {
     super(gl, kSpriteShader);
@@ -1604,6 +1618,7 @@ class SpriteShader extends Shader {
     this.u_frame     = this.getUniformLocation('u_frame');
     this.u_light     = this.getUniformLocation('u_light');
     this.u_height    = this.getUniformLocation('u_height');
+    this.u_minZ      = this.getUniformLocation('u_minZ');
   }
 };
 
@@ -1708,6 +1723,7 @@ class SpriteManager implements MeshManager<SpriteShader> {
     billboard[2] = Math.cos(pitch);
     billboard[3] = -Math.sin(pitch);
     gl.uniform4fv(shader.u_billboard, billboard);
+    gl.uniform1f(shader.u_minZ, camera.getMinZ());
     gl.activeTexture(gl.TEXTURE0);
 
     for (const mesh of meshes) {
