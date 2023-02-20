@@ -652,9 +652,11 @@ const runInputs = (env: TypedEnv, state: InputState) => {
     const iz = int(Math.floor(z));
 
     env.pathing.each(other => {
-      other.target = [ix, iy, iz];
-      other.soft_target = [x, y, z];
-      other.heading = state.lastHeading;
+      other.request = {
+        target: [ix, iy, iz],
+        softTarget: [x, y, z],
+        finalHeading: state.lastHeading,
+      };
     });
   }
   inputs.call = false;
@@ -677,19 +679,25 @@ const Inputs = (env: TypedEnv): Component<InputState> => ({
 
 // An entity with PathingState computes a path to a target and moves along it.
 
+interface Path {
+  index: int,
+  steps: PathNode[],
+  stepNeedsPrecision: boolean[],
+  softTarget: Position | null,
+  finalHeading: number | null,
+};
+
+interface PathRequest {
+  target: Point,
+  softTarget: Position | null,
+  finalHeading: number | null,
+};
+
 interface PathingState {
   id: EntityId,
   index: int,
-  // Current path:
-  path: PathNode[] | null,
-  path_index: int,
-  path_soft_target: Position | null,
-  path_needs_precision: boolean[] | null,
-  path_heading: number | null;
-  // Next path request:
-  target: Point | null,
-  soft_target: Position | null,
-  heading: number | null;
+  path: Path | null,
+  request: PathRequest | null,
 };
 
 const solid = (env: TypedEnv, x: int, y: int, z: int): boolean => {
@@ -697,8 +705,8 @@ const solid = (env: TypedEnv, x: int, y: int, z: int): boolean => {
   return env.registry.solid[block];
 };
 
-const findPath = (env: TypedEnv, state: PathingState,
-                  body: PhysicsState): void => {
+const findPath = (env: TypedEnv, body: PhysicsState,
+                  state: PathingState, request: PathRequest): void => {
   const grounded = body.resting[1] < 0;
   if (!grounded) return;
 
@@ -706,25 +714,29 @@ const findPath = (env: TypedEnv, state: PathingState,
   const sx = int(Math.floor((min[0] + max[0]) / 2));
   const sy = int(Math.floor(min[1]));
   const sz = int(Math.floor((min[2] + max[2]) / 2));
-  const [tx, ty, tz] = nonnull(state.target);
+  const [tx, ty, tz] = request.target;
 
   const source = new AStarPoint(sx, sy, sz);
   const target = new AStarPoint(tx, ty, tz);
   const check = (p: AStarPoint) => !solid(env, p.x, p.y, p.z);
 
-  const path = AStar(source, target, check);
-  if (path.length === 0) return;
+  const steps = AStar(source, target, check);
+  if (steps.length === 0) return;
 
-  const last = path[path.length - 1];
+  const last_index = steps.length - 1;
+  const last = steps[last_index];
   const use_soft = last.x === tx && last.z === tz;
 
+  const path = {
+    index: 0 as int,
+    steps: steps,
+    stepNeedsPrecision: steps.map(_ => false),
+    softTarget: use_soft ? request.softTarget : null,
+    finalHeading: request.finalHeading,
+  };
   state.path = path;
-  state.path_index = 0;
-  state.path_soft_target = use_soft ? state.soft_target : null;
-  state.path_needs_precision = path.map(_ => false);
-  state.path_needs_precision[path.length - 1] = true;
-  state.path_heading = state.heading;
-  state.target = state.soft_target = state.heading = null;
+  state.request = null;
+  path.stepNeedsPrecision[last_index] = true;
 
   //console.log(JSON.stringify(state.path));
 };
@@ -735,38 +747,40 @@ const PIDController =
   return 20.00 * error + dfactor * derror;
 };
 
-const nextPathStep = (env: TypedEnv, state: PathingState,
-                      body: PhysicsState, grounded: boolean): boolean => {
+const getSoftTarget = (path: Path, grounded: boolean): Position | null => {
+  const {index, softTarget, steps} = path;
+  const okay = index === steps.length - 1 && (grounded || !steps[index].jump);
+  return okay ? softTarget : null;
+};
+
+const nextPathStep = (env: TypedEnv, body: PhysicsState,
+                      path: Path, grounded: boolean): boolean => {
   if (!grounded) return false;
 
   const {min, max} = body;
-  const path = nonnull(state.path);
-  const path_index = state.path_index;
-  const path_needs_precision = nonnull(state.path_needs_precision);
-  const needs_precision = path_needs_precision[path_index];
+  const {index, steps, stepNeedsPrecision} = path;
+  const final_path_step = index === steps.length - 1;
+  const needs_precision = stepNeedsPrecision[index];
+  const soft_target = getSoftTarget(path, grounded);
+  const step = steps[index];
 
-  const last = path_index === path.length - 1;
-  const node = path[path_index];
-  const soft = state.path_soft_target;
-  const use_soft = last && soft && (grounded || !node.jump);
-
-  const x = use_soft ? soft[0] - 0.5 : node.x;
-  const z = use_soft ? soft[2] - 0.5 : node.z;
-  const y = node.y;
+  const x = soft_target ? soft_target[0] - 0.5 : step.x;
+  const z = soft_target ? soft_target[2] - 0.5 : step.z;
+  const y = step.y;
 
   const E = (() => {
     const width = max[0] - min[0];
-    const final_path_step = path_index === path.length - 1;
+    const final_path_step = index === steps.length - 1;
     if (final_path_step) return 0.4 * (1 - width);
     if (needs_precision) return 0.1 * (1 - width);
-    return (path_index === 0 ? -0.6 : -0.4) * width;
+    return (index === 0 ? -0.6 : -0.4) * width;
   })();
 
   const result = x + E <= min[0] && max[0] <= x + 1 - E &&
                  y + 0 <= min[1] && max[1] <= y + 1 - 0 &&
                  z + E <= min[2] && max[2] <= z + 1 - E;
 
-  if (result && !needs_precision && path_index < path.length - 1) {
+  if (result && !needs_precision && !final_path_step) {
     const blocked = (() => {
       const check = (x: int, y: int, z: int) => {
         const block = env.getBlock(x, y, z);
@@ -782,15 +796,15 @@ const nextPathStep = (env: TypedEnv, state: PathingState,
       Vec3.copy(kTmpMax, body.max);
       Vec3.copy(kTmpMin, body.min);
 
-      const prev = path[path_index];
-      const next = path[path_index + 1];
+      const prev = steps[index];
+      const next = steps[index + 1];
       const dx = next.x + 0.5 - 0.5 * (body.min[0] + body.max[0]);
       const dz = next.z + 0.5 - 0.5 * (body.min[2] + body.max[2]);
       const dy = next.y - body.min[1];
 
-      // TODO(shaunak): When applied to path_index 0, this check can result in
-      // a kind of infinite loop that prevents path following. It occurs if
-      // the A-star algorithm returns a path where the first step (from the
+      // TODO(shaunak): When applied to step 0, this check can result in a
+      // kind of infinite loop that prevents path following. It occurs if the
+      // pathfinding algorithm returns a path where the first step (from the
       // sprite's original cell to the next cell) includes a collision. A-star
       // isn't supposed to do that, but that's a fragile invariant to rely on.
       //
@@ -808,42 +822,39 @@ const nextPathStep = (env: TypedEnv, state: PathingState,
              ((dx || dz) && check_move(dx, 0, dz));
     })();
 
-    if (blocked) {
-      path_needs_precision[path_index] = true;
-      return false;
-    }
+    if (!blocked) return true;
+    stepNeedsPrecision[index] = true;
+    return false;
   }
 
   return result;
 };
 
-const followPath = (env: TypedEnv, state: PathingState,
-                    body: PhysicsState): void => {
-  const path = nonnull(state.path);
-  if (state.path_index === path.length) { state.path = null; return; }
+const followPath = (env: TypedEnv, body: PhysicsState,
+                    state: PathingState, path: Path): void => {
+  const mesh = env.meshes.get(state.id);
   const movement = env.movement.get(state.id);
   if (!movement) return;
 
+  const steps = path.steps;
+  assert(path.index < steps.length);
   const grounded = body.resting[1] < 0;
-  const mesh = env.meshes.get(state.id);
-  if (nextPathStep(env, state, body, grounded)) state.path_index++;
+  if (nextPathStep(env, body, path, grounded)) path.index++;
 
-  if (state.path_index === path.length) {
-    if (mesh && state.path_heading) mesh.heading = state.path_heading;
-    state.path = state.path_soft_target = state.path_heading = null;
+  if (path.index === steps.length) {
+    if (mesh && path.finalHeading) mesh.heading = path.finalHeading;
+    state.path = null;
     return;
   }
 
-  const path_index = state.path_index;
-  const last = path_index === path.length - 1;
-  const node = path[path_index];
-  const soft = state.path_soft_target;
-  const use_soft = last && soft && (grounded || !node.jump);
+  const index = path.index;
+  const step = steps[index];
+  const soft_target = getSoftTarget(path, grounded);
 
   const cx = (body.min[0] + body.max[0]) / 2;
   const cz = (body.min[2] + body.max[2]) / 2;
-  const dx = (use_soft ? soft[0] : node.x + 0.5) - cx;
-  const dz = (use_soft ? soft[2] : node.z + 0.5) - cz;
+  const dx = (soft_target ? soft_target[0] : step.x + 0.5) - cx;
+  const dz = (soft_target ? soft_target[2] : step.z + 0.5) - cz;
 
   const penalty = movementPenalty(movement, body);
   const speed = penalty * movement.maxSpeed;
@@ -858,12 +869,12 @@ const followPath = (env: TypedEnv, state: PathingState,
 
   if (grounded) movement._jumped = false;
   movement.jumping = (() => {
-    if (node.y > body.min[1]) return true;
+    if (step.y > body.min[1]) return true;
     if (!grounded) return false;
-    if (!node.jump) return false;
+    if (!step.jump) return false;
 
-    if (path_index === 0) return false;
-    const prev = path[path_index - 1];
+    if (index === 0) return false;
+    const prev = steps[index - 1];
     if (Math.floor(cx) !== prev.x) return false;
     if (Math.floor(cz) !== prev.z) return false;
 
@@ -874,34 +885,23 @@ const followPath = (env: TypedEnv, state: PathingState,
   })();
 
   if (!mesh) return;
-  const use_dx = (grounded && use_soft) || path_index === 0;
-  const vx = use_dx ? dx : node.x - path[path_index - 1].x;
-  const vz = use_dx ? dz : node.z - path[path_index - 1].z;
+  const use_dx = (grounded && soft_target) || index === 0;
+  const vx = use_dx ? dx : step.x - steps[index - 1].x;
+  const vz = use_dx ? dz : step.z - steps[index - 1].z;
   mesh.heading = Math.atan2(vx, vz);
 };
 
 const runPathing = (env: TypedEnv, state: PathingState): void => {
-  if (!state.path && !state.target) return;
+  if (!state.path && !state.request) return;
   const body = env.physics.get(state.id);
   if (!body) return;
 
-  if (state.target) findPath(env, state, body);
-  if (state.path) followPath(env, state, body);
+  if (state.request) findPath(env, body, state, state.request);
+  if (state.path) followPath(env, body, state, state.path);
 };
 
 const Pathing = (env: TypedEnv): Component<PathingState> => ({
-  init: () => ({
-    id: kNoEntity,
-    index: 0,
-    path: null,
-    path_index: 0,
-    path_soft_target: null,
-    path_needs_precision: null,
-    path_heading: null,
-    target: null,
-    soft_target: null,
-    heading: null,
-  }),
+  init: () => ({id: kNoEntity, index: 0, path: null, request: null}),
   onUpdate: (dt: number, states: PathingState[]) => {
     for (const state of states) runPathing(env, state);
   }
