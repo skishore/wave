@@ -8,7 +8,7 @@ import {kSweepResolution, sweep} from './sweep.js';
 
 //////////////////////////////////////////////////////////////////////////////
 
-type Input = 'up' | 'left' | 'down' | 'right' | 'hover' | 'call' |
+type Input = 'up' | 'left' | 'down' | 'right' | 'quit' | 'item0' | 'item1' |
              'mouse0' | 'mouse1' | 'space' | 'pointer';
 
 interface KeyBinding {input: Input, handled: boolean};
@@ -30,9 +30,10 @@ class Container {
       left: false,
       down: false,
       right: false,
-      hover: false,
-      call: false,
+      quit: false,
       space: false,
+      item0: false,
+      item1: false,
       mouse0: false,
       mouse1: false,
       pointer: false,
@@ -44,8 +45,9 @@ class Container {
     this.addBinding('A', 'left');
     this.addBinding('S', 'down');
     this.addBinding('D', 'right');
-    this.addBinding('E', 'hover');
-    this.addBinding('Q', 'call');
+    this.addBinding('1', 'item0');
+    this.addBinding('2', 'item1');
+    this.addBinding('E', 'quit');
     this.addBinding(' ', 'space');
 
     const canvas = this.canvas;
@@ -457,6 +459,7 @@ class Env {
   private container: Container;
   private highlight: HighlightMesh;
   private highlightSide: int = -1;
+  private highlightRange: number = 0;
   private highlightPosition: Vec3;
   private timing: Timing;
   private frame: number = 0;
@@ -491,8 +494,11 @@ class Env {
     return this.helper.getBlock(x, y, z);
   }
 
-  getLight(x: int, y: int, z: int): number {
-    return lighting(this.helper.getLightLevel(x, y, z));
+  getLight(x: number, y: number, z: number): number {
+    const ix = int(Math.floor(x));
+    const iy = int(Math.floor(y));
+    const iz = int(Math.floor(z));
+    return lighting(this.helper.getLightLevel(ix, iy, iz));
   }
 
   getMutableInputs(): Record<Input, boolean> {
@@ -511,9 +517,13 @@ class Env {
     this.helper.setBlock(x, y, z, block);
   }
 
-  setCameraTarget(x: number, y: number, z: number): void {
-    this.renderer.camera.setTarget(x, y, z);
+  setCameraTarget(x: number, y: number, z: number, zoom: boolean): void {
+    this.renderer.camera.setTarget(x, y, z, zoom);
     this.setSafeZoomDistance();
+  }
+
+  setHighlightRange(range: number): void {
+    this.highlightRange = range;
   }
 
   setPointLight(x: int, y: int, z: int, level: int): void {
@@ -550,7 +560,7 @@ class Env {
 
     const camera = this.renderer.camera;
     const deltas = this.container.deltas;
-    camera.applyInputs(deltas.x, deltas.y, deltas.scroll);
+    camera.applyInputs(deltas.x, deltas.y, 0);
     deltas.x = deltas.y = deltas.scroll = 0;
 
     this.entities.render(dt);
@@ -589,7 +599,8 @@ class Env {
 
   private setSafeZoomDistance(): void {
     const camera = this.renderer.camera;
-    const {direction, target, zoom_input} = camera;
+    const zoom = Math.max(camera.zoom_input, camera.zoom_value);
+    const {direction, target} = camera;
     const [x, y, z] = target;
 
     const check = (x: int, y: int, z: int) => {
@@ -610,7 +621,7 @@ class Env {
     };
 
     const safe_zoom_at = (bump: number) => {
-      Vec3.scale(kTmpDelta, direction, -zoom_input);
+      Vec3.scale(kTmpDelta, direction, -zoom);
       return shift_target(kTmpDelta, bump);
     };
 
@@ -630,7 +641,7 @@ class Env {
       if (zoom_at < best_zoom) continue;
       best_bump = bump_at;
       best_zoom = zoom_at;
-      if (zoom_at > zoom_input - bump_at - step_size) break;
+      if (zoom_at > zoom - bump_at - step_size) break;
       if (i === 0) limit = Math.floor(max_bump() / step_size);
     }
     camera.updateZoomDistance(best_bump, best_zoom);
@@ -643,6 +654,7 @@ class Env {
     let move = false;
     this.highlight.mask = int((1 << 6) - 1);
     this.highlightSide = -1;
+    if (this.highlightRange === 0) return;
 
     const check = (x: int, y: int, z: int) => {
       const block = this.helper.getBlock(x, y, z);
@@ -675,7 +687,7 @@ class Env {
 
     Vec3.set(kTmpMin, x - buffer, y - buffer, z - buffer);
     Vec3.set(kTmpMax, x + buffer, y + buffer, z + buffer);
-    Vec3.scale(kTmpDelta, direction, 10);
+    Vec3.scale(kTmpDelta, direction, this.highlightRange);
     sweep(kTmpMin, kTmpMax, kTmpDelta, kTmpImpacts, check, true);
 
     for (let i = 0; i < 3; i++) {

@@ -12,12 +12,13 @@ interface CullingPlane {
 
 const kTmpDelta = Vec3.create();
 const kTmpPlane = Vec3.create();
+const kMaxZoomOut = 15;
 
 class Camera {
   heading = 0; // In radians: [0, 2π)
   pitch = 0;   // In radians: (-π/2, π/2)
-  zoom_input = 0;
-  zoom_value = 0;
+  zoom_input = kMaxZoomOut;
+  zoom_value = kMaxZoomOut;
   direction: Vec3;
   position: Vec3;
   target: Vec3;
@@ -100,7 +101,7 @@ class Camera {
     // Scrolling is trivial to apply: add and clamp.
     if (dscroll === 0) return;
     const zoom_input = this.zoom_input + Math.sign(dscroll);
-    this.zoom_input = Math.max(0, Math.min(15, zoom_input));
+    this.zoom_input = Math.max(0, Math.min(zoom_input, kMaxZoomOut));
   }
 
   getCullingPlanes(): CullingPlane[] {
@@ -124,6 +125,10 @@ class Camera {
     return this.minZ;
   }
 
+  getProjection(): Mat4 {
+    return this.projection;
+  }
+
   getTransformFor(offset: Vec3): Mat4 {
     Vec3.sub(kTmpDelta, this.position, offset);
     Mat4.view(this.view, kTmpDelta, this.direction);
@@ -137,12 +142,13 @@ class Camera {
     this.minZ = minZ;
   }
 
-  setTarget(x: number, y: number, z: number) {
+  setTarget(x: number, y: number, z: number, zoom: boolean) {
     Vec3.set(this.target, x, y, z);
+    this.zoom_input = zoom ? 0 : kMaxZoomOut;
   }
 
   updateZoomDistance(bump: number, zoom_bound: number) {
-    const speed = 0.5;
+    const speed = 1.0;
     let {zoom_input, zoom_value} = this;
     if (zoom_value < zoom_input) {
       zoom_value = Math.min(zoom_value + speed, zoom_input);
@@ -1983,6 +1989,204 @@ class HighlightManager implements MeshManager<HighlightShader> {
 
 //////////////////////////////////////////////////////////////////////////////
 
+const kItemShader = `
+  uniform mat4 u_transform;
+  in vec3 a_pos;
+  in vec2 a_uvs;
+  out vec2 v_uv;
+
+  void main() {
+    gl_Position = u_transform * vec4(a_pos, 1.0);
+    v_uv = a_uvs;
+  }
+#split
+  uniform float u_frame;
+  uniform float u_light;
+  uniform sampler2DArray u_texture;
+  in vec2 v_uv;
+  out vec4 o_color;
+
+  void main() {
+    o_color = texture(u_texture, vec3(v_uv, u_frame));
+    if (o_color[3] < 0.5) discard;
+    o_color *= u_light;
+  }
+`;
+
+class ItemShader extends Shader {
+  u_frame:     WebGLUniformLocation | null;
+  u_light:     WebGLUniformLocation | null;
+  u_transform: WebGLUniformLocation | null;
+
+  a_pos: number | null;
+  a_uvs: number | null;
+
+  constructor(gl: WebGL2RenderingContext) {
+    super(gl, kItemShader);
+    this.u_frame     = this.getUniformLocation('u_frame');
+    this.u_light     = this.getUniformLocation('u_light');
+    this.u_transform = this.getUniformLocation('u_transform');
+
+    this.a_pos = this.getAttribLocation('a_pos');
+    this.a_uvs = this.getAttribLocation('a_uvs');
+  }
+};
+
+class ItemGeometry {
+  data: Float32Array;
+
+  constructor() {
+    this.data = new Float32Array([
+      -0.5,  0.5, 0, 0, 0,
+      -0.5, -0.5, 0, 0, 1,
+       0.5, -0.5, 0, 1, 1,
+      -0.5,  0.5, 0, 0, 0,
+       0.5, -0.5, 0, 1, 1,
+       0.5,  0.5, 0, 1, 0,
+    ]);
+  }
+
+  rotateX(r: number): ItemGeometry {
+    return this.apply(v => Vec3.rotateX(v, v, r));
+  }
+
+  rotateY(r: number): ItemGeometry {
+    return this.apply(v => Vec3.rotateY(v, v, r));
+  }
+
+  rotateZ(r: number): ItemGeometry {
+    return this.apply(v => Vec3.rotateZ(v, v, r));
+  }
+
+  scale(k: number): ItemGeometry {
+    return this.apply(v => Vec3.scale(v, v, k));
+  }
+
+  translate(x: number, y: number, z: number): ItemGeometry {
+    return this.apply(v => Vec3.add(v, v, Vec3.from(x, y, z)));
+  }
+
+  private apply(fn: (vec: Vec3) => void): ItemGeometry {
+    const data = this.data;
+    const vec = Vec3.create();
+    for (let i = 0; i < data.length; i += 5) {
+      for (let j = 0; j < 3; j++) vec[j] = data[i + j];
+      fn(vec);
+      for (let j = 0; j < 3; j++) data[i + j] = vec[j];
+    }
+    return this;
+  }
+};
+
+class ItemMesh extends Mesh<ItemShader> {
+  frame: int = 0;
+  light: number = 0;
+  enabled: boolean = false;
+  private manager: ItemManager;
+  private geo: Float32Array;
+  private vao: WebGLVertexArrayObject | null = null;
+  private buffer: Buffer | null = null;
+  private texture: WebGLTexture;
+
+  constructor(manager: ItemManager, meshes: ItemMesh[],
+              geo: ItemGeometry, texture: WebGLTexture) {
+    super(manager, meshes);
+    this.manager = manager;
+    this.texture = texture;
+    this.geo = geo.data;
+    assert(geo.data.length % 5 === 0);
+  }
+
+  dispose(): void {
+    super.dispose();
+    const gl = this.manager.gl;
+    gl.deleteVertexArray(this.vao);
+    gl.deleteBuffer(this.buffer);
+  }
+
+  draw(camera: Camera, planes: CullingPlane[]): boolean {
+    if (!this.enabled) return false;
+
+    this.prepareBuffers();
+
+    const {gl, shader} = this;
+    gl.bindVertexArray(this.vao);
+    gl.bindTexture(TEXTURE_2D_ARRAY, this.texture);
+    gl.uniform1f(shader.u_frame, this.frame);
+    gl.uniform1f(shader.u_light, this.light);
+    gl.drawArrays(gl.TRIANGLES, 0, this.geo.length / 5);
+    return true;
+  }
+
+  private prepareBuffers(): void {
+    if (this.vao) return;
+
+    const shader = this.shader;
+    const {allocator, gl} = this.manager;
+    this.buffer = allocator.alloc(this.geo, false);
+
+    this.vao = nonnull(gl.createVertexArray());
+    gl.bindVertexArray(this.vao);
+    this.prepareAttribute(shader.a_pos, 3, 0);
+    this.prepareAttribute(shader.a_uvs, 2, 3);
+  }
+
+  private prepareAttribute(
+      location: number | null, size: int, offset_in_floats: int): void {
+    if (location === null) return;
+    const gl = this.gl;
+    const offset = 4 * offset_in_floats;
+    gl.enableVertexAttribArray(location);
+    gl.vertexAttribPointer(location, size, gl.FLOAT, false, 20, offset);
+  }
+};
+
+class ItemManager implements MeshManager<ItemShader> {
+  gl: WebGL2RenderingContext;
+  allocator: BufferAllocator;
+  shader: ItemShader;
+  private atlas: SpriteAtlas;
+  private meshes: ItemMesh[];
+
+  constructor(gl: WebGL2RenderingContext,
+              allocator: BufferAllocator, atlas: SpriteAtlas) {
+    this.gl = gl;
+    this.allocator = allocator;
+    this.shader = new ItemShader(gl);
+    this.atlas = atlas;
+    this.meshes = [];
+  }
+
+  addMesh(geo: ItemGeometry, sprite: Sprite): ItemMesh {
+    const texture = this.atlas.addSprite(sprite);
+    return new ItemMesh(this, this.meshes, geo, texture);
+  }
+
+  render(camera: Camera, planes: CullingPlane[], stats: Stats): void {
+    const {gl, meshes, shader} = this;
+    if (!meshes.some(x => x.enabled)) {
+      stats.total += meshes.length;
+      return;
+    }
+    let drawn = 0;
+
+    // All item meshes are alpha-tested.
+    shader.bind();
+    gl.disable(gl.DEPTH_TEST);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.uniformMatrix4fv(shader.u_transform, false, camera.getProjection());
+    for (const mesh of meshes) {
+      if (mesh.draw(camera, planes)) drawn++;
+    }
+    gl.enable(gl.DEPTH_TEST);
+
+    stats.drawn += drawn;
+    stats.total += meshes.length;
+  }
+};
+
+//////////////////////////////////////////////////////////////////////////////
+
 const kDefaultFogColor = [0.6, 0.8, 1.0];
 const kDefaultSkyColor = [0.6, 0.8, 1.0];
 
@@ -2078,15 +2282,6 @@ interface Stats {
   totalInstances: int,
 };
 
-interface ILightTexture {
-  dispose: () => void;
-};
-
-interface IMesh {
-  dispose: () => void,
-  setPosition: (x: number, y: number, z: number) => void,
-};
-
 interface IHighlightMesh extends IMesh {
   mask: int;
 };
@@ -2099,6 +2294,21 @@ interface IInstancedMesh {
   addInstance: () => IInstance,
   readonly frame: int;
   readonly sprite: Sprite;
+};
+
+interface IItemMesh extends IMesh {
+  frame: int,
+  light: number;
+  enabled: boolean;
+};
+
+interface ILightTexture {
+  dispose: () => void;
+};
+
+interface IMesh {
+  dispose: () => void,
+  setPosition: (x: number, y: number, z: number) => void,
 };
 
 interface IShadowMesh extends IMesh {
@@ -2128,6 +2338,7 @@ class Renderer {
   private talloc: TextureAllocator;
   private highlight_manager: HighlightManager;
   private instanced_manager: InstancedManager;
+  private item_manager: ItemManager;
   private shadow_manager: ShadowManager;
   private sprite_manager: SpriteManager;
   private voxels_manager: VoxelManager;
@@ -2171,6 +2382,7 @@ class Renderer {
     this.overlay = new ScreenOverlay(gl, unit_square_vao);
     this.highlight_manager = new HighlightManager(gl, unit_square_vao);
     this.instanced_manager = new InstancedManager(gl, allocator, atlas);
+    this.item_manager = new ItemManager(gl, allocator, atlas);
     this.shadow_manager = new ShadowManager(gl, unit_square_vao);
     this.sprite_manager = new SpriteManager(gl, atlas, unit_square_vao);
     this.voxels_manager = new VoxelManager(gl, allocator);
@@ -2190,6 +2402,10 @@ class Renderer {
 
   addInstancedMesh(frame: int, sprite: Sprite): IInstancedMesh {
     return this.instanced_manager.addMesh(frame, sprite);
+  }
+
+  addItemMesh(geo: ItemGeometry, sprite: Sprite): IItemMesh {
+    return this.item_manager.addMesh(geo, sprite);
   }
 
   addShadowMesh(): IShadowMesh {
@@ -2222,6 +2438,7 @@ class Renderer {
     this.highlight_manager.render(camera, planes, stats);
     this.shadow_manager.render(camera, planes, stats);
     this.voxels_manager.render(camera, planes, stats, overlay, move, wave, 1);
+    this.item_manager.render(camera, planes, stats);
     overlay.draw();
 
     return `${this.balloc.stats()}\r\n` +
@@ -2237,8 +2454,9 @@ class Renderer {
 
 //////////////////////////////////////////////////////////////////////////////
 
-export {kShadowAlpha, Geometry, Renderer, Sprite, Texture};
-export {IMesh as Mesh, ISpriteMesh as SpriteMesh, IShadowMesh as ShadowMesh,
-        IHighlightMesh as HighlightMesh, IInstance as Instance,
-        IInstancedMesh as InstancedMesh, IVoxelMesh as VoxelMesh,
-        ILightTexture as LightTexture};
+export {kShadowAlpha, Geometry, ItemGeometry, Renderer, Sprite, Texture};
+export {IHighlightMesh as HighlightMesh, IInstance as Instance,
+        IInstancedMesh as InstancedMesh, IItemMesh as ItemMesh,
+        ILightTexture as LightTexture, IMesh as Mesh,
+        IShadowMesh as ShadowMesh, ISpriteMesh as SpriteMesh,
+        IVoxelMesh as VoxelMesh};

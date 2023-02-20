@@ -4,7 +4,8 @@ import {kEmptyBlock, kNoMaterial, kWorldHeight} from './engine.js';
 import {Component, ComponentState, ComponentStore} from './ecs.js';
 import {EntityId, kNoEntity} from './ecs.js';
 import {AStar, Check, PathNode, Point as AStarPoint} from './pathing.js';
-import {SpriteMesh, ShadowMesh, Texture} from './renderer.js';
+import {ItemGeometry, Texture} from './renderer.js';
+import {ItemMesh, SpriteMesh, ShadowMesh} from './renderer.js';
 import {sweep} from './sweep.js';
 
 //////////////////////////////////////////////////////////////////////////////
@@ -596,10 +597,14 @@ const Movement = (env: TypedEnv): Component<MovementState> => ({
 
 // An entity with an input component processes inputs.
 
+interface Item {mesh: ItemMesh, range: number};
+
 interface InputState {
   id: EntityId,
   index: int,
-  lastHeading: number;
+  lastHeading: number,
+  curItem: Item | null,
+  items: Item[],
 };
 
 const runInputs = (env: TypedEnv, state: InputState) => {
@@ -611,7 +616,6 @@ const runInputs = (env: TypedEnv, state: InputState) => {
   const fb = (inputs.up ? 1 : 0) - (inputs.down ? 1 : 0);
   const lr = (inputs.right ? 1 : 0) - (inputs.left ? 1 : 0);
   movement.jumping = inputs.space;
-  movement.hovering = inputs.hover;
 
   if (fb || lr) {
     let heading = env.renderer.camera.heading;
@@ -638,7 +642,7 @@ const runInputs = (env: TypedEnv, state: InputState) => {
 
   // Call any followers.
   const body = env.physics.get(state.id);
-  if (body && (inputs.call || true)) {
+  if (body) {
     const {min, max} = body;
     const heading = state.lastHeading;
     const multiplier = (fb || lr) ? 1.5 : 2.0;
@@ -659,19 +663,30 @@ const runInputs = (env: TypedEnv, state: InputState) => {
       };
     });
   }
-  inputs.call = false;
 
-  // Turn mouse inputs into actions.
+  // Use the item buttons to choose an item.
+  const setCurItem = (item: Item | null) => {
+    const mesh = state.curItem?.mesh;
+    if (mesh) mesh.enabled = false;
+    state.curItem = item;
+  };
+  if (inputs.item0 || inputs.item1 || inputs.quit) {
+    const index = inputs.item0 ? 0 : inputs.item1 ? 1 : -1;
+    setCurItem(state.items[index] || null);
+    inputs.item0 = inputs.item1 = false;
+  }
+  inputs.item0 = inputs.item1 = inputs.quit = false;
+
+  // Use the left mouse button to use the item.
   if (inputs.mouse0 || inputs.mouse1) {
     const body = env.physics.get(state.id);
     if (body) tryToModifyBlock(env, body, !inputs.mouse0);
-    inputs.mouse0 = false;
-    inputs.mouse1 = false;
+    inputs.mouse0 = inputs.mouse1 = false;
   }
 };
 
 const Inputs = (env: TypedEnv): Component<InputState> => ({
-  init: () => ({id: kNoEntity, index: 0, lastHeading: 0}),
+  init: () => ({id: kNoEntity, index: 0, lastHeading: 0, curItem: null, items: []}),
   onUpdate: (dt: number, states: InputState[]) => {
     for (const state of states) runInputs(env, state);
   }
@@ -964,8 +979,7 @@ const Meshes = (env: TypedEnv): Component<MeshState> => ({
       if (!mesh) continue;
 
       const {x, y, z, h, w} = env.position.getX(state.id);
-      const light = env.getLight(
-          int(Math.floor(x)), int(Math.floor(y)), int(Math.floor(z)));
+      const light = env.getLight(x, y, z);
       mesh.setPosition(x, y - h / 2 - offset, z);
       mesh.height = h + 2 * offset;
       mesh.light = light;
@@ -1123,11 +1137,21 @@ const CameraTarget = (env: TypedEnv): Component => ({
   init: () => ({id: kNoEntity, index: 0}),
   onRender: (dt: number, states: ComponentState[]) => {
     for (const state of states) {
+      const inputs = env.inputs.get(state.id);
+      const zoom = !!(inputs && inputs.curItem);
       const {x, y, z, h, w} = env.position.getX(state.id);
-      env.setCameraTarget(x, y + h / 3, z);
-      const mesh = env.meshes.get(state.id);
-      const zoom = env.renderer.camera.zoom_value;
-      if (mesh && mesh.mesh) mesh.mesh.enabled = zoom > 2 * w;
+      env.setCameraTarget(x, y + h / 3, z, zoom);
+      env.setHighlightRange(inputs?.curItem?.range || 0);
+
+      const item = inputs?.curItem?.mesh;
+      const mesh = env.meshes.get(state.id)?.mesh;
+      const near = env.renderer.camera.zoom_value < 2 * w;
+      if (mesh) mesh.enabled = !near;
+      if (item) item.enabled = near;
+
+      if (item && near) {
+        item.light = env.getLight(x, y + h / 3, z);
+      }
     }
   },
   onUpdate: (dt: number, states: ComponentState[]) => {
@@ -1205,6 +1229,31 @@ const main = () => {
   follower_mesh.offset = follower_scale * (sy - cy);
   env.lights.add(follower).level = 15;
   env.pathing.add(follower);
+
+  const TAU = 2 * Math.PI;
+  const inputs = env.inputs.getX(player);
+  const item = (mesh: ItemMesh, range: number): Item => ({mesh, range});
+
+  const shovel = env.renderer.addItemMesh(
+    new ItemGeometry()
+      .scale(0.25)
+      .rotateX(0.20 * TAU)
+      .rotateY(0.08 * TAU)
+      .translate(0.15, -0.10, 0.25),
+    {url: `images/items.png`, x: int(24), y: int(24)},
+  );
+  shovel.frame = 0;
+  inputs.items.push(item(shovel, 4));
+
+  const ball = env.renderer.addItemMesh(
+    new ItemGeometry()
+      .scale(0.10)
+      .rotateY(0.05 * TAU)
+      .translate(0.10, -0.09, 0.25),
+    {url: `images/items.png`, x: int(24), y: int(24)},
+  );
+  ball.frame = 1;
+  inputs.items.push(item(ball, 0));
 
   const white: Color = [1, 1, 1, 1];
   const texture = (x: int, y: int, alphaTest: boolean = false,
