@@ -708,7 +708,7 @@ const solid = (env: TypedEnv, x: int, y: int, z: int): boolean => {
 const findPath = (env: TypedEnv, body: PhysicsState,
                   state: PathingState, request: PathRequest): void => {
   const grounded = body.resting[1] < 0;
-  if (!grounded) return;
+  if (inMidJump(state.path, grounded)) return;
 
   const {min, max} = body;
   const sx = int(Math.floor((min[0] + max[0]) / 2));
@@ -738,7 +738,7 @@ const findPath = (env: TypedEnv, body: PhysicsState,
   state.request = null;
   path.stepNeedsPrecision[last_index] = true;
 
-  //console.log(JSON.stringify(state.path));
+  //console.log(JSON.stringify(path.steps.map(x => [x.x, x.y, x.z])));
 };
 
 const PIDController =
@@ -753,9 +753,16 @@ const getSoftTarget = (path: Path, grounded: boolean): Position | null => {
   return okay ? softTarget : null;
 };
 
-const nextPathStep = (env: TypedEnv, body: PhysicsState,
-                      path: Path, grounded: boolean): boolean => {
-  if (!grounded) return false;
+const inMidJump = (path: Path | null, grounded: boolean): boolean => {
+  if (grounded || path === null) return false;
+  const {index, steps} = path;
+  const step = steps[index];
+  return step.jump || (index > 0 && step.y > steps[index - 1].y);
+};
+
+const nextPathStep = (env: TypedEnv, body: PhysicsState, path: Path): boolean => {
+  const grounded = body.resting[1] < 0;
+  if (inMidJump(path, grounded)) return false;
 
   const {min, max} = body;
   const {index, steps, stepNeedsPrecision} = path;
@@ -776,9 +783,15 @@ const nextPathStep = (env: TypedEnv, body: PhysicsState,
     return (index === 0 ? -0.6 : -0.4) * width;
   })();
 
+  // Note that we use min[1] instead of max[1] for the upper bound here.
+  // That means that we can trigger nextPathStep when we're still in the air
+  // above the target block. That's okay, because we only run this code when
+  // we're falling, never jumping - see the inMidJump check above.
+  const y_okay = needs_precision ? y <= min[1] && max[1] <= y + 1
+                                 : y <= min[1] && min[1] < y + 1;
   const result = x + E <= min[0] && max[0] <= x + 1 - E &&
-                 y + 0 <= min[1] && max[1] <= y + 1 - 0 &&
-                 z + E <= min[2] && max[2] <= z + 1 - E;
+                 z + E <= min[2] && max[2] <= z + 1 - E &&
+                 y_okay;
 
   if (result && !needs_precision && !final_path_step) {
     const blocked = (() => {
@@ -838,8 +851,7 @@ const followPath = (env: TypedEnv, body: PhysicsState,
 
   const steps = path.steps;
   assert(path.index < steps.length);
-  const grounded = body.resting[1] < 0;
-  if (nextPathStep(env, body, path, grounded)) path.index++;
+  if (nextPathStep(env, body, path)) path.index++;
 
   if (path.index === steps.length) {
     if (mesh && path.finalHeading) mesh.heading = path.finalHeading;
@@ -849,7 +861,9 @@ const followPath = (env: TypedEnv, body: PhysicsState,
 
   const index = path.index;
   const step = steps[index];
+  const grounded = body.resting[1] < 0;
   const soft_target = getSoftTarget(path, grounded);
+  const in_mid_jump = inMidJump(path, grounded);
 
   const cx = (body.min[0] + body.max[0]) / 2;
   const cz = (body.min[2] + body.max[2]) / 2;
@@ -885,7 +899,7 @@ const followPath = (env: TypedEnv, body: PhysicsState,
   })();
 
   if (!mesh) return;
-  const use_dx = (grounded && soft_target) || index === 0;
+  const use_dx = (!in_mid_jump && soft_target) || index === 0;
   const vx = use_dx ? dx : step.x - steps[index - 1].x;
   const vz = use_dx ? dz : step.z - steps[index - 1].z;
   mesh.heading = Math.atan2(vx, vz);
