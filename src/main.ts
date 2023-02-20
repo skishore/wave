@@ -654,6 +654,7 @@ const runInputs = (env: TypedEnv, state: InputState) => {
     env.pathing.each(other => {
       other.target = [ix, iy, iz];
       other.soft_target = [x, y, z];
+      other.heading = state.lastHeading;
     });
   }
   inputs.call = false;
@@ -684,9 +685,11 @@ interface PathingState {
   path_index: int,
   path_soft_target: Position | null,
   path_needs_precision: boolean[] | null,
+  path_heading: number | null;
   // Next path request:
   target: Point | null,
   soft_target: Position | null,
+  heading: number | null;
 };
 
 const solid = (env: TypedEnv, x: int, y: int, z: int): boolean => {
@@ -720,7 +723,8 @@ const findPath = (env: TypedEnv, state: PathingState,
   state.path_soft_target = use_soft ? state.soft_target : null;
   state.path_needs_precision = path.map(_ => false);
   state.path_needs_precision[path.length - 1] = true;
-  state.target = state.soft_target = null;
+  state.path_heading = state.heading;
+  state.target = state.soft_target = state.heading = null;
 
   //console.log(JSON.stringify(state.path));
 };
@@ -821,8 +825,14 @@ const followPath = (env: TypedEnv, state: PathingState,
   if (!movement) return;
 
   const grounded = body.resting[1] < 0;
+  const mesh = env.meshes.get(state.id);
   if (nextPathStep(env, state, body, grounded)) state.path_index++;
-  if (state.path_index === path.length) { state.path = null; return; }
+
+  if (state.path_index === path.length) {
+    if (mesh && state.path_heading) mesh.heading = state.path_heading;
+    state.path = state.path_soft_target = state.path_heading = null;
+    return;
+  }
 
   const path_index = state.path_index;
   const last = path_index === path.length - 1;
@@ -863,7 +873,6 @@ const followPath = (env: TypedEnv, state: PathingState,
            (dz > 1 && fz > 0.5) || (dz < -1 && fz < 0.5);
   })();
 
-  const mesh = env.meshes.get(state.id);
   if (!mesh) return;
   const use_dx = (grounded && use_soft) || path_index === 0;
   const vx = use_dx ? dx : node.x - path[path_index - 1].x;
@@ -888,8 +897,10 @@ const Pathing = (env: TypedEnv): Component<PathingState> => ({
     path_index: 0,
     path_soft_target: null,
     path_needs_precision: null,
+    path_heading: null,
     target: null,
     soft_target: null,
+    heading: null,
   }),
   onUpdate: (dt: number, states: PathingState[]) => {
     for (const state of states) runPathing(env, state);
