@@ -968,12 +968,17 @@ const Meshes = (env: TypedEnv): Component<MeshState> => ({
       const index = state.cols - 1;
       const count = index < lookup.length ? lookup[index].length : state.cols;
 
+      const lower = (x: number): number => {
+        while (x >= count) x -= count;
+        return x;
+      };
+
       const frame = ((): int => {
         if (body.resting[1] >= 0) return 1;
         const distance = dt * Vec3.length(body.vel);
         if (!distance) return state.frame = 0;
-        state.frame = (state.frame + 0.1875 * count * distance) % count;
-        return int(Math.floor(state.frame));
+        state.frame = lower(state.frame + 0.1875 * count * distance);
+        return int(lower(Math.floor(state.frame) + 1));
       })();
       state.col = index < lookup.length ? lookup[index][frame] : frame;
       state.mesh.frame = int(state.col + state.row * state.cols);
