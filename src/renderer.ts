@@ -16,8 +16,8 @@ const kTmpPlane = Vec3.create();
 class Camera {
   heading = 0; // In radians: [0, 2π)
   pitch = 0;   // In radians: (-π/2, π/2)
-  zoom = 0;
-  safe_zoom = 0;
+  zoom_input = 0;
+  zoom_value = 0;
   direction: Vec3;
   position: Vec3;
   target: Vec3;
@@ -99,7 +99,8 @@ class Camera {
 
     // Scrolling is trivial to apply: add and clamp.
     if (dscroll === 0) return;
-    this.zoom = Math.max(0, Math.min(15, this.zoom + Math.sign(dscroll)));
+    const zoom_input = this.zoom_input + Math.sign(dscroll);
+    this.zoom_input = Math.max(0, Math.min(15, zoom_input));
   }
 
   getCullingPlanes(): CullingPlane[] {
@@ -136,15 +137,21 @@ class Camera {
     this.minZ = minZ;
   }
 
-  setSafeZoomDistance(bump: number, zoom: number) {
-    zoom = Math.max(Math.min(zoom, this.zoom), 0);
-    Vec3.scaleAndAdd(this.position, this.target, this.direction, -zoom);
-    this.position[1] += bump;
-    this.safe_zoom = zoom;
-  }
-
   setTarget(x: number, y: number, z: number) {
     Vec3.set(this.target, x, y, z);
+  }
+
+  updateZoomDistance(bump: number, zoom_bound: number) {
+    const speed = 0.5;
+    let {zoom_input, zoom_value} = this;
+    if (zoom_value < zoom_input) {
+      zoom_value = Math.min(zoom_value + speed, zoom_input);
+    } else {
+      zoom_value = Math.max(zoom_value - speed, zoom_input);
+    }
+    const zoom = this.zoom_value = Math.min(zoom_bound, zoom_value);
+    Vec3.scaleAndAdd(this.position, this.target, this.direction, -zoom);
+    this.position[1] += bump;
   }
 };
 

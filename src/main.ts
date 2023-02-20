@@ -955,8 +955,8 @@ const Meshes = (env: TypedEnv): Component<MeshState> => ({
     let cx = camera.position[0], cz = camera.position[2];
     env.target.each(state => {
       const {x, y, z, h, w} = env.position.getX(state.id);
-      cx = x - camera.zoom * Math.sin(camera.heading);
-      cz = z - camera.zoom * Math.cos(camera.heading);
+      cx = x - camera.zoom_value * Math.sin(camera.heading);
+      cz = z - camera.zoom_value * Math.cos(camera.heading);
     });
 
     for (const state of states) {
@@ -1126,7 +1126,7 @@ const CameraTarget = (env: TypedEnv): Component => ({
       const {x, y, z, h, w} = env.position.getX(state.id);
       env.setCameraTarget(x, y + h / 3, z);
       const mesh = env.meshes.get(state.id);
-      const zoom = env.renderer.camera.safe_zoom;
+      const zoom = env.renderer.camera.zoom_value;
       if (mesh && mesh.mesh) mesh.mesh.enabled = zoom > 2 * w;
     }
   },

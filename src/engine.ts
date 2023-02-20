@@ -589,7 +589,7 @@ class Env {
 
   private setSafeZoomDistance(): void {
     const camera = this.renderer.camera;
-    const {direction, target, zoom} = camera;
+    const {direction, target, zoom_input} = camera;
     const [x, y, z] = target;
 
     const check = (x: int, y: int, z: int) => {
@@ -610,7 +610,7 @@ class Env {
     };
 
     const safe_zoom_at = (bump: number) => {
-      Vec3.scale(kTmpDelta, direction, -zoom);
+      Vec3.scale(kTmpDelta, direction, -zoom_input);
       return shift_target(kTmpDelta, bump);
     };
 
@@ -630,15 +630,15 @@ class Env {
       if (zoom_at < best_zoom) continue;
       best_bump = bump_at;
       best_zoom = zoom_at;
-      if (zoom_at > zoom - bump_at - step_size) break;
+      if (zoom_at > zoom_input - bump_at - step_size) break;
       if (i === 0) limit = Math.floor(max_bump() / step_size);
     }
-    camera.setSafeZoomDistance(best_bump, best_zoom);
+    camera.updateZoomDistance(best_bump, best_zoom);
   }
 
   private updateHighlightMesh(): void {
     const camera = this.renderer.camera;
-    const {direction, target, zoom} = camera;
+    const {direction, target} = camera;
 
     let move = false;
     this.highlight.mask = int((1 << 6) - 1);
