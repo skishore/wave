@@ -357,7 +357,6 @@ interface MovementState {
   inputX: number,
   inputZ: number,
   jumping: boolean,
-  hovering: boolean,
   maxSpeed: number,
   moveForce: number,
   grassPenalty: number,
@@ -373,8 +372,6 @@ interface MovementState {
   _jumped: boolean,
   _jumpCount: number,
   _jumpTimeLeft: number,
-  hoverFallForce: number,
-  hoverRiseForce: number,
 };
 
 const movementPenalty = (state: MovementState, body: PhysicsState): number => {
@@ -543,11 +540,6 @@ const runMovement = (env: TypedEnv, dt: number, state: MovementState) => {
   const grounded = body.resting[1] < 0;
   if (grounded) state._jumpCount = 0;
 
-  if (state.hovering) {
-    const force = body.vel[1] < 0 ? state.hoverFallForce : state.hoverRiseForce;
-    body.forces[1] += force;
-  }
-
   if (state.jumping) {
     handleJumping(dt, state, body, grounded);
     state.jumping = false;
@@ -571,7 +563,6 @@ const Movement = (env: TypedEnv): Component<MovementState> => ({
     inputX: 0,
     inputZ: 0,
     jumping: false,
-    hovering: false,
     maxSpeed: 7.5,
     moveForce: 30,
     grassPenalty: 0.5,
@@ -587,8 +578,6 @@ const Movement = (env: TypedEnv): Component<MovementState> => ({
     _jumped: false,
     _jumpCount: 0,
     _jumpTimeLeft: 0,
-    hoverFallForce: 160,
-    hoverRiseForce: 80,
   }),
   onUpdate: (dt: number, states: MovementState[]) => {
     for (const state of states) runMovement(env, dt, state);
