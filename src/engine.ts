@@ -62,6 +62,7 @@ class Container {
     document.addEventListener('keyup', e => this.onKeyInput(e, false));
     document.addEventListener('mousedown', e => this.onMouseDown(e));
     document.addEventListener('mousemove', e => this.onMouseMove(e));
+    document.addEventListener('mouseup', e => this.onMouseUp(e));
     document.addEventListener('touchmove', e => this.onMouseMove(e));
     document.addEventListener('pointerlockchange', e => this.onPointerInput(e));
     document.addEventListener('wheel', e => this.onMouseWheel(e));
@@ -104,6 +105,13 @@ class Container {
     if (!this.inputs.pointer) return;
     this.deltas.x += (e as MouseEvent).movementX;
     this.deltas.y += (e as MouseEvent).movementY;
+  }
+
+  private onMouseUp(e: Event): void {
+    if (!this.inputs.pointer) return;
+    const button = (e as MouseEvent).button;
+    if (button === 0) this.inputs.mouse0 = false;
+    if (button !== 0) this.inputs.mouse1 = false;
   }
 
   private onMouseWheel(e: Event): void {

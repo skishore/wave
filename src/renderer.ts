@@ -1990,13 +1990,15 @@ class HighlightManager implements MeshManager<HighlightShader> {
 //////////////////////////////////////////////////////////////////////////////
 
 const kItemShader = `
+  uniform float u_offset;
   uniform mat4 u_transform;
   in vec3 a_pos;
   in vec2 a_uvs;
   out vec2 v_uv;
 
   void main() {
-    gl_Position = u_transform * vec4(a_pos, 1.0);
+    vec3 pos = a_pos + vec3(0.0, 0.0, u_offset);
+    gl_Position = u_transform * vec4(pos, 1.0);
     v_uv = a_uvs;
   }
 #split
@@ -2016,6 +2018,7 @@ const kItemShader = `
 class ItemShader extends Shader {
   u_frame:     WebGLUniformLocation | null;
   u_light:     WebGLUniformLocation | null;
+  u_offset:    WebGLUniformLocation | null;
   u_transform: WebGLUniformLocation | null;
 
   a_pos: number | null;
@@ -2025,6 +2028,7 @@ class ItemShader extends Shader {
     super(gl, kItemShader);
     this.u_frame     = this.getUniformLocation('u_frame');
     this.u_light     = this.getUniformLocation('u_light');
+    this.u_offset    = this.getUniformLocation('u_offset');
     this.u_transform = this.getUniformLocation('u_transform');
 
     this.a_pos = this.getAttribLocation('a_pos');
@@ -2081,6 +2085,7 @@ class ItemGeometry {
 class ItemMesh extends Mesh<ItemShader> {
   frame: int = 0;
   light: number = 0;
+  offset: number = 0;
   enabled: boolean = false;
   private manager: ItemManager;
   private geo: Float32Array;
@@ -2114,6 +2119,7 @@ class ItemMesh extends Mesh<ItemShader> {
     gl.bindTexture(TEXTURE_2D_ARRAY, this.texture);
     gl.uniform1f(shader.u_frame, this.frame);
     gl.uniform1f(shader.u_light, this.light);
+    gl.uniform1f(shader.u_offset, this.offset);
     gl.drawArrays(gl.TRIANGLES, 0, this.geo.length / 5);
     return true;
   }
@@ -2299,6 +2305,7 @@ interface IInstancedMesh {
 interface IItemMesh extends IMesh {
   frame: int,
   light: number;
+  offset: number;
   enabled: boolean;
 };
 

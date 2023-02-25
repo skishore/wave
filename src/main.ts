@@ -586,17 +586,26 @@ const Movement = (env: TypedEnv): Component<MovementState> => ({
 
 // An entity with an input component processes inputs.
 
+const kSwingTime = 0.06;
+const kSwingHalfLife = 0.25 * kSwingTime;
+
 interface Item {mesh: ItemMesh, range: number};
+
+interface CurItem {
+  item: Item,
+  readied: boolean,
+  swing: number,
+};
 
 interface InputState {
   id: EntityId,
   index: int,
   lastHeading: number,
-  curItem: Item | null,
+  curItem: CurItem | null,
   items: Item[],
 };
 
-const runInputs = (env: TypedEnv, state: InputState) => {
+const runInputs = (env: TypedEnv, dt: number, state: InputState) => {
   const movement = env.movement.get(state.id);
   if (!movement) return;
 
@@ -655,9 +664,9 @@ const runInputs = (env: TypedEnv, state: InputState) => {
 
   // Use the item buttons to choose an item.
   const setCurItem = (item: Item | null) => {
-    const mesh = state.curItem?.mesh;
+    const mesh = state.curItem?.item.mesh;
     if (mesh) mesh.enabled = false;
-    state.curItem = item;
+    state.curItem = item ? {item, readied: false, swing: 0} : null;
   };
   if (inputs.item0 || inputs.item1 || inputs.quit) {
     const index = inputs.item0 ? 0 : inputs.item1 ? 1 : -1;
@@ -667,17 +676,29 @@ const runInputs = (env: TypedEnv, state: InputState) => {
   inputs.item0 = inputs.item1 = inputs.quit = false;
 
   // Use the left mouse button to use the item.
-  if (inputs.mouse0 || inputs.mouse1) {
-    const body = env.physics.get(state.id);
-    if (body) tryToModifyBlock(env, body, !inputs.mouse0);
-    inputs.mouse0 = inputs.mouse1 = false;
+  const curItem = state.curItem;
+  if (curItem) {
+    if (inputs.mouse0) {
+      curItem.readied = true;
+    } else if (curItem.swing > 0) {
+      curItem.swing += dt;
+      if (curItem.swing >= kSwingTime) {
+        const body = env.physics.get(state.id);
+        if (body) tryToModifyBlock(env, body, false);
+        curItem.swing = 0;
+      }
+    } else if (curItem.readied) {
+      curItem.readied = false;
+      curItem.swing += dt;
+    }
   }
+  inputs.mouse1 = false;
 };
 
 const Inputs = (env: TypedEnv): Component<InputState> => ({
   init: () => ({id: kNoEntity, index: 0, lastHeading: 0, curItem: null, items: []}),
   onUpdate: (dt: number, states: InputState[]) => {
-    for (const state of states) runInputs(env, state);
+    for (const state of states) runInputs(env, dt, state);
   }
 });
 
@@ -1126,19 +1147,22 @@ const CameraTarget = (env: TypedEnv): Component => ({
   init: () => ({id: kNoEntity, index: 0}),
   onRender: (dt: number, states: ComponentState[]) => {
     for (const state of states) {
-      const inputs = env.inputs.get(state.id);
-      const zoom = !!(inputs && inputs.curItem);
+      const curItem = env.inputs.get(state.id)?.curItem;
       const {x, y, z, h, w} = env.position.getX(state.id);
-      env.setCameraTarget(x, y + h / 3, z, zoom);
-      env.setHighlightRange(inputs?.curItem?.range || 0);
+      env.setCameraTarget(x, y + h / 3, z, !!curItem);
+      env.setHighlightRange(curItem?.item.range || 0);
 
-      const item = inputs?.curItem?.mesh;
+      const item = curItem?.item.mesh;
       const mesh = env.meshes.get(state.id)?.mesh;
       const near = env.renderer.camera.zoom_value < 2 * w;
       if (mesh) mesh.enabled = !near;
       if (item) item.enabled = near;
 
       if (item && near) {
+        // ln(2) ~ 0.6931
+        const decay = Math.exp((-0.6931 / kSwingHalfLife) * dt);
+        const target = curItem.swing ? 0.15 : curItem.readied ? -0.15 : 0;
+        item.offset = decay * item.offset + (1 - decay) * target;
         item.light = env.getLight(x, y + h / 3, z);
       }
     }
