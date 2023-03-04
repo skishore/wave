@@ -71,7 +71,7 @@ constexpr int minUpdatedNeighborLight(int next, int prev) {
 
 constexpr int kNumChunksToLoadPerFrame    = 1;
 constexpr int kNumChunksToMeshPerFrame    = 1;
-constexpr int kNumChunksToLightPerFrame   = 4;
+constexpr int kNumChunksToLightPerFrame   = 9;
 constexpr int kNumLODChunksToMeshPerFrame = 4;
 
 // Require a layer of air blocks at the top of the world. Doing so simplifies

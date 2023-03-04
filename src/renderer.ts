@@ -147,13 +147,13 @@ class Camera {
     this.zoom_input = zoom ? 0 : kMaxZoomOut;
   }
 
-  updateZoomDistance(bump: number, zoom_bound: number) {
-    const speed = 1.0;
+  updateZoomDistance(dt: number, bump: number, zoom_bound: number) {
+    const distance = 120 * dt;
     let {zoom_input, zoom_value} = this;
     if (zoom_value < zoom_input) {
-      zoom_value = Math.min(zoom_value + speed, zoom_input);
+      zoom_value = Math.min(zoom_value + distance, zoom_input);
     } else {
-      zoom_value = Math.max(zoom_value - speed, zoom_input);
+      zoom_value = Math.max(zoom_value - distance, zoom_input);
     }
     const zoom = this.zoom_value = Math.min(zoom_bound, zoom_value);
     Vec3.scaleAndAdd(this.position, this.target, this.direction, -zoom);
@@ -2124,6 +2124,20 @@ class ItemMesh extends Mesh<ItemShader> {
     return true;
   }
 
+  getCenter(camera: Camera, scale: number): Vec3 {
+    scale *= 0.5;
+    assert(this.geo.length === 5 * 6);
+    const x = scale * (this.geo[0] + this.geo[10]);
+    const y = scale * (this.geo[1] + this.geo[11]);
+    const z = scale * (this.geo[2] + this.geo[12]);
+    const result = Vec3.from(x, y, z);
+
+    Vec3.rotateX(result, result, camera.pitch);
+    Vec3.rotateY(result, result, camera.heading);
+    Vec3.add(result, result, camera.position);
+    return result;
+  }
+
   private prepareBuffers(): void {
     if (this.vao) return;
 
@@ -2307,6 +2321,7 @@ interface IItemMesh extends IMesh {
   light: number;
   offset: number;
   enabled: boolean;
+  getCenter: (camera: Camera, scale: number) => Vec3,
 };
 
 interface ILightTexture {

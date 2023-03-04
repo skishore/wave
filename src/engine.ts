@@ -527,7 +527,6 @@ class Env {
 
   setCameraTarget(x: number, y: number, z: number, zoom: boolean): void {
     this.renderer.camera.setTarget(x, y, z, zoom);
-    this.setSafeZoomDistance();
   }
 
   setHighlightRange(range: number): void {
@@ -572,6 +571,7 @@ class Env {
     deltas.x = deltas.y = deltas.scroll = 0;
 
     this.entities.render(dt);
+    this.setSafeZoomDistance(dt);
     this.updateHighlightMesh();
     this.updateOverlayColor(wave);
     const sparkle = int(old_frame) !== int(this.frame);
@@ -605,7 +605,7 @@ class Env {
     return result;
   }
 
-  private setSafeZoomDistance(): void {
+  private setSafeZoomDistance(dt: number): void {
     const camera = this.renderer.camera;
     const zoom = Math.max(camera.zoom_input, camera.zoom_value);
     const {direction, target} = camera;
@@ -652,7 +652,7 @@ class Env {
       if (zoom_at > zoom - bump_at - step_size) break;
       if (i === 0) limit = Math.floor(max_bump() / step_size);
     }
-    camera.updateZoomDistance(best_bump, best_zoom);
+    camera.updateZoomDistance(dt, best_bump, best_zoom);
   }
 
   private updateHighlightMesh(): void {
@@ -973,4 +973,4 @@ window.onload = () => { loaded = true; checkReady(); };
 //////////////////////////////////////////////////////////////////////////////
 
 export {BlockId, MaterialId, Env, init};
-export {kChunkWidth, kEmptyBlock, kNoMaterial, kWorldHeight};
+export {kChunkWidth, kEmptyBlock, kNoMaterial, kSunlightLevel, kWorldHeight};

@@ -151,6 +151,10 @@
         padding: 2px 16px 0 4px;
         text-align: left;
       }
+
+      .hidden {
+        display: none;
+      }
     </style>
   </head>
 
@@ -172,29 +176,10 @@
       </div>
       <div id="inner">
         <canvas></canvas>
-        <div id="cursor">+</div>
+        <div id="cursor" class="hidden">+</div>
         <div id="click-to-resume">Paused - click to resume.</div>
       </div>
-      <!--
-      <div id="controls">
-        <div class="heading">Controls:</div>
-        <table>
-          <tr>
-            <th class="key">WASD:</th><td class="val">move</td>
-            <th class="key">Left-click:</th><td class="val">destroy a block</td>
-          </tr>
-          <tr>
-            <th class="key">Mouse:</th><td class="val">look around</td>
-            <th class="key">Right-click:</th><td class="val">create a block</td>
-          </tr>
-          <tr>
-            <th class="key">Space/E:</th><td class="val">jump/hover</td>
-            <th class="key">Scroll up/down:</th><td class="val">zoom in/out</td>
-          </tr>
-        </table>
-      </div>
     </div>
-    -->
     <div id="stats"></div>
   </body>
 </html>

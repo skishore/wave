@@ -1,6 +1,6 @@
 import {assert, int, nonnull, Color, Vec3} from './base.js';
 import {BlockId, Env, init} from './engine.js';
-import {kEmptyBlock, kNoMaterial, kWorldHeight} from './engine.js';
+import {kEmptyBlock, kNoMaterial, kSunlightLevel, kWorldHeight} from './engine.js';
 import {Component, ComponentState, ComponentStore} from './ecs.js';
 import {EntityId, kNoEntity} from './ecs.js';
 import {AStar, Check, PathNode, Point as AStarPoint} from './pathing.js';
@@ -41,11 +41,29 @@ interface Blocks {
 
 //////////////////////////////////////////////////////////////////////////////
 
+class WebUI {
+  private cursor: HTMLElement;
+  private cursor_shown = false;
+
+  constructor() {
+    this.cursor = nonnull(document.getElementById("cursor"));
+  }
+
+  showCursor(shown: boolean): void {
+    if (shown === this.cursor_shown) return;
+    if (!shown) this.cursor.classList.add('hidden');
+    if (shown) this.cursor.classList.remove('hidden');
+    this.cursor_shown = shown;
+  }
+};
+
+//////////////////////////////////////////////////////////////////////////////
+
 class TypedEnv extends Env {
   particles: int = 0;
   blocks: Blocks | null = null;
   point_lights: Map<string, PointLight>;
-  lifetime: ComponentStore<LifetimeState>;
+  callback: ComponentStore<CallbackState>;
   position: ComponentStore<PositionState>;
   movement: ComponentStore<MovementState>;
   pathing: ComponentStore<PathingState>;
@@ -55,12 +73,13 @@ class TypedEnv extends Env {
   inputs: ComponentStore<InputState>;
   lights: ComponentStore<LightState>;
   target: ComponentStore;
+  ui: WebUI;
 
   constructor(id: string) {
     super(id);
     const ents = this.entities;
     this.point_lights = new Map();
-    this.lifetime = ents.registerComponent('lifetime', Lifetime);
+    this.callback = ents.registerComponent('callback', Callback);
     this.position = ents.registerComponent('position', Position);
     this.inputs = ents.registerComponent('inputs', Inputs(this));
     this.pathing = ents.registerComponent('pathing', Pathing(this));
@@ -70,6 +89,7 @@ class TypedEnv extends Env {
     this.shadow = ents.registerComponent('shadow', Shadow(this));
     this.lights = ents.registerComponent('lights', Lights(this));
     this.target = ents.registerComponent('camera-target', CameraTarget(this));
+    this.ui = new WebUI();
   }
 };
 
@@ -105,21 +125,25 @@ const flowWater = (env: TypedEnv, water: BlockId, points: Point[]) => {
 
 //////////////////////////////////////////////////////////////////////////////
 
-// An entity with a lifetime calls cleanup() at the end of its life.
+// An entity with a callback calls it on each onRender and onUpdate call.
 
-interface LifetimeState {
+interface CallbackState {
   id: EntityId,
   index: int,
-  lifetime: number,
-  cleanup: (() => void) | null,
+  onRender: ((dt: number) => void) | null,
+  onUpdate: ((dt: number) => void) | null,
 };
 
-const Lifetime: Component<LifetimeState> = {
-  init: () => ({id: kNoEntity, index: 0, lifetime: 0, cleanup: null}),
-  onUpdate: (dt: number, states: LifetimeState[]) => {
+const Callback: Component<CallbackState> = {
+  init: () => ({id: kNoEntity, index: 0, onRender: null, onUpdate: null}),
+  onRender: (dt: number, states: CallbackState[]) => {
     for (const state of states) {
-      state.lifetime -= dt;
-      if (state.lifetime < 0 && state.cleanup) state.cleanup();
+      if (state.onRender) state.onRender(dt);
+    }
+  },
+  onUpdate: (dt: number, states: CallbackState[]) => {
+    for (const state of states) {
+      if (state.onUpdate) state.onUpdate(dt);
     }
   },
 };
@@ -189,7 +213,7 @@ const setPositionFromPhysics = (a: PositionState, b: PhysicsState) => {
 
 const applyFriction = (axis: int, state: PhysicsState, dv: Vec3) => {
   const resting = state.resting[axis];
-  if (resting === 0 || resting * dv[axis] <= 0) return;
+  if (resting === 0) return;
 
   Vec3.copy(kTmpFriction, state.vel);
   kTmpFriction[axis] = 0;
@@ -331,8 +355,8 @@ const Physics = (env: TypedEnv): Component<PhysicsState> => ({
     friction: 0,
     restitution: 0,
     mass: 1,
-    autoStep: 0.0625,
-    autoStepMax: 0.5,
+    autoStep: 0,
+    autoStepMax: 0,
   }),
   onAdd: (state: PhysicsState) => {
     setPhysicsFromPosition(env.position.getX(state.id), state);
@@ -458,8 +482,8 @@ const generateParticles =
     body.impulses[0] = kParticleSpeed * (Math.random() - 0.5);
     body.impulses[1] = kParticleSpeed * Math.random();
     body.impulses[2] = kParticleSpeed * (Math.random() - 0.5);
-    body.friction = 10;
     body.restitution = 0.5;
+    body.friction = 1;
 
     const mesh = env.meshes.add(particle);
     const sprite = {url: texture.url, x: texture.w, y: texture.h};
@@ -472,9 +496,9 @@ const generateParticles =
     const uv = size - 2 * epsilon;
     mesh.mesh.setSTUV(s + epsilon, t + epsilon, uv, uv);
 
-    const lifetime = env.lifetime.add(particle);
-    lifetime.lifetime = 1.0 * Math.random() + 0.5;
-    lifetime.cleanup = () => {
+    let lifetime = 1.0 * Math.random() + 0.5;
+    env.callback.add(particle).onUpdate = dt => {
+      if ((lifetime -= dt) > 0) return;
       env.entities.removeEntity(particle);
       env.particles--;
     };
@@ -587,13 +611,18 @@ const Movement = (env: TypedEnv): Component<MovementState> => ({
 // An entity with an input component processes inputs.
 
 const kSwingTime = 0.06;
-const kSwingHalfLife = 0.25 * kSwingTime;
+const kSwingHalfLife = 0.5 * kSwingTime;
+const kSwingPullback = -0.15;
+const kSwingForwards = 0.30;
 
-interface Item {mesh: ItemMesh, range: number};
+type ItemType = 'ball' | 'shovel';
+
+interface Item {mesh: ItemMesh, range: number, type: ItemType};
 
 interface CurItem {
   item: Item,
   readied: boolean,
+  effort: number,
   swing: number,
 };
 
@@ -603,6 +632,59 @@ interface InputState {
   lastHeading: number,
   curItem: CurItem | null,
   items: Item[],
+};
+
+const throwBall = (env: TypedEnv, effort: number, source: ItemMesh, vel: Vec3) => {
+  const friction = 2;
+  const restitution = 0.25;
+  const size = 0.5;
+  const speed = 50;
+
+  const camera = env.renderer.camera;
+  const ball = env.entities.addEntity();
+  const position = env.position.add(ball);
+  const [px, py, pz] = source.getCenter(camera, 1 / size);
+  const [vx, vy, vz] = camera.direction;
+
+  position.x = px;
+  position.y = py;
+  position.z = pz;
+  position.w = position.h = size;
+
+  const body = env.physics.add(ball);
+  body.impulses[0] = effort * speed * vx + vel[0];
+  body.impulses[1] = effort * speed * vy + vel[1];
+  body.impulses[2] = effort * speed * vz + vel[2];
+  body.restitution = restitution;
+  body.friction = friction;
+
+  const pixels = int(24);
+  const mesh = env.meshes.add(ball);
+  const sprite = {url: 'images/items.png', x: pixels, y: pixels};
+  const shadow = env.shadow.add(ball);
+  mesh.mesh = env.renderer.addSpriteMesh(size / pixels, sprite);
+  mesh.mesh.frame = 1;
+
+  const kLifetime = 0.50;
+  const light = env.lights.add(ball);
+  let lifetime = kLifetime;
+  let airborne = true;
+
+  env.callback.add(ball).onUpdate = dt => {
+    if (airborne) {
+      if (body.resting[1] >= 0) return;
+      const kStoppedSpeed = 0.01;
+      const vx = body.vel[0], vz = body.vel[2];
+      const speed_squared = vx * vx + vz * vz;
+      if (speed_squared >= kStoppedSpeed * kStoppedSpeed) return;
+      airborne = false;
+    } else {
+      lifetime -= dt;
+      if (lifetime < 0) return env.entities.removeEntity(ball);
+      const intensity = Math.min((1.5 * lifetime / kLifetime), 1);
+      light.level = int(Math.round(kSunlightLevel * intensity));
+    }
+  };
 };
 
 const runInputs = (env: TypedEnv, dt: number, state: InputState) => {
@@ -666,7 +748,7 @@ const runInputs = (env: TypedEnv, dt: number, state: InputState) => {
   const setCurItem = (item: Item | null) => {
     const mesh = state.curItem?.item.mesh;
     if (mesh) mesh.enabled = false;
-    state.curItem = item ? {item, readied: false, swing: 0} : null;
+    state.curItem = item ? {item, readied: false, effort: 0, swing: 0} : null;
   };
   if (inputs.item0 || inputs.item1 || inputs.quit) {
     const index = inputs.item0 ? 0 : inputs.item1 ? 1 : -1;
@@ -678,18 +760,31 @@ const runInputs = (env: TypedEnv, dt: number, state: InputState) => {
   // Use the left mouse button to use the item.
   const curItem = state.curItem;
   if (curItem) {
-    if (inputs.mouse0) {
-      curItem.readied = true;
-    } else if (curItem.swing > 0) {
+    if (inputs.mouse1) {
+      curItem.readied = false;
+      inputs.mouse0 = false;
+    }
+    if (inputs.mouse0) curItem.readied = true;
+
+    if (curItem.swing > 0) {
       curItem.swing += dt;
       if (curItem.swing >= kSwingTime) {
         const body = env.physics.get(state.id);
         if (body) tryToModifyBlock(env, body, false);
         curItem.swing = 0;
       }
-    } else if (curItem.readied) {
+    } else if (curItem.readied && !inputs.mouse0) {
+      const safe_effort = Math.max(0, Math.min(1, curItem.effort));
+      const effort = 0.25 + 0.75 * safe_effort;
       curItem.readied = false;
+      curItem.effort = 0;
       curItem.swing += dt;
+      if (curItem.item.type === 'ball') {
+        const vel = body?.vel || Vec3.create();
+        throwBall(env, effort, curItem.item.mesh, vel);
+      }
+    } else if (curItem.readied) {
+      curItem.effort += dt;
     }
   }
   inputs.mouse1 = false;
@@ -1157,11 +1252,13 @@ const CameraTarget = (env: TypedEnv): Component => ({
       const near = env.renderer.camera.zoom_value < 2 * w;
       if (mesh) mesh.enabled = !near;
       if (item) item.enabled = near;
+      env.ui.showCursor(near);
 
       if (item && near) {
         // ln(2) ~ 0.6931
         const decay = Math.exp((-0.6931 / kSwingHalfLife) * dt);
-        const target = curItem.swing ? 0.15 : curItem.readied ? -0.15 : 0;
+        const target = curItem.swing ? kSwingForwards :
+                       curItem.readied ? kSwingPullback : 0;
         item.offset = decay * item.offset + (1 - decay) * target;
         item.light = env.getLight(x, y + h / 3, z);
       }
@@ -1210,7 +1307,10 @@ const addEntity = (env: TypedEnv, x: number, z: number, h: number, w: number,
   movement.jumpForce = jumpForce;
   movement.jumpImpulse = jumpImpulse;
 
-  env.physics.add(entity);
+  const body = env.physics.add(entity);
+  body.autoStep =  0.0625;
+  body.autoStepMax = 0.5;
+
   env.shadow.add(entity);
   return entity;
 };
@@ -1240,12 +1340,14 @@ const main = () => {
   follower_mesh.rows = 8;
   follower_mesh.heading = 0;
   follower_mesh.offset = follower_scale * (sy - cy);
-  env.lights.add(follower).level = 15;
+  env.lights.add(follower).level = kSunlightLevel;
   env.pathing.add(follower);
 
   const TAU = 2 * Math.PI;
   const inputs = env.inputs.getX(player);
-  const item = (mesh: ItemMesh, range: number): Item => ({mesh, range});
+  const item = (mesh: ItemMesh, range: number, type: ItemType): Item => {
+    return {mesh, range, type};
+  };
 
   const shovel = env.renderer.addItemMesh(
     new ItemGeometry()
@@ -1256,7 +1358,7 @@ const main = () => {
     {url: `images/items.png`, x: int(24), y: int(24)},
   );
   shovel.frame = 0;
-  inputs.items.push(item(shovel, 4));
+  inputs.items.push(item(shovel, 4, 'shovel'));
 
   const ball = env.renderer.addItemMesh(
     new ItemGeometry()
@@ -1266,7 +1368,7 @@ const main = () => {
     {url: `images/items.png`, x: int(24), y: int(24)},
   );
   ball.frame = 1;
-  inputs.items.push(item(ball, 0));
+  inputs.items.push(item(ball, 0, 'ball'));
 
   const white: Color = [1, 1, 1, 1];
   const texture = (x: int, y: int, alphaTest: boolean = false,
