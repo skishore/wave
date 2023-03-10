@@ -1636,7 +1636,7 @@ class SpriteShader extends Shader {
 };
 
 class SpriteMesh extends Mesh<SpriteShader> {
-  frame: int = 1;
+  frame: int = 0;
   light: number = 0;
   height: number;
   enabled = true;

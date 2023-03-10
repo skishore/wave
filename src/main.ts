@@ -614,6 +614,7 @@ const kSwingTime = 0.06;
 const kSwingHalfLife = 0.5 * kSwingTime;
 const kSwingPullback = -0.15;
 const kSwingForwards = 0.30;
+const kMaxEffortTime = 0.75;
 
 type ItemType = 'ball' | 'shovel';
 
@@ -635,15 +636,15 @@ interface InputState {
 };
 
 const throwBall = (env: TypedEnv, effort: number, source: ItemMesh, vel: Vec3) => {
-  const friction = 2;
+  const friction = 4;
   const restitution = 0.25;
-  const size = 0.5;
+  const size = 0.375;
   const speed = 50;
 
   const camera = env.renderer.camera;
   const ball = env.entities.addEntity();
   const position = env.position.add(ball);
-  const [px, py, pz] = source.getCenter(camera, 1 / size);
+  const [px, py, pz] = source.getCenter(camera, 1.5 / size);
   const [vx, vy, vz] = camera.direction;
 
   position.x = px;
@@ -658,12 +659,12 @@ const throwBall = (env: TypedEnv, effort: number, source: ItemMesh, vel: Vec3) =
   body.restitution = restitution;
   body.friction = friction;
 
-  const pixels = int(24);
   const mesh = env.meshes.add(ball);
-  const sprite = {url: 'images/items.png', x: pixels, y: pixels};
   const shadow = env.shadow.add(ball);
-  mesh.mesh = env.renderer.addSpriteMesh(size / pixels, sprite);
-  mesh.mesh.frame = 1;
+  const sprite = {url: 'images/ball.png', x: int(16), y: int(24)};
+  mesh.mesh = env.renderer.addSpriteMesh(size / sprite.x, sprite);
+  mesh.type = 'ball';
+  mesh.cols = 8;
 
   const kLifetime = 0.50;
   const light = env.lights.add(ball);
@@ -677,6 +678,7 @@ const throwBall = (env: TypedEnv, effort: number, source: ItemMesh, vel: Vec3) =
       const vx = body.vel[0], vz = body.vel[2];
       const speed_squared = vx * vx + vz * vz;
       if (speed_squared >= kStoppedSpeed * kStoppedSpeed) return;
+      if (mesh.mesh) mesh.mesh.frame = int(mesh.cols + 1);
       airborne = false;
     } else {
       lifetime -= dt;
@@ -774,8 +776,9 @@ const runInputs = (env: TypedEnv, dt: number, state: InputState) => {
         curItem.swing = 0;
       }
     } else if (curItem.readied && !inputs.mouse0) {
-      const safe_effort = Math.max(0, Math.min(1, curItem.effort));
-      const effort = 0.25 + 0.75 * safe_effort;
+      const base_effort = curItem.effort / kMaxEffortTime;
+      const safe_effort = Math.max(0, Math.min(1, base_effort));
+      const effort = 0.125 + 0.875 * safe_effort;
       curItem.readied = false;
       curItem.effort = 0;
       curItem.swing += dt;
@@ -1043,6 +1046,8 @@ const Pathing = (env: TypedEnv): Component<PathingState> => ({
 
 // An entity with a MeshState keeps a renderer mesh at its position.
 
+type MeshType = 'ball' | 'walk';
+
 interface MeshState {
   id: EntityId,
   index: int,
@@ -1054,6 +1059,7 @@ interface MeshState {
   rows: int,
   frame: number,
   offset: number,
+  type: MeshType,
 };
 
 const Meshes = (env: TypedEnv): Component<MeshState> => ({
@@ -1068,6 +1074,7 @@ const Meshes = (env: TypedEnv): Component<MeshState> => ({
     rows: 0,
     frame: 0,
     offset: 0,
+    type: 'walk',
   }),
   onRemove: (state: MeshState) => state.mesh?.dispose(),
   onRender: (dt: number, states: MeshState[]) => {
@@ -1105,9 +1112,29 @@ const Meshes = (env: TypedEnv): Component<MeshState> => ({
     ];
 
     for (const state of states) {
-      if (!state.mesh || !state.cols) return;
+      if (!state.mesh || !state.cols) continue;
       const body = env.physics.get(state.id);
-      if (!body) return;
+      if (!body) continue;
+
+      if (state.type === 'ball') {
+        if (state.mesh.frame >= state.cols) continue;
+        const count = state.cols;
+        const lower = (x: number): number => {
+          while (x < 0) x += count;
+          while (x >= count) x -= count;
+          return x;
+        };
+        state.col = ((): int => {
+          const heading = env.renderer.camera.heading;
+          const vx = Math.sin(heading);
+          const vz = Math.cos(heading);
+          const velocity = body.vel[0] * vx + body.vel[2] * vz;
+          state.frame = lower(state.frame + 0.01 * count * velocity);
+          return int(lower(Math.floor(state.frame) + 1));
+        })();
+        state.mesh.frame = int(state.col + state.row * state.cols);
+        continue;
+      }
 
       const index = state.cols - 1;
       const count = index < lookup.length ? lookup[index].length : state.cols;
@@ -1295,8 +1322,8 @@ const addEntity = (env: TypedEnv, x: number, z: number, h: number, w: number,
                    jumpForce: number, jumpImpulse: number): EntityId => {
   const entity = env.entities.addEntity();
   const position = env.position.add(entity);
-  position.x = x + 0.5;
-  position.z = z + 0.5;
+  position.x = x;
+  position.z = z;
   position.w = w;
   position.h = h;
   position.y = safeHeight(env, position);
@@ -1315,33 +1342,37 @@ const addEntity = (env: TypedEnv, x: number, z: number, h: number, w: number,
   return entity;
 };
 
+const addMonster = (env: TypedEnv, x: number, z: number) => {
+  const [cy, sx, sy] = [int(24), int(32), int(40)];
+  const [height, width] = [0.75, 0.75];
+  const sprite = {url: `images/0025.png`, x: sx, y: sy};
+  const monster = addEntity(env, x, z, height, 0.75, 12, 8, 15, 10);
+  const scale = 2 * width / sprite.y;
+  const mesh = env.meshes.add(monster);
+  mesh.mesh = env.renderer.addSpriteMesh(scale, sprite);
+  mesh.cols = 4;
+  mesh.rows = 8;
+  mesh.heading = 0;
+  mesh.offset = scale * (sy - cy);
+  env.pathing.add(monster);
+};
+
 const main = () => {
   const env = new TypedEnv('container');
 
-  const [x, z] = [-2, 2];
-  const player_height = 1.5;
-  const player_sprite = {url: `images/player.png`, x: int(32), y: int(32)};
-  const player = addEntity(env, x, z, player_height, 0.75, 8, 4, 10, 7.5);
-  const player_scale = player_height / player_sprite.y;
-  const player_mesh = env.meshes.add(player);
-  player_mesh.mesh = env.renderer.addSpriteMesh(player_scale, player_sprite);
-  player_mesh.cols = 3;
-  player_mesh.rows = 4;
+  const [x, z] = [-1.5, 2.5];
+  const [height, width] = [1.5, 0.75];
+  const sprite = {url: `images/player.png`, x: int(32), y: int(32)};
+  const player = addEntity(env, x, z, height, width, 8, 4, 10, 7.5);
+  const scale = 2 * width / sprite.y;
+  const mesh = env.meshes.add(player);
+  mesh.mesh = env.renderer.addSpriteMesh(scale, sprite);
+  mesh.cols = 3;
+  mesh.rows = 4;
   env.inputs.add(player);
   env.target.add(player);
 
-  const [cy, sx, sy] = [int(24), int(32), int(40)];
-  const follower = addEntity(env, x, z, 0.75, 0.75, 12, 8, 15, 10);
-  const follower_scale = player_scale * 0.8;
-  const follower_mesh = env.meshes.add(follower);
-  const follower_sprite = {url: `images/0025.png`, x: sx, y: sy};
-  follower_mesh.mesh = env.renderer.addSpriteMesh(follower_scale, follower_sprite);
-  follower_mesh.cols = 4;
-  follower_mesh.rows = 8;
-  follower_mesh.heading = 0;
-  follower_mesh.offset = follower_scale * (sy - cy);
-  env.lights.add(follower).level = kSunlightLevel;
-  env.pathing.add(follower);
+  addMonster(env, x, z);
 
   const TAU = 2 * Math.PI;
   const inputs = env.inputs.getX(player);
