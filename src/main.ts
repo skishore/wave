@@ -201,15 +201,15 @@ const kTmpResting = Vec3.create();
 
 const setPhysicsFromPosition = (a: PositionState, b: PhysicsState) => {
   Vec3.set(kTmpPos, a.x, a.y, a.z);
-  Vec3.set(kTmpSize, a.w / 2, a.h / 2, a.w / 2);
+  Vec3.set(kTmpSize, 0.5 * a.w, 0.5 * a.h, 0.5 * a.w);
   Vec3.sub(b.min, kTmpPos, kTmpSize);
   Vec3.add(b.max, kTmpPos, kTmpSize);
 };
 
 const setPositionFromPhysics = (a: PositionState, b: PhysicsState) => {
-  a.x = (b.min[0] + b.max[0]) / 2;
-  a.y = (b.min[1] + b.max[1]) / 2;
-  a.z = (b.min[2] + b.max[2]) / 2;
+  a.x = 0.5 * (b.min[0] + b.max[0]);
+  a.y = 0.5 * (b.min[1] + b.max[1]);
+  a.z = 0.5 * (b.min[2] + b.max[2]);
 };
 
 const applyFriction = (axis: int, state: PhysicsState, dv: Vec3) => {
@@ -244,14 +244,14 @@ const tryAutoStepping =
     if (threshold * speed_x <= speed_z) return false;
     const x = int(Math.floor(vel[0] > 0 ? max[0] + 0.5 : min[0] - 0.5));
     const y = int(Math.floor(min[1]));
-    const z = int(Math.floor((min[2] + max[2]) / 2));
+    const z = int(Math.floor(0.5 * (min[2] + max[2])));
     const block = env.getBlock(x, y, z);
     return opaque[block] && solid[block];
   })();
   const step_z = (() => {
     if (resting[2] === 0) return false;
     if (threshold * speed_z <= speed_x) return false;
-    const x = int(Math.floor((min[0] + max[0]) / 2));
+    const x = int(Math.floor(0.5 * (min[0] + max[0])));
     const y = int(Math.floor(min[1]));
     const z = int(Math.floor(vel[2] > 0 ? max[2] + 0.5 : min[2] - 0.5));
     const block = env.getBlock(x, y, z);
@@ -294,9 +294,9 @@ const runPhysics = (env: TypedEnv, dt: number, state: PhysicsState) => {
   };
 
   const {min, max} = state;
-  const x = int(Math.floor((min[0] + max[0]) / 2));
+  const x = int(Math.floor(0.5 * (min[0] + max[0])));
+  const z = int(Math.floor(0.5 * (min[2] + max[2])));
   const y = int(Math.floor(min[1]));
-  const z = int(Math.floor((min[2] + max[2]) / 2));
 
   const block = env.getBlock(x, y, z);
   const mesh = env.registry.getBlockMesh(block);
@@ -306,11 +306,12 @@ const runPhysics = (env: TypedEnv, dt: number, state: PhysicsState) => {
   const drag = state.inFluid ? 2 : 0;
   const left = Math.max(1 - drag * dt, 0);
   const gravity = state.inFluid ? 0.25 : 1;
+  const inverse_mass = 1 / state.mass;
 
-  Vec3.scale(kTmpAcceleration, state.forces, 1 / state.mass);
+  Vec3.scale(kTmpAcceleration, state.forces, inverse_mass);
   Vec3.scaleAndAdd(kTmpAcceleration, kTmpAcceleration, kTmpGravity, gravity);
   Vec3.scale(kTmpDelta, kTmpAcceleration, dt);
-  Vec3.scaleAndAdd(kTmpDelta, kTmpDelta, state.impulses, 1 / state.mass);
+  Vec3.scaleAndAdd(kTmpDelta, kTmpDelta, state.impulses, inverse_mass);
   if (state.friction) {
     Vec3.add(kTmpAcceleration, kTmpDelta, state.vel);
     applyFriction(0, state, kTmpAcceleration);
@@ -748,8 +749,8 @@ const runInputs = (env: TypedEnv, dt: number, state: InputState) => {
       multiplier = (fb || lr ? 6.0 : 5.5);
     }
     const kFollowDistance = multiplier * (max[0] - min[0]);
-    const x = (min[0] + max[0]) / 2 - kFollowDistance * Math.sin(heading);
-    const z = (min[2] + max[2]) / 2 - kFollowDistance * Math.cos(heading);
+    const x = 0.5 * (min[0] + max[0]) - kFollowDistance * Math.sin(heading);
+    const z = 0.5 * (min[2] + max[2]) - kFollowDistance * Math.cos(heading);
     const y = (min[1] + body.autoStepMax);
 
     const ix = int(Math.floor(x));
@@ -853,9 +854,9 @@ const findPath = (env: TypedEnv, body: PhysicsState,
   if (inMidJump(state.path, grounded)) return;
 
   const {min, max} = body;
-  const sx = int(Math.floor((min[0] + max[0]) / 2));
+  const sx = int(Math.floor(0.5 * (min[0] + max[0])));
+  const sz = int(Math.floor(0.5 * (min[2] + max[2])));
   const sy = int(Math.floor(min[1]));
-  const sz = int(Math.floor((min[2] + max[2]) / 2));
   const [tx, ty, tz] = request.target;
 
   const source = new AStarPoint(sx, sy, sz);
@@ -1007,8 +1008,8 @@ const followPath = (env: TypedEnv, body: PhysicsState,
   const soft_target = getSoftTarget(path, grounded);
   const in_mid_jump = inMidJump(path, grounded);
 
-  const cx = (body.min[0] + body.max[0]) / 2;
-  const cz = (body.min[2] + body.max[2]) / 2;
+  const cx = 0.5 * (body.min[0] + body.max[0]);
+  const cz = 0.5 * (body.min[2] + body.max[2]);
   const dx = (soft_target ? soft_target[0] : step.x + 0.5) - cx;
   const dz = (soft_target ? soft_target[2] : step.z + 0.5) - cz;
 
@@ -1111,14 +1112,14 @@ const Meshes = (env: TypedEnv): Component<MeshState> => ({
 
       const {x, y, z, h, w} = env.position.getX(state.id);
       const light = env.getLight(x, y, z);
-      mesh.setPosition(x, y - h / 2 - offset, z);
+      mesh.setPosition(x, y - 0.5 * h - offset, z);
       mesh.height = h + 2 * offset;
       mesh.light = light;
 
       if (state.heading !== null) {
         const camera_heading = Math.atan2(x - cx, z - cz);
         const delta = state.heading - camera_heading;
-        state.row = int(Math.floor(20.5 - 8 * delta / (2 * Math.PI)) & 7);
+        state.row = int(Math.floor(20.5 - 8 * delta / TAU) & 7);
         mesh.frame = int(state.col + state.row * state.cols);
       }
     }
@@ -1375,7 +1376,7 @@ const addEntity = (env: TypedEnv, pos: Pos, safeHeight: boolean,
 const addMonster = (env: TypedEnv, x: number, y: number, z: number): void => {
   const sprite = kMonsterSprite;
   const [height, width] = [0.75, 0.75];
-  const pos = {x, y: y + height / 2 + 0.05, z, w: width, h: height};
+  const pos = {x, y: y + 0.5 * height + 0.05, z, w: width, h: height};
   const monster = addEntity(env, pos, false, 12, 8, 15, 10);
   const scale = 2 * width / sprite.y;
   const mesh = env.meshes.add(monster);
@@ -1387,8 +1388,8 @@ const addMonster = (env: TypedEnv, x: number, y: number, z: number): void => {
 };
 
 const tryToAddMonster = (env: TypedEnv, body: PhysicsState): void => {
-  const x = (body.min[0] + body.max[0]) / 2;
-  const z = (body.min[2] + body.max[2]) / 2;
+  const x = 0.5 * (body.min[0] + body.max[0]);
+  const z = 0.5 * (body.min[2] + body.max[2]);
   const y = body.min[1];
   addMonster(env, x, y, z);
 };
