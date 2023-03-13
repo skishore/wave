@@ -10,6 +10,7 @@ import {sweep} from './sweep.js';
 
 //////////////////////////////////////////////////////////////////////////////
 
+const TAU = 2 * Math.PI;
 const kNumParticles = 16;
 const kMaxNumParticles = 64;
 
@@ -618,7 +619,12 @@ const kMaxEffortTime = 0.75;
 
 type ItemType = 'ball' | 'shovel';
 
-interface Item {mesh: ItemMesh, range: number, type: ItemType};
+interface MonsterData {outside: boolean};
+
+interface BaseItem {mesh: ItemMesh, range: number, type: ItemType};
+
+type Item = BaseItem & {type: 'ball', extra: MonsterData} |
+            BaseItem & {type: 'shovel', extra: null};
 
 interface CurItem {
   item: Item,
@@ -635,7 +641,15 @@ interface InputState {
   items: Item[],
 };
 
-const throwBall = (env: TypedEnv, effort: number, source: ItemMesh, vel: Vec3) => {
+const itemEnabled = (item: Item) => {
+  return !(item.type === 'ball' && item.extra.outside);
+};
+
+const throwBall = (env: TypedEnv, effort: number, source: Item, vel: Vec3) => {
+  if (source.type !== 'ball') throw new Error();
+  if (source.extra.outside) return false;
+  source.extra.outside = true;
+
   const friction = 4;
   const restitution = 0.25;
   const size = 0.375;
@@ -644,7 +658,7 @@ const throwBall = (env: TypedEnv, effort: number, source: ItemMesh, vel: Vec3) =
   const camera = env.renderer.camera;
   const ball = env.entities.addEntity();
   const position = env.position.add(ball);
-  const [px, py, pz] = source.getCenter(camera, 1.5 / size);
+  const [px, py, pz] = source.mesh.getCenter(camera, 1.5 / size);
   const [vx, vy, vz] = camera.direction;
 
   position.x = px;
@@ -659,9 +673,9 @@ const throwBall = (env: TypedEnv, effort: number, source: ItemMesh, vel: Vec3) =
   body.restitution = restitution;
   body.friction = friction;
 
+  const sprite = kBallSprite;
   const mesh = env.meshes.add(ball);
   const shadow = env.shadow.add(ball);
-  const sprite = {url: 'images/ball.png', x: int(16), y: int(24)};
   mesh.mesh = env.renderer.addSpriteMesh(size / sprite.x, sprite);
   mesh.type = 'ball';
   mesh.cols = 8;
@@ -679,6 +693,7 @@ const throwBall = (env: TypedEnv, effort: number, source: ItemMesh, vel: Vec3) =
       const speed_squared = vx * vx + vz * vz;
       if (speed_squared >= kStoppedSpeed * kStoppedSpeed) return;
       if (mesh.mesh) mesh.mesh.frame = int(mesh.cols + 1);
+      tryToAddMonster(env, body);
       airborne = false;
     } else {
       lifetime -= dt;
@@ -702,10 +717,10 @@ const runInputs = (env: TypedEnv, dt: number, state: InputState) => {
   if (fb || lr) {
     let heading = env.renderer.camera.heading;
     if (fb) {
-      if (fb === -1) heading += Math.PI;
-      heading += fb * lr * Math.PI / 4;
+      if (fb === -1) heading += 0.5 * TAU;
+      heading += fb * lr * 0.125 * TAU;
     } else {
-      heading += lr * Math.PI / 2;
+      heading += lr * 0.25 * TAU;
     }
     movement.inputX = Math.sin(heading);
     movement.inputZ = Math.cos(heading);
@@ -726,8 +741,12 @@ const runInputs = (env: TypedEnv, dt: number, state: InputState) => {
   const body = env.physics.get(state.id);
   if (body) {
     const {min, max} = body;
-    const heading = state.lastHeading;
-    const multiplier = (fb || lr) ? 1.5 : 2.0;
+    let heading = state.lastHeading;
+    let multiplier = (fb || lr) ? 1.5 : 2.0;
+    if (state.curItem) {
+      heading += 0.45 * TAU;
+      multiplier = (fb || lr ? 6.0 : 5.5);
+    }
     const kFollowDistance = multiplier * (max[0] - min[0]);
     const x = (min[0] + max[0]) / 2 - kFollowDistance * Math.sin(heading);
     const z = (min[2] + max[2]) / 2 - kFollowDistance * Math.cos(heading);
@@ -784,7 +803,7 @@ const runInputs = (env: TypedEnv, dt: number, state: InputState) => {
       curItem.swing += dt;
       if (curItem.item.type === 'ball') {
         const vel = body?.vel || Vec3.create();
-        throwBall(env, effort, curItem.item.mesh, vel);
+        throwBall(env, effort, curItem.item, vel);
       }
     } else if (curItem.readied) {
       curItem.effort += dt;
@@ -1278,7 +1297,7 @@ const CameraTarget = (env: TypedEnv): Component => ({
       const mesh = env.meshes.get(state.id)?.mesh;
       const near = env.renderer.camera.zoom_value < 2 * w;
       if (mesh) mesh.enabled = !near;
-      if (item) item.enabled = near;
+      if (item) item.enabled = near && itemEnabled(curItem.item);
       env.ui.showCursor(near);
 
       if (item && near) {
@@ -1301,7 +1320,16 @@ const CameraTarget = (env: TypedEnv): Component => ({
 
 // Putting it all together:
 
-const safeHeight = (env: Env, position: PositionState): number => {
+const kBallSprite    = {url: 'images/ball.png',   x: int(16), y: int(24)};
+const kItemSprite    = {url: `images/items.png`,  x: int(24), y: int(24)};
+const kMonsterSprite = {url: `images/0025.png`,   x: int(32), y: int(40)};
+const kPlayerSprite  = {url: `images/player.png`, x: int(32), y: int(32)};
+
+const kSprites = [kBallSprite, kItemSprite, kMonsterSprite, kPlayerSprite];
+
+interface Pos {x: number, y: number, z: number, w: number, h: number};
+
+const getSafeHeight = (env: Env, position: PositionState): number => {
   const radius = 0.5 * (position.w + 1);
   const ax = Math.floor(position.x - radius);
   const az = Math.floor(position.z - radius);
@@ -1317,16 +1345,18 @@ const safeHeight = (env: Env, position: PositionState): number => {
   return height + 0.5 * (position.h + 1);
 };
 
-const addEntity = (env: TypedEnv, x: number, z: number, h: number, w: number,
+const addEntity = (env: TypedEnv, pos: Pos, safeHeight: boolean,
                    maxSpeed: number, moveForceFactor: number,
                    jumpForce: number, jumpImpulse: number): EntityId => {
   const entity = env.entities.addEntity();
   const position = env.position.add(entity);
-  position.x = x;
-  position.z = z;
-  position.w = w;
-  position.h = h;
-  position.y = safeHeight(env, position);
+  position.x = pos.x;
+  position.y = pos.y;
+  position.z = pos.z;
+  position.w = pos.w;
+  position.h = pos.h;
+
+  if (safeHeight) position.y = getSafeHeight(env, position);
 
   const movement = env.movement.add(entity);
   movement.maxSpeed = maxSpeed;
@@ -1342,28 +1372,36 @@ const addEntity = (env: TypedEnv, x: number, z: number, h: number, w: number,
   return entity;
 };
 
-const addMonster = (env: TypedEnv, x: number, z: number) => {
-  const [cy, sx, sy] = [int(24), int(32), int(40)];
+const addMonster = (env: TypedEnv, x: number, y: number, z: number): void => {
+  const sprite = kMonsterSprite;
   const [height, width] = [0.75, 0.75];
-  const sprite = {url: `images/0025.png`, x: sx, y: sy};
-  const monster = addEntity(env, x, z, height, 0.75, 12, 8, 15, 10);
+  const pos = {x, y: y + height / 2 + 0.05, z, w: width, h: height};
+  const monster = addEntity(env, pos, false, 12, 8, 15, 10);
   const scale = 2 * width / sprite.y;
   const mesh = env.meshes.add(monster);
   mesh.mesh = env.renderer.addSpriteMesh(scale, sprite);
   mesh.cols = 4;
   mesh.rows = 8;
-  mesh.heading = 0;
-  mesh.offset = scale * (sy - cy);
+  mesh.offset = scale * (sprite.y - 24);
   env.pathing.add(monster);
+};
+
+const tryToAddMonster = (env: TypedEnv, body: PhysicsState): void => {
+  const x = (body.min[0] + body.max[0]) / 2;
+  const z = (body.min[2] + body.max[2]) / 2;
+  const y = body.min[1];
+  addMonster(env, x, y, z);
 };
 
 const main = () => {
   const env = new TypedEnv('container');
+  for (const sprite of kSprites) env.renderer.preloadSprite(sprite);
 
   const [x, z] = [-1.5, 2.5];
-  const [height, width] = [1.5, 0.75];
-  const sprite = {url: `images/player.png`, x: int(32), y: int(32)};
-  const player = addEntity(env, x, z, height, width, 8, 4, 10, 7.5);
+  const sprite = kPlayerSprite;
+  const [width, height] = [0.75, 1.5];
+  const pos = {x, y: 0, z, w: width, h: height};
+  const player = addEntity(env, pos, true, 8, 4, 10, 7.5);
   const scale = 2 * width / sprite.y;
   const mesh = env.meshes.add(player);
   mesh.mesh = env.renderer.addSpriteMesh(scale, sprite);
@@ -1372,34 +1410,35 @@ const main = () => {
   env.inputs.add(player);
   env.target.add(player);
 
-  addMonster(env, x, z);
-
-  const TAU = 2 * Math.PI;
   const inputs = env.inputs.getX(player);
-  const item = (mesh: ItemMesh, range: number, type: ItemType): Item => {
-    return {mesh, range, type};
+  const item_base = (mesh: ItemMesh, range: number, type: ItemType, extra: any): Item => {
+    return {mesh, range, type, extra};
+  };
+  const item_ball = (mesh: ItemMesh, extra: MonsterData): Item => {
+    return item_base(mesh, 0, 'ball', extra);
+  };
+  const item_shovel = (mesh: ItemMesh, range: number): Item => {
+    return item_base(mesh, range, 'shovel', null);
   };
 
   const shovel = env.renderer.addItemMesh(
+    kItemSprite, 0,
     new ItemGeometry()
       .scale(0.25)
       .rotateX(0.20 * TAU)
       .rotateY(0.08 * TAU)
       .translate(0.15, -0.10, 0.25),
-    {url: `images/items.png`, x: int(24), y: int(24)},
   );
-  shovel.frame = 0;
-  inputs.items.push(item(shovel, 4, 'shovel'));
+  inputs.items.push(item_shovel(shovel, 4));
 
   const ball = env.renderer.addItemMesh(
+    kItemSprite, 1,
     new ItemGeometry()
       .scale(0.10)
       .rotateY(0.05 * TAU)
       .translate(0.10, -0.09, 0.25),
-    {url: `images/items.png`, x: int(24), y: int(24)},
   );
-  ball.frame = 1;
-  inputs.items.push(item(ball, 0, 'ball'));
+  inputs.items.push(item_ball(ball, {outside: false}));
 
   const white: Color = [1, 1, 1, 1];
   const texture = (x: int, y: int, alphaTest: boolean = false,

@@ -2177,9 +2177,11 @@ class ItemManager implements MeshManager<ItemShader> {
     this.meshes = [];
   }
 
-  addMesh(geo: ItemGeometry, sprite: Sprite): ItemMesh {
+  addMesh(sprite: Sprite, frame: int, geo: ItemGeometry): ItemMesh {
     const texture = this.atlas.addSprite(sprite);
-    return new ItemMesh(this, this.meshes, geo, texture);
+    const mesh = new ItemMesh(this, this.meshes, geo, texture);
+    mesh.frame = frame;
+    return mesh;
   }
 
   render(camera: Camera, planes: CullingPlane[], stats: Stats): void {
@@ -2317,7 +2319,6 @@ interface IInstancedMesh {
 };
 
 interface IItemMesh extends IMesh {
-  frame: int,
   light: number;
   offset: number;
   enabled: boolean;
@@ -2426,8 +2427,8 @@ class Renderer {
     return this.instanced_manager.addMesh(frame, sprite);
   }
 
-  addItemMesh(geo: ItemGeometry, sprite: Sprite): IItemMesh {
-    return this.item_manager.addMesh(geo, sprite);
+  addItemMesh(sprite: Sprite, frame: int, geo: ItemGeometry): IItemMesh {
+    return this.item_manager.addMesh(sprite, frame, geo);
   }
 
   addShadowMesh(): IShadowMesh {
@@ -2440,6 +2441,10 @@ class Renderer {
 
   addVoxelMesh(geo: Geometry, phase: int): IVoxelMesh {
     return this.voxels_manager.addMesh(geo, phase);
+  }
+
+  preloadSprite(sprite: Sprite): void {
+    this.sprite_manager.atlas.addSprite(sprite);
   }
 
   render(move: number, wave: number, sparkle: boolean): string {
