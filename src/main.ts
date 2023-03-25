@@ -798,7 +798,7 @@ const runInputs = (env: TypedEnv, dt: number, state: InputState) => {
     } else if (curItem.readied && !inputs.mouse0) {
       const base_effort = curItem.effort / kMaxEffortTime;
       const safe_effort = Math.max(0, Math.min(1, base_effort));
-      const effort = 0.125 + 0.875 * safe_effort;
+      const effort = 0.25 + 0.75 * safe_effort;
       curItem.readied = false;
       curItem.effort = 0;
       curItem.swing += dt;

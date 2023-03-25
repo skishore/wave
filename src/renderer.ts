@@ -138,7 +138,8 @@ class Camera {
 
   setMinZ(minZ: number) {
     if (minZ === this.minZ) return;
-    Mat4.perspective(this.projection, 3 * Math.PI / 8, this.aspect, minZ);
+    const fov = 0.225 * Math.PI * this.aspect;
+    Mat4.perspective(this.projection, fov, this.aspect, minZ);
     this.minZ = minZ;
   }
 
