@@ -728,14 +728,7 @@ const runInputs = (env: TypedEnv, dt: number, state: InputState) => {
     state.lastHeading = heading;
 
     const mesh = env.meshes.get(state.id);
-    if (mesh) {
-      const row = mesh.row;
-      const option_a = fb > 0 ? 0 : fb < 0 ? 2 : -1;
-      const option_b = lr > 0 ? 3 : lr < 0 ? 1 : -1;
-      if (row !== option_a && row !== option_b) {
-        mesh.row = int(Math.max(option_a, option_b));
-      }
-    }
+    if (mesh) mesh.heading = heading;
   }
 
   // Call any followers.
@@ -1324,7 +1317,7 @@ const CameraTarget = (env: TypedEnv): Component => ({
 const kBallSprite    = {url: 'images/ball.png',   x: int(16), y: int(24)};
 const kItemSprite    = {url: `images/items.png`,  x: int(24), y: int(24)};
 const kMonsterSprite = {url: `images/0025.png`,   x: int(32), y: int(40)};
-const kPlayerSprite  = {url: `images/player.png`, x: int(32), y: int(32)};
+const kPlayerSprite  = {url: `images/player.png`, x: int(16), y: int(24)};
 
 const kSprites = [kBallSprite, kItemSprite, kMonsterSprite, kPlayerSprite];
 
@@ -1365,10 +1358,7 @@ const addEntity = (env: TypedEnv, pos: Pos, safeHeight: boolean,
   movement.jumpForce = jumpForce;
   movement.jumpImpulse = jumpImpulse;
 
-  const body = env.physics.add(entity);
-  body.autoStep =  0.0625;
-  body.autoStepMax = 0.5;
-
+  env.physics.add(entity);
   env.shadow.add(entity);
   return entity;
 };
@@ -1402,12 +1392,12 @@ const main = () => {
   const sprite = kPlayerSprite;
   const [width, height] = [0.75, 1.5];
   const pos = {x, y: 0, z, w: width, h: height};
-  const player = addEntity(env, pos, true, 8, 4, 10, 7.5);
+  const player = addEntity(env, pos, true, 8, 4, 15, 10);
   const scale = 2 * width / sprite.y;
   const mesh = env.meshes.add(player);
   mesh.mesh = env.renderer.addSpriteMesh(scale, sprite);
-  mesh.cols = 3;
-  mesh.rows = 4;
+  mesh.cols = 4;
+  mesh.rows = 8;
   env.inputs.add(player);
   env.target.add(player);
 

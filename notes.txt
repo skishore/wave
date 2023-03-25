@@ -1,0 +1,1 @@
+player.png: https://gamekrazzy.itch.io/8-direction-top-down-character
