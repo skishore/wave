@@ -128,6 +128,32 @@ for (let z = int(0); z < kSweepDistance; z++) {
   }
 }
 
+const canAttack = (source: Point, target: Point, check: Check): boolean => {
+  if (!hasDirectPath(source, target, check)) return false;
+
+  const sx = source.x;
+  const sz = source.z;
+  const dx = int(target.x - sx);
+  const dz = int(target.z - sz);
+  const ax = int(Math.abs(dx));
+  const az = int(Math.abs(dz));
+  if (ax * ax + az * az > kDiagonalArea) return false;
+  if (ax <= 1 && az <= 1) return true;
+
+  const index = ax + az * kSweepDistance;
+  const sweep = kSweeps[index];
+  const limit = sweep.length - 1;
+
+  const y = int(source.y + 1);
+  for (let i = 0; i < limit; i++) {
+    const p = sweep[i];
+    const x = dx > 0 ? int(sx + p.x) : int(sx - p.x);
+    const z = dz > 0 ? int(sz + p.z) : int(sz - p.z);
+    if (!check(new Point(x, y, z))) return false;
+  }
+  return true;
+};
+
 const hasDirectPath = (source: Point, target: Point, check: Check): boolean => {
   if (source.y < target.y) return false;
 
@@ -531,4 +557,4 @@ const AStar = (source: Point, target: Point, check: Check): PathNode[] => {
 
 //////////////////////////////////////////////////////////////////////////////
 
-export {AStar, Check, Direction, PathNode, Point};
+export {AStar, Check, Direction, PathNode, Point, canAttack};

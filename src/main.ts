@@ -3,7 +3,7 @@ import {BlockId, Env, init} from './engine.js';
 import {kEmptyBlock, kNoMaterial, kSunlightLevel, kWorldHeight} from './engine.js';
 import {Component, ComponentState, ComponentStore} from './ecs.js';
 import {EntityId, kNoEntity} from './ecs.js';
-import {AStar, Check, PathNode, Point as AStarPoint} from './pathing.js';
+import {AStar, Check, PathNode, Point as AStarPoint, canAttack} from './pathing.js';
 import {ItemGeometry, Texture} from './renderer.js';
 import {ItemMesh, SpriteMesh, ShadowMesh} from './renderer.js';
 import {sweep} from './sweep.js';
@@ -748,6 +748,7 @@ const runInputs = (env: TypedEnv, dt: number, state: InputState) => {
       heading += 0.45 * TAU;
       multiplier = (fb || lr ? 6.0 : 5.5);
     }
+    multiplier = 0;
     const kFollowDistance = multiplier * (max[0] - min[0]);
     const x = 0.5 * (min[0] + max[0]) - kFollowDistance * Math.sin(heading);
     const z = 0.5 * (min[2] + max[2]) - kFollowDistance * Math.cos(heading);
@@ -822,6 +823,13 @@ const Inputs = (env: TypedEnv): Component<InputState> => ({
 
 // An entity with PathingState computes a path to a target and moves along it.
 
+interface AttackState {
+  attacked: boolean,
+  chargeSeconds: number,
+  recoverySeconds: number,
+  request: PathRequest,
+};
+
 interface Path {
   index: int,
   steps: PathNode[],
@@ -841,6 +849,7 @@ interface PathingState {
   index: int,
   path: Path | null,
   request: PathRequest | null,
+  attack: AttackState | null,
 };
 
 const solid = (env: TypedEnv, x: int, y: int, z: int): boolean => {
@@ -1021,8 +1030,8 @@ const followPath = (env: TypedEnv, body: PhysicsState,
   let inputZ = PIDController(dz, -body.vel[2], grounded) * inverse_speed;
   const length = Math.sqrt(inputX * inputX + inputZ * inputZ);
   const normalization = length > 1 ? 1 / length : 1;
-  movement.inputX = inputX * normalization;
-  movement.inputZ = inputZ * normalization;
+  movement.inputX = 0.5 * inputX * normalization;
+  movement.inputZ = 0.5 * inputZ * normalization;
 
   if (grounded) movement._jumped = false;
   movement.jumping = (() => {
@@ -1048,19 +1057,102 @@ const followPath = (env: TypedEnv, body: PhysicsState,
   mesh.heading = Math.atan2(vx, vz);
 };
 
-const runPathing = (env: TypedEnv, state: PathingState): void => {
+const attackTarget = (env: TypedEnv, body: PhysicsState, dt: number,
+                      state: PathingState, attack: AttackState) => {
+  const grounded = body.resting[1] < 0;
+  const mesh = env.meshes.get(state.id);
+  const movement = env.movement.get(state.id);
+  if (!movement) return;
+
+  const [ix, _, iz] = attack.request.target;
+  const soft_target = attack.request.softTarget;
+  const cx = 0.5 * (body.min[0] + body.max[0]);
+  const cz = 0.5 * (body.min[2] + body.max[2]);
+  const dx = (soft_target ? soft_target[0] : ix + 0.5) - cx;
+  const dz = (soft_target ? soft_target[2] : iz + 0.5) - cz;
+
+  const penalty = movementPenalty(movement, body);
+  const speed = penalty * movement.maxSpeed;
+  const inverse_speed = speed ? 1 / speed : 1;
+
+  let inputX = PIDController(dx, -body.vel[0], grounded) * inverse_speed;
+  let inputZ = PIDController(dz, -body.vel[2], grounded) * inverse_speed;
+  const length = Math.sqrt(inputX * inputX + inputZ * inputZ);
+  const normalization = length > 1 ? 1 / length : 1;
+
+  if (attack.chargeSeconds > 0) {
+    attack.chargeSeconds = Math.max(attack.chargeSeconds - dt, 0);
+  } else if (grounded && !attack.attacked) {
+    movement.inputX = inputX * normalization;
+    movement.inputZ = inputZ * normalization;
+    movement._jumped = false;
+    movement.jumping = true;
+    attack.attacked = true;
+  } else if (!grounded) {
+    movement.inputX = inputX * normalization;
+    movement.inputZ = inputZ * normalization;
+  } else if (attack.recoverySeconds > 0) {
+    attack.recoverySeconds = Math.max(attack.recoverySeconds - dt, 0);
+  } else {
+    state.attack = null;
+  }
+
+  if (!mesh) return;
+  mesh.heading = Math.atan2(dx, dz);
+};
+
+const runPathing = (env: TypedEnv, state: PathingState, dt: number): void => {
   if (!state.path && !state.request) return;
   const body = env.physics.get(state.id);
   if (!body) return;
+
+  const grounded = body.resting[1] < 0;
+  const request = state.request || state.attack?.request;
+
+  if (state.attack?.attacked) {
+    if (grounded && request) state.attack.request = request;
+    attackTarget(env, body, dt, state, state.attack);
+    return;
+  }
+
+  const checkForAttack = (request: PathRequest) => {
+    if (!grounded || !request) return false;
+
+    const {min, max} = body;
+    const sx = int(Math.floor(0.5 * (min[0] + max[0])));
+    const sz = int(Math.floor(0.5 * (min[2] + max[2])));
+    const sy = int(Math.floor(min[1]));
+    const [tx, ty, tz] = request.target;
+
+    const source = new AStarPoint(sx, sy, sz);
+    const target = new AStarPoint(tx, ty, tz);
+    const check = (p: AStarPoint) => !solid(env, p.x, p.y, p.z);
+    return canAttack(source, target, check);
+  };
+
+  if (!request || !checkForAttack(request)) {
+    state.attack = null;
+  } else if (!state.attack) {
+    const chargeSeconds   = 0.25;
+    const recoverySeconds = 0.50;
+    state.attack = {attacked: false, chargeSeconds, recoverySeconds, request};
+  } else if (grounded) {
+    state.attack.request = request;
+  }
+
+  if (state.attack) {
+    attackTarget(env, body, dt, state, state.attack);
+    return;
+  }
 
   if (state.request) findPath(env, body, state, state.request);
   if (state.path) followPath(env, body, state, state.path);
 };
 
 const Pathing = (env: TypedEnv): Component<PathingState> => ({
-  init: () => ({id: kNoEntity, index: 0, path: null, request: null}),
+  init: () => ({id: kNoEntity, index: 0, path: null, request: null, attack: null}),
   onUpdate: (dt: number, states: PathingState[]) => {
-    for (const state of states) runPathing(env, state);
+    for (const state of states) runPathing(env, state, dt);
   }
 });
 
@@ -1168,7 +1260,8 @@ const Meshes = (env: TypedEnv): Component<MeshState> => ({
         if (body.resting[1] >= 0) return 1;
         const distance = dt * Vec3.length(body.vel);
         if (!distance) return state.frame = 0;
-        state.frame = lower(state.frame + 0.1875 * count * distance);
+        const speed = count > 4 ? 0.3750 : 0.1875;
+        state.frame = lower(state.frame + speed * count * distance);
         return int(lower(Math.floor(state.frame) + 1));
       })();
       state.col = index < lookup.length ? lookup[index][frame] : frame;
@@ -1323,7 +1416,7 @@ const CameraTarget = (env: TypedEnv): Component => ({
 
 const kBallSprite    = {url: 'images/ball.png',   x: int(16), y: int(24)};
 const kItemSprite    = {url: `images/items.png`,  x: int(24), y: int(24)};
-const kMonsterSprite = {url: `images/0025.png`,   x: int(32), y: int(40)};
+const kMonsterSprite = {url: `images/0016.png`,   x: int(32), y: int(32)};
 const kPlayerSprite  = {url: `images/player.png`, x: int(32), y: int(32)};
 
 const kSprites = [kBallSprite, kItemSprite, kMonsterSprite, kPlayerSprite];
@@ -1381,9 +1474,9 @@ const addMonster = (env: TypedEnv, x: number, y: number, z: number): void => {
   const scale = 2 * width / sprite.y;
   const mesh = env.meshes.add(monster);
   mesh.mesh = env.renderer.addSpriteMesh(scale, sprite);
-  mesh.cols = 4;
+  mesh.cols = 5;
   mesh.rows = 8;
-  mesh.offset = scale * (sprite.y - 24);
+  mesh.offset = scale * (sprite.y - 22);
   env.pathing.add(monster);
 };
 
